@@ -1,5 +1,6 @@
 package app.serenada.callui
 
+import androidx.compose.ui.unit.dp
 import app.serenada.core.SnapshotSource
 import app.serenada.core.call.ContentTypeWire
 import app.serenada.core.call.LocalCameraMode
@@ -1119,5 +1120,13 @@ class ContentRenderingTest {
             viewportHeight = 240f,
         )
         assertEquals(FrontlineScreenSharePanOffset(), reset)
+    }
+
+    @Test
+    fun frontlineWearableLayoutActivatesOnlyForTinyScreens() {
+        assertTrue(frontlineUsesWearableLayout(width = 230.dp, height = 230.dp))
+        assertTrue(frontlineUsesWearableLayout(width = 260.dp, height = 260.dp))
+        assertFalse(frontlineUsesWearableLayout(width = 360.dp, height = 640.dp))
+        assertFalse(frontlineUsesWearableLayout(width = 230.dp, height = 360.dp))
     }
 }

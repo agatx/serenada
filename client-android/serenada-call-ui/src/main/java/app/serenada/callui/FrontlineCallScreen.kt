@@ -25,6 +25,8 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -140,6 +142,9 @@ private val FrontlineDim = Color(0xFFA1A1AA)
 internal val FrontlineSheet = Color(0xFF15161A)
 internal val FrontlineSheetRow = Color.White.copy(alpha = 0.09f)
 private val FrontlineStageLocalAccentWidth = 2.5.dp
+private val FrontlineWearableMaxEdge = 260.dp
+private val FrontlineWearableButtonSize = 44.dp
+private val FrontlineWearableEndButtonSize = 48.dp
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
 private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
 private const val FRONTLINE_MORE_BUTTON_HEIGHT_TO_WIDTH_RATIO = 1.62f
@@ -597,6 +602,7 @@ internal fun FrontlineCallScreen(
                     .background(FrontlineBlack)
                     .testTag("call.frontline.screen")
             ) {
+                val usesWearableLayout = frontlineUsesWearableLayout(maxWidth, maxHeight)
                 val isLandscape = maxWidth > maxHeight
                 val isTabletLandscape = isLandscape && maxWidth >= 1100.dp && maxHeight >= 720.dp
                 val panelWidth = when {
@@ -679,6 +685,71 @@ internal fun FrontlineCallScreen(
                         onExit = { remoteScreenShareFullscreenSourceId = null },
                         modifier = Modifier.fillMaxSize(),
                     )
+                } else if (usesWearableLayout) {
+                    Box(Modifier.fillMaxSize()) {
+                        FrontlineContentArea(
+                            uiState = uiState,
+                            remote = remote,
+                            largeFeed = largeFeed,
+                            pipFeed = null,
+                            pipInPanel = false,
+                            localContentMode = localContentMode,
+                            isCallSurfacePhase = isCallSurfacePhase,
+                            eglContext = eglContext,
+                            localRendererEvents = localRendererEvents,
+                            localAspectRatio = localAspectRatio ?: 0f,
+                            remoteAspectRatios = remoteTileAspectRatios,
+                            activeContentSpotlightId = activeContentSpotlightId,
+                            pinnedSpotlightId = pinnedSpotlightId,
+                            selectedSpotlightId = selectedSpotlightId,
+                            lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+                            remoteVideoFitCover = remoteVideoFitCover,
+                            onToggleRemoteVideoFit = toggleRemoteVideoFit,
+                            spotlightedRemoteScreenShareSource = spotlightedRemoteScreenShareSource,
+                            onEnterRemoteScreenShareFullscreen = enterRemoteScreenShareFullscreen,
+                            onPinnedSpotlightIdChanged = { pinnedSpotlightId = it },
+                            onSelectedSpotlightIdChanged = { selectedSpotlightId = it },
+                            localZoomTransformState = localZoomTransformState,
+                            attachLocalRenderer = attachLocalRenderer,
+                            detachLocalRenderer = detachLocalRenderer,
+                            attachLocalSink = attachLocalSink,
+                            detachLocalSink = detachLocalSink,
+                            attachRemoteSink = attachRemoteSink,
+                            detachRemoteSink = detachRemoteSink,
+                            attachRemoteSinkForCid = attachRemoteSinkForCid,
+                            detachRemoteSinkForCid = detachRemoteSinkForCid,
+                            contentScene = contentScene,
+                            frontlineIndependentContent = frontlineIndependentContent,
+                            attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                            detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                            attachLocalContentSink = attachLocalContentSink,
+                            detachLocalContentSink = detachLocalContentSink,
+                            pip = {},
+                            strings = strings,
+                            showInlineOverlays = false,
+                            wearableLayout = true,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        FrontlineWearableControls(
+                            uiState = uiState,
+                            callControlsEnabled = isCallSurfacePhase,
+                            videoControlsEnabled = isCallSurfacePhase && config.videoEnabled && uiState.availableCameraModes.isNotEmpty(),
+                            showMoreButton = showMoreButton,
+                            onVideoTap = {
+                                if (uiState.localVideoEnabled) {
+                                    pipSwapped = false
+                                }
+                                onToggleVideo()
+                            },
+                            onToggleAudio = onToggleAudio,
+                            onMore = openMoreOrAudioRoute,
+                            onEndCall = onEndCall,
+                            strings = strings,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth(),
+                        )
+                    }
                 } else if (isLandscape) {
                     Row(Modifier.fillMaxSize()) {
                         FrontlineContentArea(
@@ -999,6 +1070,8 @@ private fun FrontlineContentArea(
     detachLocalContentSink: (VideoSink) -> Unit,
     pip: @Composable (Modifier) -> Unit,
     strings: Map<SerenadaString, String>?,
+    showInlineOverlays: Boolean = true,
+    wearableLayout: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -1063,6 +1136,7 @@ private fun FrontlineContentArea(
                     attachLocalRenderer = attachLocalRenderer,
                     detachLocalRenderer = detachLocalRenderer,
                     strings = strings,
+                    wearableLayout = wearableLayout,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -1082,6 +1156,7 @@ private fun FrontlineContentArea(
                     attachRemoteSink = attachRemoteSink,
                     detachRemoteSink = detachRemoteSink,
                     strings = strings,
+                    wearableLayout = wearableLayout,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -1104,7 +1179,8 @@ private fun FrontlineContentArea(
 
         val chipIsLocal = largeFeed == FrontlineFeed.Local
         val showLargeFeedChip =
-            isCallSurfacePhase &&
+            showInlineOverlays &&
+                isCallSurfacePhase &&
                 !waitingForRemote &&
                 !useIndependentContentStage &&
                 uiState.remoteParticipants.size <= 1 &&
@@ -1125,6 +1201,7 @@ private fun FrontlineContentArea(
         }
 
         if (
+            showInlineOverlays &&
             !useIndependentContentStage &&
             frontlineShowsRemoteFitButton(
                 isCallSurfacePhase = isCallSurfacePhase,
@@ -1150,7 +1227,7 @@ private fun FrontlineContentArea(
             )
         }
 
-        if (isCallSurfacePhase && !waitingForRemote && !useIndependentContentStage && uiState.remoteParticipants.size <= 1 && pipFeed != null && !pipInPanel) {
+        if (showInlineOverlays && isCallSurfacePhase && !waitingForRemote && !useIndependentContentStage && uiState.remoteParticipants.size <= 1 && pipFeed != null && !pipInPanel) {
             pip(
                 Modifier
                     .align(Alignment.TopEnd)
@@ -2262,6 +2339,7 @@ private fun FrontlineLargeSurface(
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit,
     strings: Map<SerenadaString, String>?,
+    wearableLayout: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     when {
@@ -2310,6 +2388,7 @@ private fun FrontlineLargeSurface(
             if (waitingForRemote) {
                 FrontlineWaitingLarge(
                     strings = strings,
+                    wearableLayout = wearableLayout,
                     modifier = modifier,
                 )
             } else {
@@ -2317,6 +2396,7 @@ private fun FrontlineLargeSurface(
                     remote = remote,
                     elapsedLabel = rememberFrontlineCallTimer(uiState.callStartedAtMs),
                     strings = strings,
+                    wearableLayout = wearableLayout,
                     modifier = modifier,
                 )
             }
@@ -2327,18 +2407,21 @@ private fun FrontlineLargeSurface(
 @Composable
 private fun FrontlineWaitingLarge(
     strings: Map<SerenadaString, String>?,
+    wearableLayout: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val horizontalPadding = if (wearableLayout) 14.dp else 24.dp
+    val fontSize = if (wearableLayout) 22.sp else 34.sp
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = horizontalPadding),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = resolveString(SerenadaString.FrontlineWaiting, strings),
             color = Color.White,
-            fontSize = 34.sp,
+            fontSize = fontSize,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
@@ -2354,6 +2437,7 @@ private fun FrontlineWaitingSurface(
     attachLocalRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
     strings: Map<SerenadaString, String>?,
+    wearableLayout: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -2388,6 +2472,7 @@ private fun FrontlineWaitingSurface(
         }
         FrontlineWaitingLarge(
             strings = strings,
+            wearableLayout = wearableLayout,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -2398,38 +2483,48 @@ private fun FrontlineAudioLarge(
     remote: RemoteParticipant?,
     elapsedLabel: String,
     strings: Map<SerenadaString, String>?,
+    wearableLayout: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val name = remoteDisplayName(remote)
+    val horizontalPadding = if (wearableLayout) 12.dp else 24.dp
+    val bottomPadding = if (wearableLayout) 64.dp else 0.dp
+    val avatarSize = if (wearableLayout) 88.dp else 140.dp
+    val avatarFontSize = if (wearableLayout) 34.sp else 58.sp
+    val avatarSpacerHeight = if (wearableLayout) 6.dp else 18.dp
+    val audioIndicatorSize = if (wearableLayout) 16.dp else 22.dp
+    val nameFontSize = if (wearableLayout) 18.sp else 34.sp
+    val timerSpacerHeight = if (wearableLayout) 2.dp else 10.dp
+    val timerFontSize = if (wearableLayout) 16.sp else 28.sp
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp),
+            .padding(start = horizontalPadding, end = horizontalPadding, bottom = bottomPadding),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         FrontlineAvatar(
             peerId = remote?.peerId,
             displayName = name,
-            size = 140.dp,
-            fontSize = 58.sp,
+            size = avatarSize,
+            fontSize = avatarFontSize,
             borderWidth = 0.dp,
         )
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(avatarSpacerHeight))
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (wearableLayout) 6.dp else 10.dp),
         ) {
             FrontlineAudioIndicator(
                 muted = remote?.audioEnabled == false,
                 audioLevel = remote?.audioLevel ?: 0f,
-                size = 22.dp,
+                size = audioIndicatorSize,
             )
             if (name.isNotBlank()) {
                 Text(
                     text = name,
                     color = Color.White,
-                    fontSize = 34.sp,
+                    fontSize = nameFontSize,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
@@ -2437,11 +2532,11 @@ private fun FrontlineAudioLarge(
                 )
             }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(timerSpacerHeight))
         Text(
             text = elapsedLabel,
             color = FrontlineDim,
-            fontSize = 28.sp,
+            fontSize = timerFontSize,
             fontWeight = FontWeight.Medium,
         )
     }
@@ -2811,6 +2906,104 @@ private fun FrontlineControlGrid(
 }
 
 @Composable
+private fun FrontlineWearableControls(
+    uiState: CallUiState,
+    callControlsEnabled: Boolean,
+    videoControlsEnabled: Boolean,
+    showMoreButton: Boolean,
+    onVideoTap: () -> Unit,
+    onToggleAudio: () -> Unit,
+    onMore: () -> Unit,
+    onEndCall: () -> Unit,
+    strings: Map<SerenadaString, String>?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .navigationBarsPadding()
+            .padding(start = 8.dp, end = 8.dp, bottom = 8.dp)
+            .height(FrontlineWearableEndButtonSize),
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (callControlsEnabled && videoControlsEnabled) {
+            FrontlineWearableButton(
+                icon = if (uiState.localVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                contentDescription = if (uiState.localVideoEnabled) {
+                    resolveString(SerenadaString.FrontlineVideoOn, strings)
+                } else {
+                    resolveString(SerenadaString.FrontlineVideo, strings)
+                },
+                active = uiState.localVideoEnabled,
+                onClick = onVideoTap,
+                modifier = Modifier.testTag("call.frontline.wearable.video"),
+            )
+        }
+        if (callControlsEnabled) {
+            FrontlineWearableButton(
+                icon = if (uiState.localAudioEnabled) Icons.Default.Mic else Icons.Default.MicOff,
+                contentDescription = resolveString(SerenadaString.FrontlineMute, strings),
+                danger = !uiState.localAudioEnabled,
+                onClick = onToggleAudio,
+                modifier = Modifier.testTag("call.frontline.wearable.audio"),
+            )
+            if (showMoreButton) {
+                FrontlineWearableButton(
+                    icon = Icons.Default.MoreVert,
+                    contentDescription = resolveString(SerenadaString.FrontlineMore, strings),
+                    onClick = onMore,
+                    modifier = Modifier.testTag("call.frontline.wearable.more"),
+                )
+            }
+        }
+        FrontlineWearableButton(
+            icon = Icons.Default.CallEnd,
+            contentDescription = resolveString(SerenadaString.FrontlineEnd, strings),
+            danger = true,
+            size = FrontlineWearableEndButtonSize,
+            onClick = onEndCall,
+            modifier = Modifier.testTag("call.frontline.endCall"),
+        )
+    }
+}
+
+@Composable
+private fun FrontlineWearableButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    active: Boolean = false,
+    danger: Boolean = false,
+    size: Dp = FrontlineWearableButtonSize,
+) {
+    val background = when {
+        danger -> FrontlineDanger
+        active -> FrontlineAccent
+        else -> Color.Black.copy(alpha = 0.74f)
+    }
+    val foreground = if (active) Color.Black else Color.White
+    Surface(
+        modifier = modifier
+            .size(size)
+            .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape)
+            .clickable(onClick = onClick),
+        color = background,
+        shape = CircleShape,
+        shadowElevation = 8.dp,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = foreground,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+@Composable
 private fun FrontlineGridButton(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -2941,12 +3134,14 @@ private fun FrontlineMoreSheet(
                 exit = slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier.align(Alignment.BottomCenter),
             ) {
+                val scrollState = rememberScrollState()
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                         .background(FrontlineSheet)
+                        .verticalScroll(scrollState)
                         .padding(18.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -3248,6 +3443,10 @@ private fun frontlineShowsRemoteFitButton(
         remoteParticipantCount <= 1 &&
         largeFeedIsRemote &&
         remoteVideoEnabled
+
+internal fun frontlineUsesWearableLayout(width: Dp, height: Dp): Boolean {
+    return width <= FrontlineWearableMaxEdge && height <= FrontlineWearableMaxEdge
+}
 
 private data class FrontlinePipSize(val width: Dp, val height: Dp)
 
