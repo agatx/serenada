@@ -117,6 +117,12 @@ Serenada expects Let's Encrypt certificates to be located at `/etc/letsencrypt/l
 3.  The certificates are mounted into the containers via `docker-compose.prod.yml`.
 4.  Run `./deploy.sh` from your local machine. It converts the cert's renewal config to webroot mode (zero-downtime renewals against the live containerized nginx) and installs a post-renewal hook at `/etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh` that reloads nginx (`nginx -s reload`) and signals coturn (`SIGUSR2` to re-read the TLS files) after every successful renewal. **Do not skip this step** — without it, certbot keeps trying to bind ports 80/443 itself, which Docker already owns, and renewals fail silently until the cert expires; coturn would also continue serving the old cert on TURNS:5349 until the next container restart.
 
+    The migration re-runs whenever the renewal config's `authenticator` is not `webroot` **or** its `webroot_path` doesn't match the live certbot-webroot docker volume mountpoint. A config that merely *says* webroot but points at a stale or malformed path fails renewal just as silently — that's what expired `serenada.app` in July 2026 while the authenticator-only check considered it migrated.
+
+    Every deploy finishes the renewal block with `certbot renew --cert-name <domain> --dry-run` — a real HTTP-01 challenge against Let's Encrypt's staging server through the live nginx. If it fails, the deploy fails. This is the on-host guarantee that renewals work end-to-end; do not remove it.
+
+    As an external safety net, the `cert-health` GitHub Actions workflow (`.github/workflows/cert-health.yml`) checks all production endpoints (443 and TURNS 5349 on `serenada.app` and `serenada-app.ru`) daily and fails when a cert has under 21 days left — i.e. when renewal has already been failing for over a week. GitHub emails the workflow author on scheduled-run failures.
+
 ### 4. Deploying the Stack
 
 A convenience script is provided for deployment. It uses `envsubst` to process templates, builds the frontend, syncs files via `rsync`, and restarts services via SSH.

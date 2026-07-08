@@ -1,0 +1,44 @@
+
+# Daily external TLS certificate health check.
+#
+# Let's Encrypt certs live 90 days and certbot renews them 30 days before
+# expiry. If any production endpoint gets within 21 days of expiry, renewal
+# has been failing for over a week — this workflow fails, and GitHub emails
+# the workflow author. This is the external safety net for on-host renewal
+# breakage that is otherwise only visible in journal logs nobody watches
+# (it has silently expired production certs twice: Apr 2026 and Jul 2026).
+name: cert-health
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-cert-expiry:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: serenada.app
+            port: 443
+          - host: serenada.app
+            port: 5349 # TURNS (coturn) — reloads separately from nginx
+          - host: serenada-app.ru
+            port: 443
+          - host: serenada-app.ru
+            port: 5349
+    steps:
+      - name: Check ${{ matrix.host }}:${{ matrix.port }} cert has >= 21 days left
+        run: |
+          set -o pipefail
+          MIN_DAYS=21
+          CERT=$(echo | timeout 30 openssl s_client \
+            -connect "${{ matrix.host }}:${{ matrix.port }}" \
+            -servername "${{ matrix.host }}" 2>/dev/null | openssl x509)
+          echo "$CERT" | openssl x509 -noout -subject -enddate
+          if ! echo "$CERT" | openssl x509 -noout -checkend $((MIN_DAYS * 24 * 3600)); then
+            echo "::error::Certificate on ${{ matrix.host }}:${{ matrix.port }} expires within ${MIN_DAYS} days — auto-renewal is likely broken. SSH to the VPS and run: certbot renew --dry-run"
+            exit 1
+          fi
