@@ -243,7 +243,12 @@ fi
 # is harmless if both are enabled.
 if command -v crontab >/dev/null 2>&1; then
     CRON_CMD="0 3 * * 0 certbot renew --quiet"
-    ( \$SUDO crontab -l 2>/dev/null | grep -v 'certbot renew'; echo "\$CRON_CMD" ) | \$SUDO crontab -
+    # '|| true' matters: with no pre-existing crontab (or one with no other
+    # entries), grep exits 1 and set -e would kill the subshell BEFORE the
+    # echo — installing an empty crontab while the deploy still reports
+    # success. That silently left serenada.app without the cron entry.
+    ( \$SUDO crontab -l 2>/dev/null | grep -v 'certbot renew' || true; echo "\$CRON_CMD" ) | \$SUDO crontab -
+    \$SUDO crontab -l | grep -qF "\$CRON_CMD"
     echo "✅ SSL auto-renewal cron job is configured (weekly, zero-downtime)"
 else
     echo "⚠️  crontab not found — install cron (apt install cron) to enable SSL auto-renewal"
