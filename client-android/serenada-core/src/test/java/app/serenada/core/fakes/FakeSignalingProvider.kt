@@ -8,6 +8,7 @@ import app.serenada.core.NegotiationDirtyEvent
 import app.serenada.core.PeerEvent
 import app.serenada.core.PeerMessage
 import app.serenada.core.ProviderCapabilities
+import app.serenada.core.ReconnectTokenRefreshedEvent
 import app.serenada.core.RelayFailedEvent
 import app.serenada.core.RoomEndedEvent
 import app.serenada.core.RoomStateEvent
@@ -105,6 +106,8 @@ internal class FakeSignalingProvider(
         participants: List<Pair<String, Long>>,
         hostPeerId: String? = peerId,
         maxParticipants: Int? = null,
+        reconnectToken: String? = null,
+        reconnectTokenTTLMs: Long? = null,
     ) {
         listener?.onJoined(
             JoinedEvent(
@@ -114,6 +117,8 @@ internal class FakeSignalingProvider(
                 },
                 hostPeerId = hostPeerId,
                 maxParticipants = maxParticipants,
+                reconnectToken = reconnectToken,
+                reconnectTokenTTLMs = reconnectTokenTTLMs,
             ),
         )
     }
@@ -171,6 +176,15 @@ internal class FakeSignalingProvider(
 
     fun simulateError(code: String, message: String) {
         listener?.onError(ErrorEvent(code = code, message = message))
+    }
+
+    fun simulateReconnectTokenRefreshed(reconnectToken: String, reconnectTokenTTLMs: Long? = null) {
+        listener?.onReconnectTokenRefreshed(
+            ReconnectTokenRefreshedEvent(
+                reconnectToken = reconnectToken,
+                reconnectTokenTTLMs = reconnectTokenTTLMs,
+            ),
+        )
     }
 
     fun simulateIceServersChanged(iceServers: List<PeerConnection.IceServer>) {

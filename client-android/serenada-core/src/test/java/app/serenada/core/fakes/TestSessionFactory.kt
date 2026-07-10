@@ -102,6 +102,8 @@ internal class TestSessionFactory(
         cid: String = "local-cid-1",
         participants: List<Pair<String, Long>> = emptyList(),
         hostCid: String? = null,
+        reconnectToken: String? = null,
+        reconnectTokenTTLMs: Long? = null,
     ) {
         val resolvedHost = hostCid ?: cid
         val resolvedParticipants = if (participants.isEmpty()) {
@@ -113,6 +115,8 @@ internal class TestSessionFactory(
             peerId = cid,
             participants = resolvedParticipants,
             hostPeerId = resolvedHost,
+            reconnectToken = reconnectToken,
+            reconnectTokenTTLMs = reconnectTokenTTLMs,
         )
         ShadowLooper.idleMainLooper()
     }
@@ -179,6 +183,8 @@ internal class TestSessionFactory(
         localJoinedAt: Long = 1L,
         remoteJoinedAt: Long = 2L,
         hostCid: String = minOf(localCid, remoteCid),
+        reconnectToken: String? = null,
+        reconnectTokenTTLMs: Long? = null,
         iceServers: List<PeerConnection.IceServer> = listOf(
             PeerConnection.IceServer.builder("turn:turn.example.com:3478")
                 .setUsername("user")
@@ -193,6 +199,8 @@ internal class TestSessionFactory(
             cid = localCid,
             participants = listOf(localCid to localJoinedAt, remoteCid to remoteJoinedAt),
             hostCid = hostCid,
+            reconnectToken = reconnectToken,
+            reconnectTokenTTLMs = reconnectTokenTTLMs,
         )
     }
 
@@ -209,6 +217,8 @@ internal class TestSessionFactory(
         localJoinedAt: Long = 1L,
         remoteJoinedAt: Long = 2L,
         hostCid: String = minOf(localCid, remoteCid),
+        reconnectToken: String? = null,
+        reconnectTokenTTLMs: Long? = null,
         iceServers: List<PeerConnection.IceServer> = listOf(
             PeerConnection.IceServer.builder("turn:turn.example.com:3478")
                 .setUsername("user")
@@ -224,6 +234,8 @@ internal class TestSessionFactory(
             cid = localCid,
             participants = listOf(localCid to localJoinedAt, remoteCid to remoteJoinedAt),
             hostCid = hostCid,
+            reconnectToken = reconnectToken,
+            reconnectTokenTTLMs = reconnectTokenTTLMs,
         )
     }
 

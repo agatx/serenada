@@ -476,11 +476,18 @@ internal class WebRtcEngine(
     }
 
     override fun detachRenderersForHold() {
-        // Renderers are owned/registered by the host via attach/detach calls; the
-        // session re-registers them on resume. No engine-held renderer state to
-        // pause for a held call beyond the camera track teardown already done in
-        // [suspendLocalMediaForHold]. Kept as an explicit seam for parity with the
-        // contract's `detachOrPauseRenderersForHold`.
+        // Intentional no-op, and safe to be one:
+        //  - LOCAL video cannot produce frames while held: [suspendLocalMediaForHold]
+        //    already disposed the camera capturer + local video tracks, so there is
+        //    no local renderer state left for the engine to pause here.
+        //  - REMOTE rendering is HOST-owned (the host attaches/detaches sinks and
+        //    re-registers them on resume); by contract, hold-time suppression of a
+        //    remote peer is AUDIO-ONLY (see docs/multi-call-session-contract.md) —
+        //    remote video is deliberately left decoding/visible while this call is
+        //    held, matching web's audio-only deafen. So there is nothing for the
+        //    engine to detach on the remote side either.
+        // Kept as an explicit seam for parity with the contract's
+        // `detachOrPauseRenderersForHold`.
     }
 
     override fun release() {

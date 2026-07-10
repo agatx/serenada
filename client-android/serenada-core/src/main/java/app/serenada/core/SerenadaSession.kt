@@ -1848,6 +1848,13 @@ class SerenadaSession internal constructor(
         // 6. Broadcast exactly one held=false AFTER media is flowing
         //    (attach-then-broadcast).
         runCatching { broadcastLocalMediaState(held = false) }
+
+        // 7. Now foreground: persist the durable recovery record from the in-memory
+        //    reconnect credentials the held session kept but did NOT write (recovery
+        //    is foreground-only; multi-call-session-design ~966-985). Persisting on
+        //    the role flip closes the gap so the stored record describes the call the
+        //    user is actually on. No-op if the join handshake never produced a token.
+        persistRecoveryRecord()
     }
 
     /**
@@ -3056,6 +3063,11 @@ class SerenadaSession internal constructor(
     }
 
     private fun resetResources(clearRecovery: Boolean = false): Job {
+        // Capture THIS session's recovery identity BEFORE the teardown nulls clientId
+        // below: the durable record is cleared only if it still belongs to this
+        // session (roomId + cid match). A stale/held call tearing down must not clear
+        // the record a DIFFERENT foreground call wrote (multi-call ownership check).
+        val ownedCid = clientId
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
@@ -3128,7 +3140,7 @@ class SerenadaSession internal constructor(
         playbackDuckingActive = false
         externalAudioMuted = false
         routeInputAvailable = true
-        if (clearRecovery) recoveryStorage.clear()
+        if (clearRecovery) recoveryStorage.clearIfOwned(roomId, ownedCid)
         providerScope.coroutineContext.cancelChildren()
         updateDiagnostics(CallDiagnostics())
         return deactivationJob
@@ -3163,6 +3175,12 @@ class SerenadaSession internal constructor(
      * prompt. No-op until the join handshake has produced a CID + token.
      */
     private fun persistRecoveryRecord() {
+        // Durable recovery is FOREGROUND-only (multi-call-session-design ~966-985): a
+        // HELD session keeps its reconnect identity in memory ONLY, so a relaunched
+        // process offers to rejoin the call the user was actually ON — not a
+        // background held one, and never a record that lies about the foreground call.
+        // The foreground call (re)writes its record on resume (applyForegroundRoleInternal).
+        if (isHeld) return
         val cid = clientId ?: return
         val token = reconnectToken ?: return
         if (sessionStartTs == null) sessionStartTs = clock.nowMs()
