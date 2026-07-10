@@ -34,50 +34,81 @@ export const PROVIDER_SINGLE_SESSION_MESSAGE =
     + 'Provide a version-2 MultiSessionSignalingProvider for multi-call.';
 
 /**
- * Process-wide set of v1 `SignalingProvider` objects currently bound to a live
- * session, keyed by provider IDENTITY. The single-session contract is a property
- * of the provider object, not of a `SerenadaCore` instance: two cores configured
- * with the SAME v1 provider must not both bind it (that cross-wires two sessions
- * onto one channel). A per-core guard cannot see the other core's bind, so the
- * guard lives here. Cleared when the bound session tears down (see
- * {@link createV1LivenessChannel}) or a failed session construction rolls back.
+ * Process-wide map of v1 `SignalingProvider` objects currently bound to a live
+ * session, keyed by provider IDENTITY, valued by the OWNING liveness channel.
+ * The single-session contract is a property of the provider object, not of a
+ * `SerenadaCore` instance: two cores configured with the SAME v1 provider must
+ * not both bind it (that cross-wires two sessions onto one channel). A per-core
+ * guard cannot see the other core's bind, so the guard lives here. The value is
+ * the owning channel so a release is ownership-scoped: a retired channel only
+ * clears the entry while it is still the owner, never a bind a NEWER channel
+ * (after sequential reuse) has since taken. Cleared when the bound session tears
+ * down (see {@link createV1LivenessChannel}) or a failed session construction
+ * rolls back.
  */
-const boundV1Providers = new WeakSet<AnySignalingProvider>();
+const boundV1Providers = new WeakMap<AnySignalingProvider, SignalingProvider>();
 
 /**
  * Wrap a single-session v1 `SignalingProvider` so its teardown releases the
- * core's liveness bind. The session drives the SAME underlying provider through
- * this thin delegate; only `disconnect()` is intercepted, because the session
- * calls `signaling.disconnect()` on EVERY terminal path (leave/end/destroy AND
- * the remote-end / error resets), which the per-`destroy()` handler unbinding
- * would miss. `onTeardown` fires at most once and is scoped by identity in the
- * caller, so a repeated `disconnect()` (reset then destroy) never clears a
- * later session's bind.
+ * core's liveness bind, and FENCE the wrapper to its owning session. The session
+ * drives the SAME underlying provider through this thin delegate; `disconnect()`
+ * is intercepted because the session calls `signaling.disconnect()` on EVERY
+ * terminal path (leave/end/destroy AND the remote-end / error resets).
+ *
+ * The channel is one-shot: the FIRST teardown (a terminal reset OR `destroy()`,
+ * whichever runs first) `retire`s it — releasing the bind (via `onRetire`) and
+ * detaching every event subscription this channel forwarded to the underlying
+ * provider. After a channel retires, a newer session may bind the same provider,
+ * so every subsequent forwarded call from THIS (now-dead) channel that could
+ * touch the shared provider is suppressed:
+ *  - `disconnect()` no longer forwards, so a late `destroy()` after a terminal
+ *    reset cannot tear down the NEW owner's transport.
+ *  - listener registration and outbound ops (`connect`/`joinRoom`/`leaveRoom`/
+ *    `endRoom`/`sendToPeer`/`broadcast`) and the gate setters are no-ops, so the
+ *    dead session cannot mutate or emit on a provider it no longer owns.
+ * Detaching subscriptions on retire also stops the underlying provider's events
+ * from leaking into the dead session between a terminal reset and `destroy()`.
  */
 function createV1LivenessChannel(
     underlying: SignalingProvider,
-    onTeardown: () => void,
+    onRetire: () => void,
 ): SignalingProvider {
-    let torndown = false;
+    let retired = false;
+    // Unbind thunks for every subscription this channel forwarded to the
+    // underlying provider, replayed on retire so events can't leak into the
+    // now-dead session. `off` is idempotent, so append-only is safe.
+    const detachers: Array<() => void> = [];
+    const retire = (): void => {
+        if (retired) return;
+        retired = true;
+        for (const detach of detachers) detach();
+        detachers.length = 0;
+        onRetire();
+    };
     const channel: SignalingProvider = {
         get version(): number { return underlying.version; },
         get capabilities(): ProviderCapabilities | undefined { return underlying.capabilities; },
-        connect: () => underlying.connect(),
+        connect: () => { if (!retired) underlying.connect(); },
         disconnect: () => {
-            if (!torndown) {
-                torndown = true;
-                onTeardown();
-            }
-            underlying.disconnect();
+            // Only forward while THIS channel still owns the provider. After
+            // retire (a terminal reset already released the bind and a newer
+            // session may now own the provider), a late disconnect() — e.g.
+            // destroy() after a terminal error — must NOT close the new owner's
+            // transport.
+            const ownedProvider = !retired;
+            retire();
+            if (ownedProvider) underlying.disconnect();
         },
-        joinRoom: (roomId, options) => underlying.joinRoom(roomId, options),
-        leaveRoom: () => underlying.leaveRoom(),
-        endRoom: () => underlying.endRoom(),
-        sendToPeer: (peerId, type, payload) => underlying.sendToPeer(peerId, type, payload),
-        broadcast: (type, payload) => underlying.broadcast(type, payload),
+        joinRoom: (roomId, options) => { if (!retired) underlying.joinRoom(roomId, options); },
+        leaveRoom: () => { if (!retired) underlying.leaveRoom(); },
+        endRoom: () => { if (!retired) underlying.endRoom(); },
+        sendToPeer: (peerId, type, payload) => { if (!retired) underlying.sendToPeer(peerId, type, payload); },
+        broadcast: (type, payload) => { if (!retired) underlying.broadcast(type, payload); },
         getIceServers: () => underlying.getIceServers(),
         on<K extends SignalingProviderEventName>(event: K, cb: (data: SignalingProviderEventMap[K]) => void): void {
+            if (retired) return;
             underlying.on(event, cb);
+            detachers.push(() => underlying.off(event, cb));
         },
         off<K extends SignalingProviderEventName>(event: K, cb: (data: SignalingProviderEventMap[K]) => void): void {
             underlying.off(event, cb);
@@ -85,15 +116,16 @@ function createV1LivenessChannel(
     };
     // Preserve the optional hooks' PRESENCE: the session probes them with
     // `signaling.setTurnRefreshGate?.(...)`, so a delegate that always defined
-    // them would call into a provider that never implemented them.
+    // them would call into a provider that never implemented them. Fenced too,
+    // so a dead channel never clobbers gates the new owner installed.
     if (underlying.setTurnRefreshGate) {
-        channel.setTurnRefreshGate = (gate) => underlying.setTurnRefreshGate!(gate);
+        channel.setTurnRefreshGate = (gate) => { if (!retired) underlying.setTurnRefreshGate!(gate); };
     }
     if (underlying.setDurableRecoveryGate) {
-        channel.setDurableRecoveryGate = (gate) => underlying.setDurableRecoveryGate!(gate);
+        channel.setDurableRecoveryGate = (gate) => { if (!retired) underlying.setDurableRecoveryGate!(gate); };
     }
     if (underlying.persistDurableRecoveryNow) {
-        channel.persistDurableRecoveryNow = () => underlying.persistDurableRecoveryNow!();
+        channel.persistDurableRecoveryNow = () => { if (!retired) underlying.persistDurableRecoveryNow!(); };
     }
     return channel;
 }
@@ -248,10 +280,14 @@ export class SerenadaCore {
             // Session construction failed after the v1 liveness bind: roll it back
             // so the provider is reusable (the channel's `disconnect()` unbind
             // never runs when the session never existed). Release both the
-            // per-core reference and the process-wide provider-identity guard.
+            // per-core reference and the process-wide provider-identity guard,
+            // scoped by ownership so an unrelated later bind is never removed.
             if (this.v1BoundChannel === signalingProvider) {
+                const provider = this.resolvedConfig.signalingProvider!;
+                if (boundV1Providers.get(provider) === signalingProvider) {
+                    boundV1Providers.delete(provider);
+                }
                 this.v1BoundChannel = null;
-                boundV1Providers.delete(this.resolvedConfig.signalingProvider!);
             }
             throw err;
         }
@@ -379,12 +415,17 @@ export class SerenadaCore {
             throw new ProviderUnavailableError(PROVIDER_SINGLE_SESSION_MESSAGE);
         }
         const channel = createV1LivenessChannel(provider, () => {
-            boundV1Providers.delete(provider);
+            // Ownership-scoped release: only clear the bind while THIS channel is
+            // still the owner. If a newer channel rebound the same provider after
+            // this one retired (sequential reuse), its bind must survive.
+            if (boundV1Providers.get(provider) === channel) {
+                boundV1Providers.delete(provider);
+            }
             if (this.v1BoundChannel === channel) {
                 this.v1BoundChannel = null;
             }
         });
-        boundV1Providers.add(provider);
+        boundV1Providers.set(provider, channel);
         this.v1BoundChannel = channel;
         return channel;
     }

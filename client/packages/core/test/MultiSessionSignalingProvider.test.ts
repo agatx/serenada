@@ -410,6 +410,50 @@ describe('MultiSessionSignalingProvider (F2)', () => {
             b.destroy();
         });
 
+        it('direct: a retired session (terminal reset) never disconnects a reused provider or leaks events', () => {
+            // Session A binds the v1 provider, then hits a TERMINAL reset WITHOUT
+            // destroy() — which releases the liveness bind (resetSessionResources
+            // -> channel.disconnect()). A newer session B then rebinds the SAME
+            // provider object. A's later destroy()/leave() must not disconnect B's
+            // transport, and A's stale handlers must not fire.
+            const provider = new FakeSignalingProvider();
+            const coreA = new SerenadaCore({ signalingProvider: provider });
+
+            const a = coreA.join({ roomId: 'room-A' });
+            expect(a.state.phase).not.toBe('error');
+
+            // Drive A to a terminal error: failWithError -> resetSessionResources
+            // -> disconnect() retires A's channel and releases the bind.
+            provider.emitError('CONNECTION_FAILED', 'boom-A');
+            expect(a.state.phase).toBe('error');
+            const disconnectsAfterReset = provider.disconnectCalls;   // exactly A's reset
+
+            // A second core rebinds the SAME provider (bind was released) and B joins.
+            const coreB = new SerenadaCore({ signalingProvider: provider });
+            const b = coreB.join({ roomId: 'room-B' });
+            expect(b.state.phase).not.toBe('error');
+            provider.emitConnected('ws');
+            provider.emitJoined({ peerId: 'cid-B', participants: [{ peerId: 'cid-B' }], hostPeerId: 'cid-B' });
+            const bMessages = vi.fn();
+            b.onPeerMessage(bMessages);
+
+            // Destroy the OLD session A: its retired channel must NOT forward
+            // disconnect() to the provider B now owns.
+            a.destroy();
+            expect(provider.disconnectCalls).toBe(disconnectsAfterReset);
+
+            // B still receives provider events after A's destroy (A's handlers
+            // were detached on retire, so no cross-wiring into the dead session).
+            provider.emitMessage({ from: 'remote-B', type: 'chat', payload: { hi: 1 } });
+            expect(bMessages).toHaveBeenCalledTimes(1);
+
+            // Double-destroy of A is safe and still does not touch the provider.
+            expect(() => a.destroy()).not.toThrow();
+            expect(provider.disconnectCalls).toBe(disconnectsAfterReset);
+
+            b.destroy();
+        });
+
         it('direct: two cores sharing one v1 provider object cannot both bind (guard is per-provider, not per-core)', () => {
             // The single-session contract is a property of the PROVIDER object:
             // two cores configured with the SAME v1 provider must not both bind it.
