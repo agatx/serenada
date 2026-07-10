@@ -70,9 +70,30 @@ internal class FakeManagedSession(
 internal class RegistryTestHarness(
     private val grantPermissions: Boolean = true,
     private val defaultVideoEnabled: Boolean = false,
+    /**
+     * When set, each managed session's signaling channel is vended by THIS single
+     * global v2 service through the REAL [app.serenada.core.SerenadaCore] seam
+     * ([app.serenada.core.SerenadaCore.createSignalingProvider] →
+     * [FakeMultiSessionSignalingProvider.openSession]) instead of a standalone
+     * [FakeSignalingProvider]. Drives F2 per-session channel isolation.
+     */
+    private val multiSessionProvider: FakeMultiSessionSignalingProvider? = null,
 ) {
     /** Created sessions, in creation order, keyed by canonical room id. */
     val created = LinkedHashMap<String, FakeManagedSession>()
+
+    /**
+     * Real core used ONLY to exercise the multi-session signaling seam when
+     * [multiSessionProvider] is set. Sessions still receive fake media/audio (real
+     * WebRTC cannot init under Robolectric); only the signaling channel flows through
+     * the real seam.
+     */
+    private val seamCore: app.serenada.core.SerenadaCore? = multiSessionProvider?.let {
+        app.serenada.core.SerenadaCore(
+            config = SerenadaConfig(multiSessionSignalingProvider = it),
+            context = RuntimeEnvironment.getApplication(),
+        )
+    }
 
     init {
         ForegroundMediaArbiter.resetForTests()
@@ -265,7 +286,16 @@ internal class RegistryTestHarness(
     private fun buildSession(room: RoomRef, role: CallMediaRole): SerenadaSession {
         val roomId = roomIdFor(room)
         val coordinator = CountingTestCoordinator()
-        val fakeProvider = FakeSignalingProvider()
+        // In v2 mode the channel comes from the REAL core seam (openSession(roomId));
+        // otherwise a standalone single-session fake (the pre-existing path).
+        val fakeProvider: FakeSignalingProvider = if (seamCore != null) {
+            seamCore.createSignalingProvider(
+                SerenadaConfig(multiSessionSignalingProvider = multiSessionProvider),
+                roomId,
+            ) as FakeSignalingProvider
+        } else {
+            FakeSignalingProvider()
+        }
         val fakeAudio = FakeAudioController()
         val fakeMedia = FakeMediaEngine()
         fakeProvider.enqueueIceServers(

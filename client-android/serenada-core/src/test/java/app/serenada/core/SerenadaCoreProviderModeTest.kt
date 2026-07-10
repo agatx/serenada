@@ -3,6 +3,8 @@ package app.serenada.core
 import app.serenada.core.fakes.FakeAudioController
 import app.serenada.core.fakes.FakeAPIClient
 import app.serenada.core.fakes.FakeMediaEngine
+import app.serenada.core.fakes.FakeMultiSessionSignalingProvider
+import app.serenada.core.fakes.FakeProviderChannel
 import app.serenada.core.fakes.FakeSessionClock
 import app.serenada.core.fakes.FakeSignalingProvider
 import android.os.Handler
@@ -10,7 +12,10 @@ import android.os.Looper
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -128,5 +133,114 @@ class SerenadaCoreProviderModeTest {
 
         assertTrue(provider.capabilities.handlesReconnection)
         provider.disconnect()
+    }
+
+    // --- Multi-session (v2) provider + v1 liveness guard (F2) ---
+
+    @Test
+    fun `signalingProvider and multiSessionSignalingProvider together are rejected`() {
+        try {
+            resolveSerenadaConfig(
+                SerenadaConfig(
+                    signalingProvider = FakeSignalingProvider(),
+                    multiSessionSignalingProvider = FakeMultiSessionSignalingProvider(),
+                ),
+            )
+            fail("Expected both provider fields to be rejected")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "Provide only one of signalingProvider or multiSessionSignalingProvider",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun `unsupported multiSessionSignalingProvider version is rejected`() {
+        val provider = object : MultiSessionSignalingProvider {
+            override val version: Int = 3
+            override fun openSession(roomId: String): SignalingProvider = FakeSignalingProvider()
+            override suspend fun getIceServers() = emptyList<org.webrtc.PeerConnection.IceServer>()
+        }
+        try {
+            resolveSerenadaConfig(SerenadaConfig(multiSessionSignalingProvider = provider))
+            fail("Expected unsupported multiSessionSignalingProvider version to be rejected")
+        } catch (error: IllegalArgumentException) {
+            assertEquals("Unsupported multiSessionSignalingProvider version: 3", error.message)
+        }
+    }
+
+    @Test
+    fun `multiSession provider vends one channel per room via openSession`() {
+        val service = FakeMultiSessionSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(multiSessionSignalingProvider = service),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        val channelA = core.createSignalingProvider(core.config, "room-A")
+        val channelB = core.createSignalingProvider(core.config, "room-B")
+
+        assertEquals(listOf("room-A", "room-B"), service.openSessionRoomIds)
+        assertNotSame(channelA, channelB)
+        assertEquals("room-A", (channelA as FakeProviderChannel).channelRoomId)
+        assertEquals("room-B", (channelB as FakeProviderChannel).channelRoomId)
+    }
+
+    @Test
+    fun `v1 provider second concurrent bind fails with a typed error`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        // First session binds the v1 object.
+        core.createSignalingProvider(core.config, "room-1")
+
+        try {
+            core.createSignalingProvider(core.config, "room-2")
+            fail("Expected a second concurrent v1 bind to fail")
+        } catch (error: SingleSessionProviderInUseException) {
+            assertEquals(SINGLE_SESSION_PROVIDER_IN_USE_MESSAGE, error.message)
+            assertEquals(CallError.ProviderUnavailable, error.callError)
+        }
+    }
+
+    @Test
+    fun `v1 provider sequential reuse works after the prior channel closes`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        val first = core.createSignalingProvider(core.config, "room-1")
+        // Teardown releases the bind (the call every session close makes).
+        first.disconnect()
+
+        // A later session may reuse the same v1 object — the guard is concurrency-only.
+        val second = core.createSignalingProvider(core.config, "room-2")
+        assertNotNull(second)
+    }
+
+    @Test
+    fun `v1 channel detaches the listener on close so late events are dropped`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+        val channel = core.createSignalingProvider(core.config, "room-1")
+
+        val listener = object : SignalingProvider.Listener {}
+        channel.listener = listener
+        assertSame(listener, v1.listener)
+
+        channel.disconnect()
+        // Closed-guard: the underlying listener is detached and cannot be re-attached.
+        assertNull(v1.listener)
+        channel.listener = listener
+        assertNull(v1.listener)
     }
 }

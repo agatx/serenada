@@ -222,3 +222,41 @@ interface SignalingProvider {
         fun onReconnectTokenRefreshed(event: ReconnectTokenRefreshedEvent) {}
     }
 }
+
+/**
+ * App-global signaling provider for hosts that run MULTIPLE concurrent sessions
+ * (multi-call session, contract §"Custom provider"). A plain [SignalingProvider]
+ * is a single-session surface: one [SignalingProvider.listener] slot and room-less
+ * ops ([SignalingProvider.leaveRoom]/[SignalingProvider.endRoom]/
+ * [SignalingProvider.disconnect]/…). Handing the SAME v1 object to two live
+ * sessions cross-wires their CIDs, overwrites the listener, and lets one session's
+ * teardown disconnect the other. A v2 provider instead VENDS one v1-shaped channel
+ * per session via [openSession]; each channel is permanently bound to one room and
+ * carries that session's events only.
+ *
+ * Implementor obligations (the SDK cannot enforce another process's transport):
+ * - Each channel is permanently bound to the [openSession] room; deliver its events
+ *   only to that channel's listener.
+ * - `leaveRoom`/`endRoom`/`disconnect`/TURN refresh/reconnect are channel-local.
+ * - The app-global service owns the physical transport: closing one channel
+ *   (its [SignalingProvider.disconnect]) must NOT disconnect the others; tear the
+ *   physical transport down only after the LAST channel closes.
+ * - Drop events queued for a channel once it has closed (channel-generation guard).
+ */
+interface MultiSessionSignalingProvider {
+    val version: Int
+        get() = MULTI_SESSION_SIGNALING_PROVIDER_VERSION
+
+    val capabilities: ProviderCapabilities
+        get() = ProviderCapabilities()
+
+    /**
+     * Vend a [SignalingProvider] channel permanently bound to [roomId] (the
+     * canonical room id). Called exactly once per session join; the SDK calls the
+     * channel's [SignalingProvider.disconnect] exactly once at session teardown.
+     */
+    fun openSession(roomId: String): SignalingProvider
+
+    /** ICE servers WITHOUT an active call (diagnostics/preflight). */
+    suspend fun getIceServers(): List<PeerConnection.IceServer>
+}

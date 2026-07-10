@@ -24,7 +24,7 @@ internal data class SentProviderMessage(
     val isBroadcast: Boolean,
 )
 
-internal class FakeSignalingProvider(
+internal open class FakeSignalingProvider(
     handlesReconnection: Boolean = false,
 ) : SignalingProvider {
     override val capabilities: ProviderCapabilities = ProviderCapabilities(
@@ -43,6 +43,8 @@ internal class FakeSignalingProvider(
         private set
     var getIceServersCalls = 0
         private set
+    var forceReconnectCalls = 0
+        private set
     var connected = false
         private set
 
@@ -59,6 +61,10 @@ internal class FakeSignalingProvider(
     override fun disconnect() {
         disconnectCalls += 1
         connected = false
+    }
+
+    override fun forceReconnectIfStale(timeoutMs: Long) {
+        forceReconnectCalls += 1
     }
 
     override fun joinRoom(roomId: String, options: JoinOptions) {

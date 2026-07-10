@@ -17,8 +17,21 @@ val DEFAULT_CAMERA_MODES: List<LocalCameraMode> = listOf(
 data class SerenadaConfig(
     /** Server host or origin (e.g. "serenada.app" or "http://localhost:8080"). */
     val serverHost: String? = null,
-    /** Custom signaling provider. Provide exactly one of `serverHost` or `signalingProvider`. */
+    /**
+     * Custom SINGLE-SESSION signaling provider. Provide exactly one of `serverHost`,
+     * `signalingProvider`, or `multiSessionSignalingProvider`. A v1 provider is bound
+     * by at most one live session at a time; a second CONCURRENT session that would
+     * bind it fails with a typed error ([CallError.ProviderUnavailable]). For multiple
+     * concurrent sessions (multi-call), use [multiSessionSignalingProvider].
+     */
     val signalingProvider: SignalingProvider? = null,
+    /**
+     * Custom MULTI-SESSION signaling provider (contract §"Custom provider"). Vends one
+     * signaling channel per session so concurrent sessions never share a listener or
+     * cross-wire their rooms. Provide exactly one of `serverHost`, `signalingProvider`,
+     * or `multiSessionSignalingProvider`.
+     */
+    val multiSessionSignalingProvider: MultiSessionSignalingProvider? = null,
     /** Whether audio starts enabled (default true). */
     val defaultAudioEnabled: Boolean = true,
     /** Whether video starts enabled (default true). */
@@ -81,22 +94,38 @@ enum class SerenadaTransport {
 internal data class ResolvedSerenadaConfig(
     val serverHost: String?,
     val signalingProvider: SignalingProvider?,
+    val multiSessionSignalingProvider: MultiSessionSignalingProvider? = null,
 )
 
 internal const val SUPPORTED_SIGNALING_PROVIDER_VERSION = 1
+internal const val MULTI_SESSION_SIGNALING_PROVIDER_VERSION = 2
 
 internal fun resolveSerenadaConfig(config: SerenadaConfig): ResolvedSerenadaConfig {
     val serverHost = config.serverHost?.trim()?.takeIf { it.isNotEmpty() }
     val signalingProvider = config.signalingProvider
-    require((serverHost == null) != (signalingProvider == null)) {
+    val multiSessionSignalingProvider = config.multiSessionSignalingProvider
+    require(signalingProvider == null || multiSessionSignalingProvider == null) {
+        "Provide only one of signalingProvider or multiSessionSignalingProvider"
+    }
+    val hasProvider = signalingProvider != null || multiSessionSignalingProvider != null
+    require((serverHost != null) != hasProvider) {
+        // Message kept verbatim for backward compatibility with existing integrators.
         "Provide exactly one of serverHost or signalingProvider"
     }
     if (signalingProvider != null && signalingProvider.version != SUPPORTED_SIGNALING_PROVIDER_VERSION) {
         throw IllegalArgumentException("Unsupported signalingProvider version: ${signalingProvider.version}")
     }
+    if (multiSessionSignalingProvider != null &&
+        multiSessionSignalingProvider.version != MULTI_SESSION_SIGNALING_PROVIDER_VERSION
+    ) {
+        throw IllegalArgumentException(
+            "Unsupported multiSessionSignalingProvider version: ${multiSessionSignalingProvider.version}",
+        )
+    }
     return ResolvedSerenadaConfig(
         serverHost = serverHost,
         signalingProvider = signalingProvider,
+        multiSessionSignalingProvider = multiSessionSignalingProvider,
     )
 }
 

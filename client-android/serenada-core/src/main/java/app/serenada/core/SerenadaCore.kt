@@ -81,7 +81,7 @@ class SerenadaCore(
             context = context,
             delegate = { delegate },
             okHttpClient = okHttpClient,
-            initialSignalingProvider = createSignalingProvider(sessionConfig),
+            initialSignalingProvider = createSignalingProvider(sessionConfig, roomId),
             logger = logger,
             displayName = displayName,
             peerId = peerId,
@@ -115,7 +115,7 @@ class SerenadaCore(
             context = context,
             delegate = { delegate },
             okHttpClient = okHttpClient,
-            initialSignalingProvider = createSignalingProvider(sessionConfig),
+            initialSignalingProvider = createSignalingProvider(sessionConfig, roomId),
             logger = logger,
             displayName = displayName,
             peerId = peerId,
@@ -169,7 +169,7 @@ class SerenadaCore(
             context = context,
             delegate = { delegate },
             okHttpClient = okHttpClient,
-            initialSignalingProvider = createSignalingProvider(sessionConfig),
+            initialSignalingProvider = createSignalingProvider(sessionConfig, resolvedRoomId),
             logger = logger,
             displayName = displayName,
             peerId = peerId,
@@ -269,14 +269,36 @@ class SerenadaCore(
             return config
         }
         val serverHost = serverHostOverride?.trim()?.takeIf { it.isNotEmpty() } ?: resolvedConfig.serverHost
-        return config.copy(serverHost = serverHost, signalingProvider = null)
+        return config.copy(
+            serverHost = serverHost,
+            signalingProvider = null,
+            multiSessionSignalingProvider = null,
+        )
     }
 
-    private fun createSignalingProvider(sessionConfig: SerenadaConfig): SignalingProvider {
+    /**
+     * The single-session (v1) [SignalingProvider] currently bound by a live session,
+     * or null when free. Identity-based: at most one session may hold the configured
+     * v1 object at a time (contract §"v1 liveness guard"). Written only on the main
+     * thread (all joins and the vended channel's teardown run there), so no lock is
+     * needed. Server mode and [MultiSessionSignalingProvider] mode never touch this —
+     * both mint a fresh channel per session.
+     */
+    private var boundV1Provider: SignalingProvider? = null
+
+    /**
+     * Resolve the signaling channel for one session (contract §"Custom provider").
+     * Server mode builds a fresh [SerenadaServerProvider]; a
+     * [MultiSessionSignalingProvider] vends a per-session channel via
+     * [MultiSessionSignalingProvider.openSession]; a single-session v1 provider is
+     * bound through the liveness guard. Internal so the registry seam and tests can
+     * exercise the real resolution path.
+     */
+    internal fun createSignalingProvider(sessionConfig: SerenadaConfig, roomId: String): SignalingProvider {
         val resolved = resolveSerenadaConfig(sessionConfig)
         val serverHost = resolved.serverHost
-        return if (serverHost != null) {
-            SerenadaServerProvider(
+        if (serverHost != null) {
+            return SerenadaServerProvider(
                 serverHost = serverHost,
                 handler = Handler(Looper.getMainLooper()),
                 okHttpClient = okHttpClient,
@@ -284,13 +306,65 @@ class SerenadaCore(
                 transports = sessionConfig.transports,
                 logger = logger,
             )
-        } else {
-            resolved.signalingProvider ?: throw IllegalStateException("Provide exactly one of serverHost or signalingProvider")
+        }
+        resolved.multiSessionSignalingProvider?.let { multi ->
+            return multi.openSession(roomId)
+        }
+        val provider = resolved.signalingProvider
+            ?: throw IllegalStateException("Provide exactly one of serverHost or signalingProvider")
+        return bindSingleSessionProvider(provider)
+    }
+
+    /**
+     * Bind [provider] to a new session, enforcing the single-session invariant: a
+     * second concurrent bind throws [SingleSessionProviderInUseException] instead of
+     * silently reusing the object (which would cross-wire the two sessions). The
+     * returned channel releases the bind on its [SignalingProvider.disconnect] — the
+     * call every session teardown makes — so sequential reuse keeps working.
+     */
+    private fun bindSingleSessionProvider(provider: SignalingProvider): SignalingProvider {
+        if (boundV1Provider != null) {
+            throw SingleSessionProviderInUseException()
+        }
+        boundV1Provider = provider
+        return SingleSessionV1Channel(provider) {
+            if (boundV1Provider === provider) boundV1Provider = null
         }
     }
 
     companion object {
         const val VERSION = "0.9.1"
+    }
+}
+
+/**
+ * Session-scoped wrapper around a single-session (v1) [SignalingProvider]. Delegates
+ * every operation to the underlying provider but (1) detaches the session's listener
+ * the instant the channel closes so a late/queued transport event can never reach a
+ * torn-down session (closed-guard, contract §"Channel lifecycle"), and (2) releases
+ * the [SerenadaCore] liveness bind via [onClose] exactly once, on the first
+ * [disconnect] (the call every session teardown makes), so the v1 provider can be
+ * reused by the next session.
+ */
+private class SingleSessionV1Channel(
+    private val provider: SignalingProvider,
+    private val onClose: () -> Unit,
+) : SignalingProvider by provider {
+    private var closed = false
+
+    override var listener: SignalingProvider.Listener?
+        get() = provider.listener
+        set(value) {
+            if (!closed) provider.listener = value
+        }
+
+    override fun disconnect() {
+        if (!closed) {
+            closed = true
+            provider.listener = null
+            onClose()
+        }
+        provider.disconnect()
     }
 }
 
