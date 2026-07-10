@@ -174,6 +174,59 @@ export interface SignalingProvider {
     ): void;
 }
 
+/**
+ * App-global signaling service that vends one {@link SignalingProvider} channel
+ * per call session (multi-call session, contract §F2). Where a v1
+ * {@link SignalingProvider} is a single per-session channel (one listener slot,
+ * room-less ops), a v2 provider owns the physical transport once and hands each
+ * joining session its own channel — so two concurrent sessions never share a
+ * listener slot, a CID, or a `disconnect()`.
+ *
+ * Configure it exactly like a v1 provider (`SerenadaConfig.signalingProvider`);
+ * the SDK detects `version === 2` and calls {@link openSession} once per join.
+ * A v1 provider stays supported for single-call use — a second concurrent
+ * session against a v1 provider fails with a typed error (see
+ * {@link ProviderUnavailableError}). Multi-call requires a v2 provider.
+ *
+ * Implementor obligations (the SDK cannot enforce another process's transport):
+ * each channel is permanently bound to one canonical room and receives only that
+ * room's events; `leave`/`end`/`disconnect`/TURN-refresh/reconnect are
+ * channel-local; the service owns the physical transport and closing one channel
+ * must not disconnect another; queued events are dropped after a channel closes.
+ */
+export interface MultiSessionSignalingProvider {
+    readonly version: 2;
+    /** Default capabilities applied to each vended channel. */
+    readonly capabilities?: ProviderCapabilities;
+    /**
+     * Vend a channel permanently bound to one canonical room. Called once per
+     * session join. The returned channel is a standard v1 {@link SignalingProvider}
+     * that the session drives (connect/joinRoom/leaveRoom/...); its events must be
+     * scoped to `roomId`.
+     */
+    openSession(roomId: string): SignalingProvider;
+    /** ICE servers without a call (diagnostics). */
+    getIceServers(): Promise<RTCIceServer[]>;
+}
+
+/**
+ * Either a single-session v1 {@link SignalingProvider} or an app-global v2
+ * {@link MultiSessionSignalingProvider}. Accepted by
+ * {@link SerenadaConfig.signalingProvider}.
+ */
+export type AnySignalingProvider = SignalingProvider | MultiSessionSignalingProvider;
+
+/**
+ * Runtime discriminator for {@link AnySignalingProvider}. A v2 provider vends
+ * per-session channels via {@link MultiSessionSignalingProvider.openSession}; a
+ * v1 provider is itself a single-session channel.
+ */
+export function isMultiSessionSignalingProvider(
+    provider: AnySignalingProvider,
+): provider is MultiSessionSignalingProvider {
+    return provider.version === 2 && typeof (provider as MultiSessionSignalingProvider).openSession === 'function';
+}
+
 export class SignalingProviderEmitter implements SignalingProvider {
     readonly version = 1;
     readonly capabilities?: ProviderCapabilities;

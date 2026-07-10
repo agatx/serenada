@@ -79,7 +79,11 @@ export type {
     SignalingProviderEventMap,
     SignalingProviderEventName,
     SignalingProvider,
+    MultiSessionSignalingProvider,
+    AnySignalingProvider,
 } from './SignalingProvider.js';
+export { isMultiSessionSignalingProvider } from './SignalingProvider.js';
+export { ProviderUnavailableError } from './types.js';
 
 export { ConsoleSerenadaLogger } from './ConsoleLogger.js';
 

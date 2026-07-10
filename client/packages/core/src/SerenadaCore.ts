@@ -1,4 +1,5 @@
-import type { CallMediaRole, SerenadaConfig, CallState, ConnectionEvent, CreateRoomResult, SerenadaSessionHandle } from './types.js';
+import type { CallError, CallMediaRole, SerenadaConfig, CallState, ConnectionEvent, CreateRoomResult, SerenadaSessionHandle } from './types.js';
+import { ProviderUnavailableError } from './types.js';
 import { SerenadaSession } from './SerenadaSession.js';
 import { createRoomId } from './api/roomApi.js';
 import { buildRoomUrl } from './serverUrls.js';
@@ -6,13 +7,84 @@ import { canonicalizeRoomId } from './roomIdentity.js';
 import type { ResolvedSerenadaConfig } from './configValidation.js';
 import { requireServerHost, resolveSerenadaConfig } from './configValidation.js';
 import { SerenadaServerProvider } from './SerenadaServerProvider.js';
-import type { PeerMessage, SignalingProvider } from './SignalingProvider.js';
+import type {
+    PeerMessage,
+    ProviderCapabilities,
+    SignalingProvider,
+    SignalingProviderEventMap,
+    SignalingProviderEventName,
+} from './SignalingProvider.js';
+import { isMultiSessionSignalingProvider } from './SignalingProvider.js';
 import { SnapshotError } from './media/captureSnapshot.js';
 import {
     clearRecoveryRecord,
     loadRecoveryRecord,
     type RecoveryRecord,
 } from './recoveryStorage.js';
+
+/**
+ * Message carried by {@link ProviderUnavailableError} and the resulting error
+ * `CallState` / registry failure when a second concurrent session would bind a
+ * single-session v1 `SignalingProvider`. Kept as a constant so the direct-join
+ * and registry-join surfaces (and tests) share the exact wording.
+ */
+export const PROVIDER_SINGLE_SESSION_MESSAGE =
+    'Signaling provider is single-session (v1); a session is already using it. '
+    + 'Provide a version-2 MultiSessionSignalingProvider for multi-call.';
+
+/**
+ * Wrap a single-session v1 `SignalingProvider` so its teardown releases the
+ * core's liveness bind. The session drives the SAME underlying provider through
+ * this thin delegate; only `disconnect()` is intercepted, because the session
+ * calls `signaling.disconnect()` on EVERY terminal path (leave/end/destroy AND
+ * the remote-end / error resets), which the per-`destroy()` handler unbinding
+ * would miss. `onTeardown` fires at most once and is scoped by identity in the
+ * caller, so a repeated `disconnect()` (reset then destroy) never clears a
+ * later session's bind.
+ */
+function createV1LivenessChannel(
+    underlying: SignalingProvider,
+    onTeardown: () => void,
+): SignalingProvider {
+    let torndown = false;
+    const channel: SignalingProvider = {
+        get version(): number { return underlying.version; },
+        get capabilities(): ProviderCapabilities | undefined { return underlying.capabilities; },
+        connect: () => underlying.connect(),
+        disconnect: () => {
+            if (!torndown) {
+                torndown = true;
+                onTeardown();
+            }
+            underlying.disconnect();
+        },
+        joinRoom: (roomId, options) => underlying.joinRoom(roomId, options),
+        leaveRoom: () => underlying.leaveRoom(),
+        endRoom: () => underlying.endRoom(),
+        sendToPeer: (peerId, type, payload) => underlying.sendToPeer(peerId, type, payload),
+        broadcast: (type, payload) => underlying.broadcast(type, payload),
+        getIceServers: () => underlying.getIceServers(),
+        on<K extends SignalingProviderEventName>(event: K, cb: (data: SignalingProviderEventMap[K]) => void): void {
+            underlying.on(event, cb);
+        },
+        off<K extends SignalingProviderEventName>(event: K, cb: (data: SignalingProviderEventMap[K]) => void): void {
+            underlying.off(event, cb);
+        },
+    };
+    // Preserve the optional hooks' PRESENCE: the session probes them with
+    // `signaling.setTurnRefreshGate?.(...)`, so a delegate that always defined
+    // them would call into a provider that never implemented them.
+    if (underlying.setTurnRefreshGate) {
+        channel.setTurnRefreshGate = (gate) => underlying.setTurnRefreshGate!(gate);
+    }
+    if (underlying.setDurableRecoveryGate) {
+        channel.setDurableRecoveryGate = (gate) => underlying.setDurableRecoveryGate!(gate);
+    }
+    if (underlying.persistDurableRecoveryNow) {
+        channel.persistDurableRecoveryNow = () => underlying.persistDurableRecoveryNow!();
+    }
+    return channel;
+}
 
 /**
  * Main entry point for the Serenada SDK.
@@ -22,6 +94,14 @@ import {
 export class SerenadaCore {
     private readonly config: SerenadaConfig;
     private readonly resolvedConfig: ResolvedSerenadaConfig;
+    /**
+     * The v1-provider liveness channel currently bound to a live session, or
+     * `null`. Identity-based: a second concurrent join against a single-session
+     * v1 provider fails while this is set; it clears when the bound session tears
+     * down (see {@link createV1LivenessChannel}). Server mode and v2 providers
+     * vend a fresh per-session object each join and never set this.
+     */
+    private v1BoundChannel: SignalingProvider | null = null;
 
     constructor(config: SerenadaConfig) {
         this.config = config;
@@ -77,12 +157,30 @@ export class SerenadaCore {
             : { roomId: urlOrOptions.roomId };
         const displayName = typeof urlOrOptions === 'string' ? extraOptions?.displayName : urlOrOptions.displayName;
         const peerId = typeof urlOrOptions === 'string' ? extraOptions?.peerId : urlOrOptions.peerId;
-        return this.joinInternal(room, {
-            initialMediaRole: 'foreground',
-            acquireForegroundLease: true,
-            displayName,
-            peerId,
-        });
+        try {
+            return this.joinInternal(room, {
+                initialMediaRole: 'foreground',
+                acquireForegroundLease: true,
+                displayName,
+                peerId,
+            });
+        } catch (err) {
+            // A single-session v1 provider already backing a live session surfaces
+            // on the direct join as an error CallState (parity with the deferred
+            // foreground-lease-unavailable failure) rather than throwing out of the
+            // non-throwing public join(). The registry path lets this throw so
+            // `createOrReuseCall` records a `{ kind: 'failed' }` join result.
+            if (err instanceof ProviderUnavailableError) {
+                const roomId = typeof urlOrOptions === 'string'
+                    ? this.parseRoomIdFromUrl(urlOrOptions)
+                    : urlOrOptions.roomId;
+                return this.createErrorStandInSession(
+                    { code: 'providerUnavailable', message: err.message },
+                    roomId,
+                );
+            }
+            throw err;
+        }
     }
 
     /**
@@ -120,17 +218,29 @@ export class SerenadaCore {
             // a normal joinFailed instead of publishing a broken managed call.
             throw new Error('WebRTC is not supported in this browser');
         }
-        const signalingProvider = this.createSignalingProvider();
         const roomId = 'url' in room ? this.parseRoomIdFromUrl(room.url) : room.roomId;
         const roomUrl = 'url' in room
             ? room.url
             : (this.resolvedConfig.serverHost ? buildRoomUrl(this.resolvedConfig.serverHost, room.roomId) : null);
-        return new SerenadaSession(this.config, roomId, roomUrl, signalingProvider, {
-            displayName: options.displayName,
-            peerId: options.peerId,
-            initialMediaRole: options.initialMediaRole,
-            acquireForegroundLease: options.acquireForegroundLease,
-        });
+        // Throws `ProviderUnavailableError` for a second concurrent bind of a v1
+        // provider; may bind the v1 liveness channel (see `v1BoundChannel`).
+        const signalingProvider = this.createSignalingProvider(roomId);
+        try {
+            return new SerenadaSession(this.config, roomId, roomUrl, signalingProvider, {
+                displayName: options.displayName,
+                peerId: options.peerId,
+                initialMediaRole: options.initialMediaRole,
+                acquireForegroundLease: options.acquireForegroundLease,
+            });
+        } catch (err) {
+            // Session construction failed after the v1 liveness bind: roll it back
+            // so the provider is reusable (the channel's `disconnect()` unbind
+            // never runs when the session never existed).
+            if (this.v1BoundChannel === signalingProvider) {
+                this.v1BoundChannel = null;
+            }
+            throw err;
+        }
     }
 
     /** Create a new room. Returns the room URL and ID. Call {@link join} to start the call. */
@@ -154,6 +264,34 @@ export class SerenadaCore {
             requiredPermissions: null,
             error: { code: 'webrtcUnavailable', message: 'WebRTC is not supported in this browser' },
         };
+        return this.buildStandInHandle(errorState, 'WebRTC is not supported');
+    }
+
+    /**
+     * Stand-in error handle for a join that failed before a real session could be
+     * constructed (e.g. a single-session v1 provider already backing another live
+     * session). Mirrors {@link createUnsupportedSession} but carries the caller's
+     * terminal error and room id so a host renders the failure like any other
+     * error `CallState`.
+     */
+    private createErrorStandInSession(error: CallError, roomId: string | null): SerenadaSessionHandle {
+        const errorState: CallState = {
+            phase: 'error',
+            roomId,
+            roomUrl: null,
+            localParticipant: null,
+            remoteParticipants: [],
+            connectionStatus: 'disconnected',
+            signalingState: { kind: 'failed', reason: error.code },
+            activeTransport: null,
+            requiredPermissions: null,
+            error,
+        };
+        return this.buildStandInHandle(errorState, error.message);
+    }
+
+    /** Build the no-op session handle shared by the terminal stand-ins. */
+    private buildStandInHandle(errorState: CallState, snapshotMessage: string): SerenadaSessionHandle {
         const noop = () => {};
         const noopAsync = async () => {};
         const emptyMap = new Map<string, MediaStream>();
@@ -173,7 +311,7 @@ export class SerenadaCore {
             startScreenShare: noopAsync,
             stopScreenShare: noopAsync,
             captureSnapshot: async () => {
-                throw new SnapshotError('streamNotActive', 'WebRTC is not supported');
+                throw new SnapshotError('streamNotActive', snapshotMessage);
             },
             resumeJoin: noopAsync,
             cancelJoin: noop,
@@ -198,7 +336,15 @@ export class SerenadaCore {
         };
     }
 
-    private createSignalingProvider(): SignalingProvider {
+    /**
+     * Resolve the per-session signaling channel for a join (the F2 seam). Server
+     * mode builds a fresh `SerenadaServerProvider` per session (already
+     * channel-per-session). A v2 `MultiSessionSignalingProvider` vends one channel
+     * per session via `openSession(roomId)`. A single-session v1 provider is
+     * returned directly, guarded by the liveness bind so a second concurrent
+     * session throws {@link ProviderUnavailableError} instead of cross-wiring.
+     */
+    private createSignalingProvider(roomId: string): SignalingProvider {
         if (this.resolvedConfig.serverHost) {
             return new SerenadaServerProvider({
                 serverHost: this.resolvedConfig.serverHost,
@@ -208,7 +354,22 @@ export class SerenadaCore {
                 enableIndependentContentVideo: this.config.enableIndependentContentVideo,
             });
         }
-        return this.resolvedConfig.signalingProvider as SignalingProvider;
+        const provider = this.resolvedConfig.signalingProvider!;
+        if (isMultiSessionSignalingProvider(provider)) {
+            // v2: one channel per session, permanently bound to this canonical room.
+            return provider.openSession(roomId);
+        }
+        // v1: single-session. Refuse a second concurrent bind.
+        if (this.v1BoundChannel !== null) {
+            throw new ProviderUnavailableError(PROVIDER_SINGLE_SESSION_MESSAGE);
+        }
+        const channel = createV1LivenessChannel(provider, () => {
+            if (this.v1BoundChannel === channel) {
+                this.v1BoundChannel = null;
+            }
+        });
+        this.v1BoundChannel = channel;
+        return channel;
     }
 
     private parseRoomIdFromUrl(url: string): string {

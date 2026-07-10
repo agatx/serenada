@@ -124,6 +124,31 @@ const session = core.join({ roomId: 'group-123' })
 <SerenadaCallFlow session={session} onDismiss={() => navigate('/')} />
 ```
 
+### Single-Session (v1) vs Multi-Session (v2)
+
+A `SignalingProvider` (`version: 1`) is **single-session**: one channel, one listener slot, room-less `disconnect()`. It backs one call at a time. A second concurrent session against the same v1 provider fails fast rather than cross-wiring the two: a direct `core.join()` returns a session whose state is an error `CallState` (`error.code === 'providerUnavailable'`), and a registry join returns `{ kind: 'failed' }`. Sequential reuse (join, tear down, join again) works.
+
+For multi-call (the `SerenadaCallRegistry`, or any two concurrent sessions), implement `MultiSessionSignalingProvider` (`version: 2`). It owns the physical transport once and vends one channel per session via `openSession(roomId)`:
+
+```typescript
+import type { MultiSessionSignalingProvider, SignalingProvider } from '@agatx/serenada-core'
+
+class DemoService implements MultiSessionSignalingProvider {
+    readonly version = 2 as const
+    openSession(roomId: string): SignalingProvider {
+        // Return a per-room channel (a v1 SignalingProvider) scoped to `roomId`.
+        // Closing one channel must not disconnect the others; the service owns
+        // the shared transport and tears it down after the last channel closes.
+        return new DemoChannel(this, roomId)
+    }
+    async getIceServers() { return [] }
+}
+
+const core = createSerenadaCore({ signalingProvider: new DemoService() })
+```
+
+Configure it the same way (`signalingProvider`); the SDK detects `version === 2` and calls `openSession` once per join.
+
 ## Core-Only Integration (No UI)
 
 Use `@agatx/serenada-core` directly for a fully custom UI:

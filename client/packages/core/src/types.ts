@@ -1,4 +1,4 @@
-import type { SignalingProvider, PeerMessage } from './SignalingProvider.js';
+import type { AnySignalingProvider, PeerMessage } from './SignalingProvider.js';
 import type { TransportKind } from './signaling/transports/types.js';
 import type { RoomStatus, RoomStatuses } from './signaling/roomStatuses.js';
 
@@ -76,6 +76,25 @@ export class ForegroundLeaseUnavailable extends Error {
     constructor(message: string) {
         super(message);
         this.name = 'ForegroundLeaseUnavailable';
+    }
+}
+
+/**
+ * Thrown when a second concurrent session would bind a single-session v1
+ * `SignalingProvider` that another live session already holds (multi-call
+ * session, contract §F2). A v1 provider owns one listener slot and one
+ * `disconnect()`, so it cannot back two sessions at once; the SDK fails fast
+ * instead of cross-wiring them. Sequential reuse (after the first session tears
+ * down) works. For concurrent multi-call, configure a version-2
+ * `MultiSessionSignalingProvider`, which vends one channel per session. Surfaced
+ * on a direct join as an error `CallState` (code `'providerUnavailable'`) and on
+ * a registry join as `{ kind: 'failed' }`.
+ */
+export class ProviderUnavailableError extends Error {
+    readonly code = 'providerUnavailable' as const;
+    constructor(message: string) {
+        super(message);
+        this.name = 'ProviderUnavailableError';
     }
 }
 
@@ -338,6 +357,7 @@ export type CallErrorCode =
     | 'serverError'
     | 'webrtcUnavailable'
     | 'mediaUnavailable'
+    | 'providerUnavailable'
     | 'unknown';
 
 /** Error with a machine-readable code and human-readable message. */
@@ -430,8 +450,13 @@ export interface CallState {
 export interface SerenadaConfig {
     /** Bare host or full origin, e.g. `serenada.app` or `http://qa-box:8080`. */
     serverHost?: string;
-    /** Custom signaling provider. Provide exactly one of `serverHost` or `signalingProvider`. */
-    signalingProvider?: SignalingProvider;
+    /**
+     * Custom signaling provider. Provide exactly one of `serverHost` or
+     * `signalingProvider`. Accepts a single-session v1 `SignalingProvider` or an
+     * app-global v2 `MultiSessionSignalingProvider` (required for multi-call:
+     * a v1 provider is single-session, see {@link ProviderUnavailableError}).
+     */
+    signalingProvider?: AnySignalingProvider;
     /** Whether the microphone is enabled when joining. Defaults to `true`. */
     defaultAudioEnabled?: boolean;
     /** Whether the camera is enabled when joining. Defaults to `true`. */
