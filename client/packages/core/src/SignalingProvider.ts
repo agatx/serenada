@@ -151,6 +151,19 @@ export interface SignalingProvider {
      * loopback/test) may omit this.
      */
     setTurnRefreshGate?(gate: (() => Promise<boolean>) | null): void;
+    /**
+     * Optional hook: install a gate that returns `false` to suppress writing the
+     * durable cross-launch recovery record (multi-call session: only the
+     * foreground call owns the record). Providers without durable recovery
+     * (e.g. loopback/test) may omit this.
+     */
+    setDurableRecoveryGate?(gate: (() => boolean) | null): void;
+    /**
+     * Optional hook: force an immediate durable-recovery persist from current
+     * reconnect credentials. Called on resume-to-foreground so the record
+     * describes the newly-foregrounded call with no gap.
+     */
+    persistDurableRecoveryNow?(): void;
     on<K extends SignalingProviderEventName>(
         event: K,
         cb: (data: SignalingProviderEventMap[K]) => void,

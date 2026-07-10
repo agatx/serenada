@@ -81,6 +81,18 @@ export class FakeSignalingProvider extends SignalingProviderEmitter {
         this.turnRefreshGate = gate;
     }
 
+    // Records the foreground-only durable-recovery gate + force-persist calls so
+    // tests can assert the session gates the durable record on its media role and
+    // re-persists on resume-to-foreground (design §5).
+    durableRecoveryGate: (() => boolean) | null = null;
+    setDurableRecoveryGate(gate: (() => boolean) | null): void {
+        this.durableRecoveryGate = gate;
+    }
+    persistDurableRecoveryNowCalls = 0;
+    persistDurableRecoveryNow(): void {
+        this.persistDurableRecoveryNowCalls += 1;
+    }
+
     emitJoined(event: {
         peerId: string;
         participants: SignalingProviderParticipant[];

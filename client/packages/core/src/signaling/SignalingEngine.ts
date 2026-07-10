@@ -14,7 +14,7 @@ import {
     parseNegotiationDirtyPayload,
 } from './payloads.js';
 import { formatError } from '../formatError.js';
-import { saveRecoveryRecord, clearRecoveryRecord } from '../recoveryStorage.js';
+import { saveRecoveryRecord, clearRecoveryRecordIfOwned } from '../recoveryStorage.js';
 import {
     RECONNECT_BACKOFF_BASE_MS,
     RECONNECT_BACKOFF_CAP_MS,
@@ -101,6 +101,7 @@ export class SignalingEngine {
     private reconnectToken: string | null = null;
     private reconnectTokenRoomId: string | null = null;
     private reconnectTokenTTLMs: number | null = null;
+    private reconnectStorageLoaded = false;
     private lastPongAt = Date.now();
     private missedPongs = 0;
     private wsConsecutiveFailures = 0;
@@ -135,7 +136,9 @@ export class SignalingEngine {
         this.videoMediaEnabled = config.videoMediaEnabled !== false;
         this.independentContentVideo = config.enableIndependentContentVideo === true;
         this.logger = config.logger;
-        this.loadReconnectStorage();
+        // In-tab reconnect identity is loaded lazily in `joinRoom` once the room
+        // id is known, because the storage keys are scoped per room (two
+        // concurrent multi-call sessions must not share a fixed key).
     }
 
     connect(): void {
@@ -182,6 +185,13 @@ export class SignalingEngine {
         this.clearJoinTimers();
         this.needsRejoin = false;
         this.currentRoomId = roomId;
+        // Load the (per-room) in-tab reconnect identity once, on the first join
+        // to this engine's room. Subsequent auto-rejoins use in-memory state
+        // (fresher than storage) so this never clobbers a live reconnect.
+        if (!this.reconnectStorageLoaded) {
+            this.reconnectStorageLoaded = true;
+            this.loadReconnectStorage(roomId);
+        }
         this.joinAttemptId += 1;
         const attemptId = this.joinAttemptId;
         this.joinAcked = false;
@@ -260,6 +270,10 @@ export class SignalingEngine {
 
     leaveRoom(options?: { preserveReconnectState?: boolean }): void {
         const preserveReconnectState = options?.preserveReconnectState === true;
+        // Capture the reconnect identity BEFORE nulling `currentRoomId`/`clientId`
+        // below so the ownership-checked clear can match the durable record and
+        // the per-room in-tab keys.
+        const identity = { roomId: this.currentRoomId, cid: this.clientId ?? this.lastClientId };
         this.clearJoinTimers();
         this.sendMessage('leave');
         this.currentRoomId = null;
@@ -268,7 +282,7 @@ export class SignalingEngine {
             this.lastClientId = this.clientId;
         } else {
             this.lastClientId = null;
-            this.clearReconnectStorage();
+            this.clearReconnectStorage(identity);
         }
         this.clientId = null;
         this.roomState = null;
@@ -722,87 +736,100 @@ export class SignalingEngine {
     // current session is over and should not influence a future join:
     // server `room_ended`, terminal error codes, etc.
     private resetForTerminal(): void {
+        // Capture identity before nulling `currentRoomId` so the ownership check
+        // in `clearReconnectStorage` can match this engine's durable record.
+        const identity = { roomId: this.currentRoomId, cid: this.clientId ?? this.lastClientId };
         this.clearJoinTimers();
         this.clearReconnectTokenRefreshTimer();
         this.roomState = null;
         this.currentRoomId = null;
         this.needsRejoin = false;
-        this.clearReconnectStorage();
+        this.clearReconnectStorage(identity);
         this.lastReconnectOutcome = null;
         this.lastEpoch = null;
         this.awaitingPostReconnectSnapshot = false;
         this.epochAtDisconnect = null;
     }
 
-    // Session storage helpers
-    private readonly storageKeyClientId = 'serenada.reconnectCid';
-    private readonly storageKeyReconnectToken = 'serenada.reconnectToken';
-    private readonly storageKeyReconnectTokenRoom = 'serenada.reconnectTokenRoom';
+    // Session storage helpers. The in-tab reconnect keys are scoped PER ROOM so
+    // two concurrent (multi-call) engine instances never clobber each other's
+    // reconnect identity; a single-call reload still recovers its own room's
+    // keys. The durable cross-launch recovery record lives in `recoveryStorage`.
+    private static readonly RECONNECT_CID_KEY_PREFIX = 'serenada.reconnectCid';
+    private static readonly RECONNECT_TOKEN_KEY_PREFIX = 'serenada.reconnectToken';
 
-    private loadReconnectStorage(): void {
+    private reconnectCidKey(roomId: string): string {
+        return `${SignalingEngine.RECONNECT_CID_KEY_PREFIX}.${roomId}`;
+    }
+
+    private reconnectTokenKey(roomId: string): string {
+        return `${SignalingEngine.RECONNECT_TOKEN_KEY_PREFIX}.${roomId}`;
+    }
+
+    private loadReconnectStorage(roomId: string): void {
         try {
-            const stored = window.sessionStorage.getItem(this.storageKeyClientId);
-            if (stored && !this.lastClientId) this.lastClientId = stored;
-            const storedToken = window.sessionStorage.getItem(this.storageKeyReconnectToken);
-            if (storedToken && !this.reconnectToken) this.reconnectToken = storedToken;
-            const storedTokenRoom = window.sessionStorage.getItem(this.storageKeyReconnectTokenRoom);
-            if (storedTokenRoom && !this.reconnectTokenRoomId) this.reconnectTokenRoomId = storedTokenRoom;
+            const storedCid = window.sessionStorage.getItem(this.reconnectCidKey(roomId));
+            if (storedCid && !this.lastClientId) this.lastClientId = storedCid;
+            const storedToken = window.sessionStorage.getItem(this.reconnectTokenKey(roomId));
+            if (storedToken && !this.reconnectToken) {
+                this.reconnectToken = storedToken;
+                this.reconnectTokenRoomId = roomId;
+            }
         } catch (err) {
-            this.logger?.log('warning', 'Signaling', `Failed to load reconnectCid: ${err}`);
+            this.logger?.log('warning', 'Signaling', `Failed to load reconnect identity: ${err}`);
         }
     }
 
     private persistClientId(): void {
-        if (this.clientId) {
-            try { window.sessionStorage.setItem(this.storageKeyClientId, this.clientId); }
+        if (this.clientId && this.currentRoomId) {
+            try { window.sessionStorage.setItem(this.reconnectCidKey(this.currentRoomId), this.clientId); }
             catch (err) { this.logger?.log('warning', 'Signaling', `Failed to persist reconnectCid: ${err}`); }
         }
     }
 
     private persistReconnectStorage(): void {
+        const roomId = this.reconnectTokenRoomId ?? this.currentRoomId;
+        if (!roomId || !this.reconnectToken) return;
         try {
-            if (this.reconnectToken) {
-                window.sessionStorage.setItem(this.storageKeyReconnectToken, this.reconnectToken);
-            }
-            if (this.reconnectTokenRoomId) {
-                window.sessionStorage.setItem(this.storageKeyReconnectTokenRoom, this.reconnectTokenRoomId);
-            }
+            window.sessionStorage.setItem(this.reconnectTokenKey(roomId), this.reconnectToken);
         } catch (err) {
             this.logger?.log('warning', 'Signaling', `Failed to persist reconnectToken: ${err}`);
         }
     }
 
-    private clearReconnectStorage(): void {
+    private clearReconnectInTabStorage(roomId: string | null): void {
+        if (!roomId) return;
         try {
-            window.sessionStorage.removeItem(this.storageKeyClientId);
-            window.sessionStorage.removeItem(this.storageKeyReconnectToken);
-            window.sessionStorage.removeItem(this.storageKeyReconnectTokenRoom);
+            window.sessionStorage.removeItem(this.reconnectCidKey(roomId));
+            window.sessionStorage.removeItem(this.reconnectTokenKey(roomId));
         } catch (err) {
-            this.logger?.log('warning', 'Signaling', `Failed to clear reconnectCid: ${err}`);
+            this.logger?.log('warning', 'Signaling', `Failed to clear reconnect identity: ${err}`);
         }
+    }
+
+    private clearReconnectStorage(identity: { roomId: string | null; cid: string | null }): void {
+        this.clearReconnectInTabStorage(identity.roomId);
         this.reconnectToken = null;
         this.reconnectTokenRoomId = null;
         this.reconnectTokenTTLMs = null;
         this.sessionStartTs = null;
-        clearRecoveryRecord();
+        // Ownership-checked: only drop the durable record if it is ours, so a
+        // teardown of one call never clears a concurrent call's record.
+        clearRecoveryRecordIfOwned(identity.roomId, identity.cid);
     }
 
     private clearReconnectAuthorityForFreshJoin(): void {
         this.clearReconnectTokenRefreshTimer();
-        try {
-            window.sessionStorage.removeItem(this.storageKeyClientId);
-            window.sessionStorage.removeItem(this.storageKeyReconnectToken);
-            window.sessionStorage.removeItem(this.storageKeyReconnectTokenRoom);
-        } catch (err) {
-            this.logger?.log('warning', 'Signaling', `Failed to clear reconnect authority: ${err}`);
-        }
+        // Capture identity before nulling clientId so the ownership check matches.
+        const identity = { roomId: this.currentRoomId, cid: this.clientId ?? this.lastClientId };
+        this.clearReconnectInTabStorage(identity.roomId);
         this.clientId = null;
         this.lastClientId = null;
         this.reconnectToken = null;
         this.reconnectTokenRoomId = null;
         this.reconnectTokenTTLMs = null;
         this.sessionStartTs = null;
-        clearRecoveryRecord();
+        clearRecoveryRecordIfOwned(identity.roomId, identity.cid);
     }
 
     private retryFreshJoinAfterInvalidReconnectToken(rid: string | undefined): boolean {
@@ -839,11 +866,39 @@ export class SignalingEngine {
         }, delay);
     }
 
+    /**
+     * Gate consulted before writing the durable cross-launch recovery record.
+     * Installed by the session; returns `false` while the call is held so only
+     * the FOREGROUND call owns the single durable record (design §5). The
+     * engine's in-memory + per-room in-tab reconnect identity is unaffected —
+     * held calls keep their reconnect identity. Absent gate ⇒ always persist
+     * (single-call / RoomWatcher behavior unchanged).
+     */
+    private durableRecoveryGate: (() => boolean) | null = null;
+
+    setDurableRecoveryGate(gate: (() => boolean) | null): void {
+        this.durableRecoveryGate = gate;
+    }
+
+    /**
+     * Force an immediate durable-recovery persist from current in-memory
+     * credentials. Called on resume-to-foreground so the record describes the
+     * actual foreground call with no gap (a held call's `joined`/token-refresh
+     * writes were gated off). Respects the gate.
+     */
+    persistDurableRecoveryNow(): void {
+        this.persistRecoveryRecord(this.reconnectTokenTTLMs ?? undefined);
+    }
+
     // Snapshots the in-memory reconnect state into the cross-launch
     // recovery store so a relaunched tab can offer a "Rejoin call?" prompt.
     // No-op when we don't have full credentials yet (e.g. first transport
     // open before the server has answered with `joined`).
     private persistRecoveryRecord(reconnectTokenTTLMs: number | undefined): void {
+        // Only the foreground call writes the durable record (design §5).
+        if (this.durableRecoveryGate && !this.durableRecoveryGate()) {
+            return;
+        }
         if (!this.currentRoomId || !this.clientId || !this.reconnectToken || !this.sessionStartTs) {
             return;
         }

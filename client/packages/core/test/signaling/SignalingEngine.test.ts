@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { FakeTransport } from '../helpers/FakeTransport';
 import type { TransportHandlers } from '../../src/signaling/transports/types';
+import { loadRecoveryRecord } from '../../src/recoveryStorage';
 
 // ---------------------------------------------------------------------------
 // Provide a minimal `window` shim for the Node test environment.
@@ -377,6 +378,124 @@ describe('auto-rejoin on reconnect', () => {
         expect(engine.error).toBeNull();
 
         engine.destroy();
+    });
+});
+
+describe('durable recovery (foreground-only + ownership)', () => {
+    function joinedMsg(rid: string, cid: string, token: string) {
+        return {
+            v: 1,
+            type: 'joined' as const,
+            cid,
+            rid,
+            payload: {
+                hostCid: cid,
+                participants: [{ cid }],
+                reconnectToken: token,
+                reconnectTokenTTLMs: 1_200_000,
+            },
+        };
+    }
+
+    function bringUp(rid: string, cid: string, token: string, gate?: () => boolean) {
+        const engine = createEngine(['ws']);
+        if (gate) engine.setDurableRecoveryGate(gate);
+        engine.connect();
+        const ws = lastTransport();
+        ws.simulateOpen();
+        engine.joinRoom(rid);
+        ws.simulateMessage(joinedMsg(rid, cid, token));
+        return { engine, ws };
+    }
+
+    it('does NOT write the durable record while the gate returns false (held call)', () => {
+        const { engine } = bringUp('room-held', 'cH', 'tokH', () => false);
+        expect(loadRecoveryRecord()).toBeNull();
+        engine.destroy();
+    });
+
+    it('writes the durable record while the gate allows it (foreground call)', () => {
+        const { engine } = bringUp('room-fg', 'cF', 'tokF', () => true);
+        const rec = loadRecoveryRecord();
+        expect(rec?.roomId).toBe('room-fg');
+        expect(rec?.cid).toBe('cF');
+        expect(rec?.reconnectToken).toBe('tokF');
+        engine.destroy();
+    });
+
+    it('does NOT write on a held token refresh', () => {
+        const { engine, ws } = bringUp('room-held', 'cH', 'tokH', () => false);
+        ws.simulateMessage({
+            v: 1,
+            type: 'reconnect-token-refreshed',
+            rid: 'room-held',
+            payload: { reconnectToken: 'tokH2', reconnectTokenTTLMs: 1_200_000 },
+        });
+        expect(loadRecoveryRecord()).toBeNull();
+        engine.destroy();
+    });
+
+    it('persistDurableRecoveryNow writes from in-memory creds once the gate flips to foreground (resume)', () => {
+        let foreground = false;
+        const { engine } = bringUp('room-x', 'cX', 'tokX', () => foreground);
+        expect(loadRecoveryRecord()).toBeNull();
+        // Resume-to-foreground: flip the gate, then force an immediate persist.
+        foreground = true;
+        engine.persistDurableRecoveryNow();
+        const rec = loadRecoveryRecord();
+        expect(rec?.roomId).toBe('room-x');
+        expect(rec?.cid).toBe('cX');
+        expect(rec?.reconnectToken).toBe('tokX');
+        engine.destroy();
+    });
+
+    it('leave() clears the durable record only when this engine owns it', () => {
+        // Engine B is the foreground owner and writes the record.
+        const b = bringUp('room-b', 'cB', 'tokB', () => true);
+        expect(loadRecoveryRecord()?.roomId).toBe('room-b');
+
+        // Engine A (a different, stale call) tearing down must NOT clear B's record.
+        const a = bringUp('room-a', 'cA', 'tokA', () => false);
+        a.engine.leaveRoom();
+        expect(loadRecoveryRecord()?.roomId).toBe('room-b');
+
+        // B leaving clears its own record.
+        b.engine.leaveRoom();
+        expect(loadRecoveryRecord()).toBeNull();
+        a.engine.destroy();
+        b.engine.destroy();
+    });
+
+    it('scopes in-tab reconnect keys per room: a reload recovers the SAME room', () => {
+        const first = bringUp('room-x', 'cX', 'tokX', () => true);
+        first.engine.destroy();
+
+        // Fresh engine (simulated reload) rejoining the same room picks up the
+        // per-room in-tab reconnect identity and presents it on join.
+        const engine2 = createEngine(['ws']);
+        engine2.connect();
+        const ws2 = lastTransport();
+        ws2.simulateOpen();
+        engine2.joinRoom('room-x');
+        const join = ws2.sentMessages.find((m) => m.type === 'join');
+        expect(join?.payload).toMatchObject({ reconnectCid: 'cX', reconnectToken: 'tokX' });
+        engine2.destroy();
+    });
+
+    it('does not carry another room\'s reconnect identity (no cross-room clobber)', () => {
+        const first = bringUp('room-x', 'cX', 'tokX', () => true);
+        first.engine.destroy();
+
+        // A different room must not inherit room-x's cid/token.
+        const engine2 = createEngine(['ws']);
+        engine2.connect();
+        const ws2 = lastTransport();
+        ws2.simulateOpen();
+        engine2.joinRoom('room-y');
+        const join = ws2.sentMessages.find((m) => m.type === 'join');
+        expect(join?.payload).not.toHaveProperty('reconnectCid');
+        expect(join?.payload).not.toHaveProperty('reconnectToken');
+        engine2.destroy();
     });
 });
 

@@ -99,3 +99,19 @@ export function clearRecoveryRecord(): void {
         // Ignore.
     }
 }
+
+/**
+ * Clear the durable recovery record ONLY when it belongs to the given
+ * `(roomId, cid)` identity. The record is single-slot and foreground-owned
+ * (design §5): during a multi-call session one call tearing down (a stale
+ * `leave`/terminal reset) must not clear another concurrent call's record.
+ * A null/blank identity, or a record owned by a different call, is left
+ * untouched.
+ */
+export function clearRecoveryRecordIfOwned(roomId: string | null, cid: string | null): void {
+    if (!roomId || !cid) return;
+    const record = loadRecoveryRecord();
+    if (record && record.roomId === roomId && record.cid === cid) {
+        clearRecoveryRecord();
+    }
+}
