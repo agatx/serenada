@@ -9,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -1014,6 +1015,149 @@ class SerenadaCallRegistryTest {
             modeOwnerRef = Any(),
         )
         assertEquals(ForegroundArbiterMode.DIRECT, ForegroundMediaArbiter.currentMode)
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    // --- Candidate C: release timeout keeps settling in the background; retries join it ---
+
+    @Test
+    fun `a release timeout keeps the old call foreground and grants no new owner while pending`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        val b = (h.joinHeld(room("b")) as JoinResult.Joined).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Gate a's release so the drain WAIT times out with the teardown still running.
+        val gate = CompletableDeferred<Unit>()
+        h.created["a"]!!.session.releaseForegroundGateForTest = gate
+
+        val switch = h.switchToCall(b)
+        ShadowLooper.idleMainLooper()
+
+        // Timed out: a keeps its lease + foreground (Invariant 1); b never activated.
+        assertTrue(switch is SwitchResult.Failed)
+        assertEquals(a, h.registry.state.value.activeCallId)
+        assertTrue(
+            ForegroundMediaArbiter.isCurrentOwner(h.created["a"]!!.session.foregroundOwnerTokenForTest()),
+        )
+        assertNull(h.created["b"]!!.session.foregroundOwnerTokenForTest())
+        assertEquals(0, h.created["b"]!!.coordinator.activateCalls)
+        val aState = h.registry.state.value.calls.single { it.callId == a }
+        assertTrue(aState.activationError is CallRegistryError.ReleaseFailed)
+        // No new owner is granted while the release is pending: an acquire fails fast.
+        assertThrows(ForegroundLeaseUnavailable::class.java) {
+            ForegroundMediaArbiter.acquireForeground(
+                ownerId = "probe",
+                mode = ForegroundArbiterMode.REGISTRY,
+                modeOwnerRef = Any(),
+            )
+        }
+
+        // Cleanup: let the still-running release job wind down.
+        gate.complete(Unit)
+        ShadowLooper.idleMainLooper()
+    }
+
+    @Test
+    fun `a retry switch after a release timeout joins the same teardown and switches once it settles`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        val b = (h.joinHeld(room("b")) as JoinResult.Joined).callId
+        ShadowLooper.idleMainLooper()
+
+        val gate = CompletableDeferred<Unit>()
+        h.created["a"]!!.session.releaseForegroundGateForTest = gate
+
+        // First switch times out (gate still closed): a keeps foreground.
+        assertTrue(h.switchToCall(b) is SwitchResult.Failed)
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Open the gate so the SAME (still-running, never cancelled) release job can
+        // complete — proof the wait timeout did not cancel the teardown.
+        gate.complete(Unit)
+
+        // Retry: joins the same job, which now settles; b becomes the new owner ONLY
+        // after a fully released (drained to HELD, lease freed).
+        val retry = h.switchToCall(b)
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(SwitchResult.Active, retry)
+        assertEquals(b, h.registry.state.value.activeCallId)
+        assertEquals(CallMediaRole.HELD, h.created["a"]!!.session.mediaRoleForTest())
+        assertEquals(CallMediaRole.FOREGROUND, h.created["b"]!!.session.mediaRoleForTest())
+        assertNull(h.created["a"]!!.session.foregroundOwnerTokenForTest())
+        // The teardown ran EXACTLY once — the retry joined the pending job rather than
+        // re-driving a fresh (idempotence-short-circuited) release.
+        assertEquals(1, h.created["a"]!!.coordinator.deactivateCalls)
+    }
+
+    @Test
+    fun `leaving a call whose release is pending joins the same teardown and frees the lease`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+
+        val gate = CompletableDeferred<Unit>()
+        h.created["a"]!!.session.releaseForegroundGateForTest = gate
+
+        // Hold times out with the release still running (a keeps foreground).
+        h.holdCall(a)
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Now leave a: the going-away path joins the SAME pending release, then frees
+        // the lease unconditionally and tears the call down.
+        gate.complete(Unit)
+        h.leaveCall(a)
+        ShadowLooper.idleMainLooper()
+
+        assertNull(h.registry.state.value.activeCallId)
+        // The pending release settled (coordinator deactivated) before the leave tore
+        // the call down.
+        assertTrue(h.created["a"]!!.coordinator.deactivateCalls >= 1)
+        assertTrue(h.created["a"]!!.fakeProvider.leaveCalls >= 1)
+        // Arbiter free (lease released exactly once, releasePending cleared).
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "probe",
+            mode = ForegroundArbiterMode.REGISTRY,
+            modeOwnerRef = Any(),
+        )
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    @Test
+    fun `a hold retry after a release timeout settles the same teardown and frees the lease once`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+
+        val gate = CompletableDeferred<Unit>()
+        h.created["a"]!!.session.releaseForegroundGateForTest = gate
+
+        // First hold times out: a stays foreground, its release pending.
+        h.holdCall(a)
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        gate.complete(Unit)
+        // Retry hold: joins the same job; now settles and frees the lease.
+        h.holdCall(a)
+        ShadowLooper.idleMainLooper()
+
+        assertNull(h.registry.state.value.activeCallId)
+        assertEquals(CallMediaRole.HELD, h.created["a"]!!.session.mediaRoleForTest())
+        assertNull(h.created["a"]!!.session.foregroundOwnerTokenForTest())
+        assertEquals(1, h.created["a"]!!.coordinator.deactivateCalls)
+        // Lease freed exactly once: a fresh acquire succeeds (releasePending cleared).
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "probe",
+            mode = ForegroundArbiterMode.REGISTRY,
+            modeOwnerRef = Any(),
+        )
         assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
         ForegroundMediaArbiter.releaseLease(token)
     }

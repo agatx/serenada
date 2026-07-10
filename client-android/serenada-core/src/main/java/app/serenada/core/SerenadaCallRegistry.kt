@@ -138,6 +138,17 @@ class SerenadaCallRegistry internal constructor(
         var stateJob: Job? = null
 
         /**
+         * The in-flight foreground release ([SerenadaSession.releaseForeground]) for
+         * this call, launched in the registry [scope] so it is independent of the op
+         * coroutine that started it (Candidate C). A release wait can time out while
+         * this job keeps SETTLING in the background (held broadcast, coordinator
+         * deactivation, owner-token null); a retry joins the SAME job instead of
+         * re-driving a half-cancelled teardown. Null when no release is outstanding
+         * (never started, or the last one completed and released the lease).
+         */
+        var pendingReleaseJob: Job? = null
+
+        /**
          * Last published [ManagedCallState] snapshot for this call. The per-session
          * collector compares the freshly-recomputed snapshot against this and skips
          * [publish] when nothing a published field cares about changed (e.g. the ~1s
@@ -509,36 +520,12 @@ class SerenadaCallRegistry internal constructor(
 
         // 1. Drain the OLD call with its token, bounded by the release timeout.
         if (old != null) {
-            val oldToken = old.foregroundToken
-            // The whole release sequence runs NonCancellable so external cancellation
-            // of the switch cannot strand releasePending (which would then make the
-            // arbiter refuse ALL new leases, wedging even a DIRECT join). The internal
-            // withTimeout still fires inside NonCancellable (deadline-based), so the
-            // release bound is preserved; on timeout the old call keeps its lease per
-            // Invariant 1.
-            val released = withContext(NonCancellable) {
-                // Mark a release pending so the arbiter grants no new lease while the
-                // old one may still be owned (contract §2 rule 2 / Invariant 1).
-                ForegroundMediaArbiter.markReleasePending()
-                val ok = try {
-                    withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
-                        if (oldToken != null) old.session.releaseForeground(oldToken)
-                    }
-                    true
-                } catch (e: TimeoutCancellationException) {
-                    false
-                }
-                if (ok) {
-                    // Release confirmed fully-held: now the registry frees the lease.
-                    if (oldToken != null) runCatching { ForegroundMediaArbiter.releaseLease(oldToken) }
-                    clearForeground(old)
-                }
-                ok
-            }
+            val released = drainAndReleaseForeground(old, keepLeaseOnTimeout = true)
             if (!released) {
                 // Timeout: the old call KEEPS its lease (release pending stays set so
                 // nothing new is granted) and stays foreground (Invariant 1). The
-                // release failure is carried ONLY on activationError; its
+                // release keeps SETTLING in the background; a retry switch joins the
+                // same job. The failure is carried ONLY on activationError; its
                 // mediaActivationState stays its live foreground value (cross-platform
                 // contract — web/iOS surface this on activationError alone).
                 old.activationError = CallRegistryError.ReleaseFailed(
@@ -656,36 +643,15 @@ class SerenadaCallRegistry internal constructor(
      * [drainAndReleaseForegroundForTeardown]).
      */
     private suspend fun holdAndReleaseForeground(call: ManagedCall) {
-        val token = call.foregroundToken ?: return
-        // The drain + lease release run NonCancellable so external cancellation of
-        // the hold op cannot strand releasePending (bounded internally by the
-        // withTimeout, whose deadline still fires inside NonCancellable).
-        val released = withContext(NonCancellable) {
-            // Mark a release pending so the arbiter grants no new lease while the old
-            // one may still be owned (contract §2 rule 2 / Invariant 1).
-            ForegroundMediaArbiter.markReleasePending()
-            val ok = try {
-                withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
-                    call.session.releaseForeground(token)
-                }
-                true
-            } catch (e: TimeoutCancellationException) {
-                false
-            }
-            if (ok) {
-                // Drained fully-held: free the lease (clears the pending flag) and drop
-                // out of the active slot. No auto-promote (Core Invariant 5).
-                runCatching { ForegroundMediaArbiter.releaseLease(token) }
-                clearForeground(call)
-            }
-            ok
-        }
+        if (call.foregroundToken == null) return
+        val released = drainAndReleaseForeground(call, keepLeaseOnTimeout = true)
         if (!released) {
             // Timeout: KEEP the lease + activeCallId (the user keeps this call).
-            // releasePending stays set so nothing new is granted; do NOT release the
-            // lease or null the token. The release failure is carried ONLY on
-            // activationError; mediaActivationState stays its live foreground value
-            // (cross-platform contract — web/iOS surface this on activationError alone).
+            // releasePending stays set so nothing new is granted; the lease + token
+            // are untouched and the release keeps SETTLING in the background — a retry
+            // hold joins the same job. The failure is carried ONLY on activationError;
+            // mediaActivationState stays its live foreground value (cross-platform
+            // contract — web/iOS surface this on activationError alone).
             call.activationError = CallRegistryError.ReleaseFailed(
                 "Holding ${call.callId} timed out draining its foreground; it stays foreground",
             )
@@ -697,30 +663,80 @@ class SerenadaCallRegistry internal constructor(
 
     /**
      * Drain [call]'s foreground resources for leave/end and release its lease
-     * UNCONDITIONALLY after the bounded drain (the call is going away regardless of
-     * a drain timeout, so there is no live call to keep). Distinct from
+     * UNCONDITIONALLY after the bounded wait (the call is going away regardless of a
+     * wait timeout, so there is no live call to keep). Distinct from
      * [holdAndReleaseForeground], which keeps the lease on a timeout (FIX E).
      */
     private suspend fun drainAndReleaseForegroundForTeardown(call: ManagedCall) {
-        val token = call.foregroundToken ?: return
-        // Drain + unconditional release run NonCancellable so external cancellation
-        // of the leave/end/close op cannot strand releasePending or skip the lease
-        // release (bounded internally by the withTimeout deadline).
-        withContext(NonCancellable) {
-            ForegroundMediaArbiter.markReleasePending()
+        if (call.foregroundToken == null) return
+        drainAndReleaseForeground(call, keepLeaseOnTimeout = false)
+        publish()
+    }
+
+    /**
+     * Drain [call]'s foreground media and, once the drain settles, release its
+     * arbiter lease and drop it from the active slot. Returns true once the release
+     * SETTLED and the lease was freed; false on a wait timeout.
+     *
+     * The session teardown ([SerenadaSession.releaseForeground]) runs as an
+     * INDEPENDENT registry-[scope] job stored on [ManagedCall.pendingReleaseJob];
+     * only the WAIT for it is bounded by [WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS]
+     * (via `withTimeout { job.join() }`). So a wait timeout leaves the teardown
+     * RUNNING (not cancelled): the session keeps settling to fully-held — held=true
+     * broadcast sent, audio coordinator deactivated, owner token nulled — in the
+     * background, and a retry joins the SAME job (create-if-absent) instead of
+     * re-driving a half-cancelled teardown, which the session's idempotence guard
+     * would short-circuit, abandoning the coordinator deactivation and leaking audio
+     * focus (Candidate C). The registry frees the lease / grants a new owner ONLY
+     * after the job completes.
+     *
+     * [keepLeaseOnTimeout] = true (hold / switch step 1): on a wait timeout the lease
+     * + active slot are KEPT (Core Invariant 1 — the user keeps the call) and the
+     * running job is retained for the retry. false (leave / end / close): the call is
+     * going away, so the lease is freed regardless of a wait timeout (the background
+     * job keeps settling the session, which [teardownCall] then closes).
+     *
+     * Runs the WAIT under [NonCancellable] so external cancellation of the op cannot
+     * strand releasePending; the [withTimeout] deadline still fires inside it
+     * (deadline-based), preserving the release bound.
+     */
+    private suspend fun drainAndReleaseForeground(
+        call: ManagedCall,
+        keepLeaseOnTimeout: Boolean,
+    ): Boolean {
+        val token = call.foregroundToken ?: return true
+        // Mark a release pending so the arbiter grants no new lease while the old one
+        // may still be owned (contract §2 rule 2 / Invariant 1). Idempotent on retry.
+        ForegroundMediaArbiter.markReleasePending()
+        // Get-or-create the release job in the registry scope so it is independent of
+        // this op's coroutine — a wait timeout below leaves it RUNNING, and a retry
+        // reuses the SAME job rather than launching a second releaseForeground.
+        val job = call.pendingReleaseJob ?: scope.launch {
+            call.session.releaseForeground(token)
+        }.also { call.pendingReleaseJob = it }
+        val settled = withContext(NonCancellable) {
             try {
                 withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
-                    call.session.releaseForeground(token)
+                    job.join()
                 }
+                true
             } catch (e: TimeoutCancellationException) {
-                // releaseForeground is idempotent/no-throw; a timeout still drops the
-                // going-away call out of foreground. Free the lease so the process is
-                // not wedged — unlike hold, no live call wants to keep this one.
+                false
             }
-            runCatching { ForegroundMediaArbiter.releaseLease(token) }
-            clearForeground(call)
         }
-        publish()
+        if (!settled && keepLeaseOnTimeout) {
+            // Hold / switch: KEEP the lease + activeCallId + running job (Invariant 1).
+            // releasePending stays set so nothing new is granted; a retry joins the
+            // same job and frees the lease once it completes.
+            return false
+        }
+        // Settled, or a going-away path that frees the lease regardless. Clear the job
+        // once it completed; a going-away timeout leaves it running (teardownCall's
+        // session.close winds it down) but frees the lease so the process is not wedged.
+        if (settled) call.pendingReleaseJob = null
+        runCatching { ForegroundMediaArbiter.releaseLease(token) }
+        clearForeground(call)
+        return settled
     }
 
     // --- Held join (outside the lock) ---
