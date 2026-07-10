@@ -10,6 +10,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
+import org.json.JSONObject
 
 /**
  * Main entry point for the Serenada SDK.
@@ -408,10 +409,18 @@ class SerenadaCore(
  * On that first (and only) retire it (1) releases the [SerenadaCore] liveness bind via
  * [retire] — ownership-scoped and synchronized with the companion lock, so it never
  * evicts a bind a newer channel has since claimed for the same shared v1 object — then
- * (2) detaches the session's listener and disconnects the underlying provider. Any
- * later [disconnect]/[listener] mutation is dropped, so a terminal-error reset followed
- * by a host `close()` on the same dead session can never tear down (or clear the
- * listener of) a live session that has meanwhile rebound the shared provider object.
+ * (2) detaches the session's listener and disconnects the underlying provider.
+ *
+ * After that retire, EVERY provider-mutating member is fenced behind [retired] and
+ * becomes a silent no-op: [connect], [joinRoom], [leaveRoom], [endRoom], [sendToPeer],
+ * [broadcast], [forceReconnectIfStale], the [listener] setter, and a repeat [disconnect].
+ * Fencing only [disconnect]/[listener] was not enough — Kotlin interface delegation
+ * (`by provider`) forwards every OTHER method straight to the shared object, so a
+ * terminal-error reset (which retires this channel) followed by a host `leave()`/`end()`/
+ * `close()` on the same dead session would still run `leaveRoom`/`endRoom` against the
+ * shared provider AFTER a live session B had rebound it — leaving or ending B's room.
+ * Read-only [getIceServers] is intentionally left delegated: a stale ICE fetch mutates
+ * no session state and is harmless.
  */
 private class SingleSessionV1Channel(
     private val provider: SignalingProvider,
@@ -426,6 +435,34 @@ private class SingleSessionV1Channel(
         set(value) {
             if (!retired) provider.listener = value
         }
+
+    override fun connect() {
+        if (!retired) provider.connect()
+    }
+
+    override fun joinRoom(roomId: String, options: JoinOptions) {
+        if (!retired) provider.joinRoom(roomId, options)
+    }
+
+    override fun leaveRoom() {
+        if (!retired) provider.leaveRoom()
+    }
+
+    override fun endRoom() {
+        if (!retired) provider.endRoom()
+    }
+
+    override fun sendToPeer(peerId: String, type: String, payload: JSONObject?) {
+        if (!retired) provider.sendToPeer(peerId, type, payload)
+    }
+
+    override fun broadcast(type: String, payload: JSONObject?) {
+        if (!retired) provider.broadcast(type, payload)
+    }
+
+    override fun forceReconnectIfStale(timeoutMs: Long) {
+        if (!retired) provider.forceReconnectIfStale(timeoutMs)
+    }
 
     override fun disconnect() {
         // Ownership-scoped one-shot: retire the bind under the companion lock. If this

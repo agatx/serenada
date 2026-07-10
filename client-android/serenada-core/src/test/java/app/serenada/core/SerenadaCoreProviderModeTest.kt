@@ -348,6 +348,59 @@ class SerenadaCoreProviderModeTest {
     }
 
     @Test
+    fun `retired v1 channel fences every provider-mutating op so a rebound session is untouched`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        // Session A binds the shared v1 object and reaches a terminal error: its
+        // teardown (resetResources -> signalingProvider.disconnect()) retires channel A
+        // and releases the bind.
+        val channelA = core.createSignalingProvider(core.config, "room-A")
+        channelA.disconnect()
+        assertEquals(1, v1.disconnectCalls)
+
+        // The same v1 object is now rebound for a NEW live session B.
+        val channelB = core.createSignalingProvider(core.config, "room-B")
+        val listenerB = object : SignalingProvider.Listener {}
+        channelB.listener = listenerB
+        assertSame(listenerB, v1.listener)
+
+        // Host now drives the dead session A through leave()/end()/close(). Those reach
+        // leaveRoom/endRoom (and, on other host paths, connect/joinRoom/sendToPeer/
+        // broadcast/forceReconnectIfStale) on the ALREADY-retired channel. Kotlin
+        // `by provider` delegation would otherwise forward each one to the shared
+        // provider and leave or end B's live room; the fence must make them all inert.
+        channelA.connect()
+        channelA.joinRoom("room-A", JoinOptions())
+        channelA.leaveRoom()
+        channelA.endRoom()
+        channelA.sendToPeer("peer-x", "content_state", null)
+        channelA.broadcast("content_state", null)
+        channelA.forceReconnectIfStale(1_000L)
+        channelA.disconnect()
+
+        // Nothing attributable to A reached the shared provider.
+        assertTrue(v1.connectCalls.isEmpty())
+        assertTrue(v1.joinCalls.isEmpty())
+        assertEquals(0, v1.leaveCalls)
+        assertEquals(0, v1.endCalls)
+        assertTrue(v1.sentProviderMessages.isEmpty())
+        assertEquals(0, v1.forceReconnectCalls)
+        assertEquals(1, v1.disconnectCalls)
+
+        // B's room state is intact: its listener is still attached and its OWN ops still
+        // reach the provider.
+        assertSame(listenerB, v1.listener)
+        channelB.leaveRoom()
+        assertEquals(1, v1.leaveCalls)
+
+        channelB.disconnect()
+    }
+
+    @Test
     fun `double close on a v1 channel disconnects the underlying provider once`() {
         val v1 = FakeSignalingProvider()
         val core = SerenadaCore(
