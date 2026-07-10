@@ -1166,6 +1166,220 @@ describe('MediaEngine', () => {
         expect(peer?.senders.some(sender => sender.track === cameraTrack)).toBe(false);
     });
 
+    // --- Capture-generation ABA fences (hold → resume clears held → a capture
+    // continuation started BEFORE the hold resolves). `heldNoCapture` alone is
+    // false again by the time these resolve; only the capture generation catches
+    // them, so the stale track must be dropped and never attached. ---
+    describe('capture-generation ABA fences', () => {
+        function setupNavigator(getUserMedia: ReturnType<typeof vi.fn>): void {
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    mediaDevices: {
+                        getUserMedia,
+                        enumerateDevices: vi.fn().mockResolvedValue([]),
+                        addEventListener() {},
+                        removeEventListener() {},
+                    },
+                },
+                configurable: true,
+            });
+        }
+
+        async function joinedEngine(getUserMedia: ReturnType<typeof vi.fn>): Promise<{
+            engine: MediaEngine;
+            peer: FakeRtcPeerConnection | undefined;
+            sent: Array<{ type: string; payload?: Record<string, unknown> }>;
+        }> {
+            setupNavigator(getUserMedia);
+            const sent: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+            const engine = new MediaEngine({}, (type, payload) => { sent.push({ type, payload }); });
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await engine.startLocalMedia();
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+            return { engine, peer, sent };
+        }
+
+        it('drops a reacquired camera track that resolves AFTER hold+resume (ABA)', async () => {
+            const cameraTrack = createMediaTrack('video');
+            const cameraStop = vi.spyOn(cameraTrack, 'stop');
+            const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+            const { engine, peer } = await joinedEngine(getUserMedia);
+
+            await engine.releaseVideoTrack();
+            let resolveCamera!: (stream: MediaStream) => void;
+            getUserMedia.mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveCamera = resolve; }));
+
+            const reacquire = engine.reacquireVideoTrack();       // getUserMedia pending (gen G)
+            await engine.suspendLocalMediaForHold();               // gen -> G+1, held
+            // Resume with video OFF clears heldNoCapture (ABA) but does NOT reacquire
+            // the camera, so ONLY the generation fence can catch the stale track.
+            await engine.resumeLocalMediaFromHold(false, 'off');
+            resolveCamera(new FakeMediaStream([cameraTrack]) as unknown as MediaStream);
+            await reacquire;
+
+            expect(cameraStop).toHaveBeenCalled();
+            expect(engine.localStream?.getVideoTracks()).toHaveLength(0);
+            expect(peer?.senders.some(sender => sender.track === cameraTrack)).toBe(false);
+        });
+
+        it('drops a reacquired mic track superseded by a re-hold during resume (ABA)', async () => {
+            const micTrack = createMediaTrack('audio');
+            const micStop = vi.spyOn(micTrack, 'stop');
+            const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+            const { engine, peer } = await joinedEngine(getUserMedia);
+
+            await engine.suspendLocalMediaForHold();               // release mic, gen G1
+            let resolveMic!: (stream: MediaStream) => void;
+            getUserMedia.mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveMic = resolve; }));
+            const resume1 = engine.resumeLocalMediaFromHold(true, 'off');  // mic reacquire pending (gen G1)
+            await flushPromises();
+            await engine.suspendLocalMediaForHold();               // re-hold: gen -> G2 (fences the pending mic)
+            await engine.resumeLocalMediaFromHold(false, 'off');   // resume muted: clears held (ABA)
+            resolveMic(new FakeMediaStream([micTrack]) as unknown as MediaStream);
+            await resume1;
+
+            expect(micStop).toHaveBeenCalled();
+            expect(engine.localStream?.getAudioTracks().some(t => t === micTrack)).toBe(false);
+            expect(peer?.senders.some(sender => sender.track === micTrack)).toBe(false);
+        });
+
+        it('a resume that coalesces onto a fenced mic acquire retries a fresh acquire (not mic-less)', async () => {
+            const staleMic = createMediaTrack('audio');
+            const staleMicStop = vi.spyOn(staleMic, 'stop');
+            // Fresh stream per call: the engine mutates localStream (which IS the
+            // getUserMedia stream) on hold, so a shared mock object would be empty
+            // by the time the fresh retry acquires.
+            const getUserMedia = vi.fn().mockImplementation(async () => createMediaStream({ audio: true, video: false }));
+            const { engine } = await joinedEngine(getUserMedia);
+
+            await engine.suspendLocalMediaForHold();               // release mic, gen G1
+            let resolveStale!: (stream: MediaStream) => void;
+            getUserMedia.mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveStale = resolve; }));
+            const resume1 = engine.resumeLocalMediaFromHold(true, 'off');  // mic acquire A pending (gen G1)
+            await flushPromises();
+            await engine.suspendLocalMediaForHold();               // re-hold: gen -> G2 (fences acquire A)
+            // resume2 wants a mic; it coalesces onto acquire A, which will be fenced.
+            const resume2 = engine.resumeLocalMediaFromHold(true, 'off');
+            await flushPromises();
+            resolveStale(new FakeMediaStream([staleMic]) as unknown as MediaStream); // acquire A fences (dropped)
+            await Promise.all([resume1, resume2]);
+
+            // The fenced pre-hold mic was stopped, but resume2 did NOT end mic-less:
+            // it fell through to a fresh acquire that landed a live mic.
+            expect(staleMicStop).toHaveBeenCalled();
+            expect(engine.localStream?.getAudioTracks()).toHaveLength(1);
+            expect(engine.localStream?.getAudioTracks()[0]).not.toBe(staleMic);
+        });
+
+        it('drops initial media whose getUserMedia resolves AFTER hold+resume (ABA)', async () => {
+            const audioTrack = createMediaTrack('audio');
+            const videoTrack = createMediaTrack('video');
+            const audioStop = vi.spyOn(audioTrack, 'stop');
+            const videoStop = vi.spyOn(videoTrack, 'stop');
+            let resolveInitial!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn().mockReturnValue(
+                new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }),
+            );
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // initial getUserMedia pending (gen 1)
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(false, 'off');   // clears held (ABA)
+            resolveInitial(new FakeMediaStream([audioTrack, videoTrack]) as unknown as MediaStream);
+            const result = await start;
+
+            expect(result).toBeNull();                             // fenced: no media published
+            expect(audioStop).toHaveBeenCalled();
+            expect(videoStop).toHaveBeenCalled();
+            expect(peer?.senders.some(sender => sender.track === audioTrack || sender.track === videoTrack)).toBe(false);
+        });
+
+        it('drops a legacy screen share whose picker resolves AFTER hold+resume (ABA)', async () => {
+            const displayTrack = createMediaTrack('video');
+            const displayStop = vi.spyOn(displayTrack, 'stop');
+            let resolveDisplay!: (stream: MediaStream) => void;
+            const getDisplayMedia = vi.fn().mockReturnValue(
+                new Promise<MediaStream>((resolve) => { resolveDisplay = resolve; }),
+            );
+            const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    mediaDevices: {
+                        getUserMedia,
+                        getDisplayMedia,
+                        enumerateDevices: vi.fn().mockResolvedValue([]),
+                        addEventListener() {},
+                        removeEventListener() {},
+                    },
+                },
+                configurable: true,
+            });
+            const sent: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+            const engine = new MediaEngine({}, (type, payload) => { sent.push({ type, payload }); });
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await engine.startLocalMedia();
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const share = engine.startScreenShare();               // picker pending (gen G)
+            await engine.suspendLocalMediaForHold();               // gen -> G+1, held
+            await engine.resumeLocalMediaFromHold(false, 'off');   // clears held (ABA)
+            resolveDisplay(new FakeMediaStream([displayTrack]) as unknown as MediaStream);
+            await share;
+
+            expect(displayStop).toHaveBeenCalled();
+            expect(engine.isScreenSharing).toBe(false);
+            expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+            expect(peer?.senders.some(sender => sender.track === displayTrack)).toBe(false);
+        });
+
+        it('drops a flipCamera track when a hold latches during its getUserMedia', async () => {
+            const flippedTrack = createMediaTrack('video');
+            const flippedStop = vi.spyOn(flippedTrack, 'stop');
+            const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+            setupNavigator(getUserMedia);
+            // Two cameras so flipCamera proceeds.
+            (globalThis.navigator.mediaDevices.enumerateDevices as ReturnType<typeof vi.fn>).mockResolvedValue([
+                createMediaDevice('videoinput', 'cam-1', 'g1', 'Front'),
+                createMediaDevice('videoinput', 'cam-2', 'g2', 'Back'),
+            ]);
+            const sent: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+            const engine = new MediaEngine({}, (type, payload) => { sent.push({ type, payload }); });
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await engine.startLocalMedia();
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+            expect(engine.hasMultipleCameras).toBe(true);
+
+            let resolveFlip!: (stream: MediaStream) => void;
+            getUserMedia.mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveFlip = resolve; }));
+            const flip = engine.flipCamera();                      // getUserMedia pending (gen G)
+            await engine.suspendLocalMediaForHold();               // gen -> G+1, held
+            resolveFlip(new FakeMediaStream([flippedTrack]) as unknown as MediaStream);
+            await flip;
+
+            expect(flippedStop).toHaveBeenCalled();
+            expect(peer?.senders.some(sender => sender.track === flippedTrack)).toBe(false);
+        });
+    });
+
     it('does not let the non-offerer create fallback offers', async () => {
         vi.useFakeTimers();
 

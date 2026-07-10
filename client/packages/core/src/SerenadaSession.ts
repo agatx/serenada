@@ -1396,6 +1396,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
             const swap = newEnabled ? this.media.reacquireVideoTrack() : this.media.releaseVideoTrack();
             void swap.then(() => {
                 if (this.isInactive) return;
+                // A hold (or a superseding toggle) during the async reacquire/release
+                // must not publish stale foreground media: re-check that the call is
+                // still foreground and the desired video intent still matches this
+                // op before deriving `actualVideoPublished` and broadcasting. A hold
+                // owns no capture and broadcasts held:true separately.
+                if (this.mediaRole !== 'foreground') return;
+                if (newEnabled !== (this.desiredVideoMode !== 'off')) return;
                 if (newEnabled) {
                     const reacquired = this.media.localStream?.getVideoTracks()[0];
                     this.actualVideoPublished = !!reacquired && reacquired.enabled;
@@ -1424,6 +1431,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 const swap = this.media.reacquireLocalAudioCapture();
                 void swap.then(() => {
                     if (this.isInactive) return;
+                    // A hold (or a superseding mute) during the async reacquire must
+                    // not publish stale foreground audio: re-check role + desired
+                    // intent before deriving `actualAudioPublished` and broadcasting.
+                    if (this.mediaRole !== 'foreground' || !this.desiredAudioEnabled) return;
                     const reacquired = this.media.localStream?.getAudioTracks()[0];
                     this.actualAudioPublished = !!reacquired && reacquired.enabled;
                     this.broadcastLocalMediaState();
@@ -1558,6 +1569,31 @@ export class SerenadaSession implements SerenadaSessionHandle {
             const stream = this.media.localStream;
             const audioTrack = stream?.getAudioTracks()[0];
             const videoTrack = stream?.getVideoTracks()[0];
+            // Capture-landing check (D-web-1): `resumeLocalMediaFromHold` swallows
+            // getUserMedia failures (it logs and returns), so a token-gated
+            // activation would otherwise fall through here, report itself active,
+            // and let the registry mark the switch successful while the newly
+            // "foreground" call actually has no mic/camera — the registry's rollback
+            // machinery only runs when `activateForeground` throws. For the
+            // token-gated caller, throw when the DESIRED capture did not land so the
+            // existing rollback re-foregrounds the old call. The un-gated primitive
+            // (`resumeForeground`, single-call) stays best-effort: a partial resume
+            // keeps the call foreground with whatever landed (Phase-1 contract).
+            if (throwOnFailure) {
+                const audioLanded = !this.desiredAudioEnabled || (!!audioTrack && audioTrack.enabled);
+                const videoLanded = this.desiredVideoMode === 'off' || (!!videoTrack && videoTrack.enabled);
+                if (!audioLanded || !videoLanded) {
+                    await this.rollbackSupersededResume();
+                    const missing = [
+                        !audioLanded ? 'mic' : null,
+                        !videoLanded ? 'camera' : null,
+                    ].filter(Boolean).join(' + ');
+                    const detail = this.media.lastLocalMediaError
+                        ? ` (${this.media.lastLocalMediaError.name}: ${this.media.lastLocalMediaError.message})`
+                        : '';
+                    throw new Error(`Foreground activation failed: desired ${missing} capture did not land${detail}`);
+                }
+            }
             this.mediaRole = 'foreground';
             this.mediaActivationState = 'active';
             this.actualAudioPublished = !!audioTrack && audioTrack.enabled;

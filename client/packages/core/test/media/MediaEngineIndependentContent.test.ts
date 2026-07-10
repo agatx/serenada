@@ -533,6 +533,37 @@ describe('MediaEngine independent content', () => {
         expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
     });
 
+    it('drops an independent screen share whose picker resolves AFTER hold+resume (ABA)', async () => {
+        // ABA: the picker resolves only after a hold latches AND a resume clears
+        // it again. `heldNoCapture` is false by then, so only the capture
+        // generation catches the stale surface — it must not attach or broadcast.
+        const sent: Sent[] = [];
+        let resolveDisplay!: (stream: MediaStream) => void;
+        const displayTrack = makeTrack('video', 'display');
+        const getDisplayMedia = vi.fn().mockReturnValue(
+            new Promise<MediaStream>((resolve) => { resolveDisplay = resolve; }),
+        );
+        setupNavigator({ getDisplayMedia });
+        const engine = new MediaEngine(
+            { enableIndependentContentVideo: true },
+            (type, payload, to) => sent.push({ type, payload, to }),
+        );
+        const h: Harness = { engine, sent, getDisplayMedia, pcOptions };
+        const peer = await joinAsOwnerCapable(h);
+
+        sent.length = 0;
+        const share = engine.startScreenShare();       // picker pending (gen G)
+        await engine.suspendLocalMediaForHold();         // gen -> G+1, held
+        await engine.resumeLocalMediaFromHold(false, 'off'); // clears held (ABA)
+        resolveDisplay(new FakeStream([displayTrack]) as unknown as MediaStream);
+        await share;
+
+        expect(displayTrack.readyState).toBe('ended');
+        expect(engine.isScreenSharing).toBe(false);
+        expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+        expect(peer.senders.some(s => s.track === displayTrack)).toBe(false);
+    });
+
     it('does not re-broadcast active:true when a hold latches during the content attach await', async () => {
         // Residual race regression (independent path): the picker resolves (post-picker
         // guard passes) and isScreenSharing is set, but a hold latches WHILE the content

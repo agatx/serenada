@@ -491,6 +491,42 @@ describe('SerenadaCallRegistry', () => {
         expect(() => foregroundArbiter.acquireForeground('probe', 'direct', {})).toThrow(ForegroundLeaseUnavailable);
     });
 
+    // D-web-1: `resumeLocalMediaFromHold` swallows getUserMedia failures. Without
+    // the capture-landing check in `runResume`, `activateForeground` would resolve
+    // and the registry would mark the switch active with no mic/camera. The check
+    // throws so the existing rollback machinery re-foregrounds the previous call.
+    it('a resume whose capture fails to land rolls back the switch (D-web-1)', async () => {
+        const { registry, rigs } = makeRegistry();
+        const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+        settleNextOnJoin(rigs);
+        await pa;
+        const first = rigs[0];
+
+        const pb = registry.joinHeld({ roomId: 'room-B' });
+        settleNextOnJoin(rigs);
+        const rb = await pb;
+        const secondId = (rb as { callId: CallId }).callId;
+        const second = rigs[1];
+
+        // Simulate a swallowed getUserMedia failure on resume: it resolves but
+        // lands NO tracks (mirrors the real engine logging + returning on failure).
+        second.media.installLocalStream({ audio: false, video: false }); // empty stream
+        second.media.lastLocalMediaError = { name: 'NotAllowedError', message: 'Permission denied' };
+        vi.spyOn(second.media, 'resumeLocalMediaFromHold').mockResolvedValue(undefined);
+
+        const result = await registry.switchTo(secondId);
+
+        expect(result.kind).toBe('failed');
+        // Rolled back to the previous active call (its rollback resume DOES land).
+        expect(first.session.currentMediaRole).toBe('foreground');
+        expect(registry.activeCall?.session).toBe(first.session);
+        // The failed target surfaced a recoverable activation error.
+        const secondState = registry.state.calls.find((c) => c.id === secondId);
+        expect(secondState?.activationError?.kind).toBe('activationFailed');
+        // No two owners: a live lease still exists (old reacquired it).
+        expect(() => foregroundArbiter.acquireForeground('probe', 'direct', {})).toThrow(ForegroundLeaseUnavailable);
+    });
+
     it('direct SerenadaCore.join() while a registry has a live call fails gracefully (error state)', async () => {
         const restoreRtc = (globalThis as Record<string, unknown>).RTCPeerConnection;
         (globalThis as Record<string, unknown>).RTCPeerConnection = class {};

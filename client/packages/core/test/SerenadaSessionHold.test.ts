@@ -430,6 +430,44 @@ describe('SerenadaSession hold/resume primitives', () => {
         expect(harness.session.currentDesiredAudioEnabled).toBe(true);
     });
 
+    // ABA (session layer): a hold that interposes DURING an in-flight unmute
+    // reacquire must not let the reacquire's completion callback publish a stale
+    // `audioEnabled:true` — the call is held by the time the mic lands.
+    it('a hold during an in-flight unmute reacquire does not publish stale audioEnabled:true', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: false });
+        // Mute, hold, resume muted: the foreground call has NO audio track.
+        harness.session.setAudioEnabled(false);
+        await harness.session.suspendForHold();
+        await harness.session.resumeForeground();
+        expect(harness.session.currentMediaRole).toBe('foreground');
+
+        // Gate the unmute reacquire so a hold can interpose before it resolves.
+        let releaseReacquire!: () => void;
+        const gate = new Promise<void>((resolve) => { releaseReacquire = resolve; });
+        const original = harness.media.reacquireLocalAudioCapture.bind(harness.media);
+        vi.spyOn(harness.media, 'reacquireLocalAudioCapture').mockImplementation(async () => {
+            await gate;
+            await original();
+        });
+        harness.signaling.broadcastCalls.length = 0;
+
+        harness.session.setAudioEnabled(true);   // unmute; reacquire is gated
+        await harness.session.suspendForHold();  // a hold supersedes mid-reacquire
+        releaseReacquire();
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+
+        // The completion callback saw the held role and did NOT broadcast a stale
+        // foreground audioEnabled:true.
+        const mediaBroadcasts = harness.signaling.broadcastCalls
+            .filter((c) => c.type === 'participant_media_state');
+        expect(mediaBroadcasts.every((c) => (c.payload as Record<string, unknown>).audioEnabled !== true)).toBe(true);
+        expect(harness.session.currentMediaRole).toBe('held');
+        expect(harness.session.currentActualAudioPublished).toBe(false);
+    });
+
     // FIX P5 mirror: a call resumed with the camera OFF owns no video track. A
     // later foreground enable-video must reacquire the camera track before
     // publishing `videoEnabled:true`.
