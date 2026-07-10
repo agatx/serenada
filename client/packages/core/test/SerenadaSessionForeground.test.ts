@@ -421,6 +421,105 @@ describe('SerenadaSession.preflightForeground capture-latch fallback (D-web-2)',
     });
 });
 
+describe('SerenadaSession.preflightForeground enumerateDevices + per-kind fallbacks (D-web-2/3)', () => {
+    let harness: TestSessionHarness;
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => {
+        harness?.destroy();
+        vi.useRealTimers();
+        __resetForegroundArbiterForTests();
+        delete (globalThis as Record<string, unknown>).navigator;
+        (globalThis as Record<string, unknown>).navigator = {};
+    });
+
+    function setNavigator(nav: Record<string, unknown>): void {
+        (globalThis as Record<string, unknown>).navigator = nav;
+    }
+
+    it('no Permissions API + host-granted (mic labels visible): ok', async () => {
+        // enumerateDevices exposes a non-empty audioinput label only after a grant
+        // (here from a host-driven getUserMedia the SDK never saw), so a browser
+        // without a Permissions API still preflights ok without any SDK capture.
+        setNavigator({
+            mediaDevices: {
+                enumerateDevices: async () => [
+                    { kind: 'audioinput', label: 'Built-in Microphone' },
+                ],
+            },
+        });
+        harness = new TestSessionHarness({
+            config: { defaultAudioEnabled: true, defaultVideoEnabled: false },
+            initialMediaRole: 'held',
+        });
+        await expect(harness.session.preflightForeground()).resolves.toBe('ok');
+    });
+
+    it('no Permissions API + no grant (empty labels): needsPermission', async () => {
+        // Devices are enumerable but labels are blank -> permission not granted.
+        setNavigator({
+            mediaDevices: {
+                enumerateDevices: async () => [
+                    { kind: 'audioinput', label: '' },
+                ],
+            },
+        });
+        harness = new TestSessionHarness({
+            config: { defaultAudioEnabled: true, defaultVideoEnabled: false },
+            initialMediaRole: 'held',
+        });
+        await expect(harness.session.preflightForeground()).resolves.toBe('needsPermission');
+    });
+
+    it('per-kind: one kind rejects the query, the other resolves granted', async () => {
+        // Firefox-style: `query` rejects for the `camera` name but resolves
+        // `granted` for `microphone`. The camera rejection must NOT mask the mic
+        // result; the camera then falls back to its visible enumerateDevices label.
+        setNavigator({
+            permissions: {
+                query: async ({ name }: { name: string }) => {
+                    if (name === 'camera') throw new Error('unsupported name');
+                    return { state: 'granted' };
+                },
+            },
+            mediaDevices: {
+                enumerateDevices: async () => [
+                    { kind: 'videoinput', label: 'FaceTime HD Camera' },
+                ],
+            },
+        });
+        harness = new TestSessionHarness({
+            // Default video enabled -> both mic and camera are required.
+            config: { defaultAudioEnabled: true },
+            initialMediaRole: 'held',
+        });
+        await expect(harness.session.preflightForeground()).resolves.toBe('ok');
+    });
+
+    it('per-kind: a rejecting kind with no fallback signal still needsPermission', async () => {
+        // Camera query rejects and no latch / no labeled camera -> not granted,
+        // even though the mic query resolves granted. Proves the fall-through does
+        // not read a rejection as an accidental grant.
+        setNavigator({
+            permissions: {
+                query: async ({ name }: { name: string }) => {
+                    if (name === 'camera') throw new Error('unsupported name');
+                    return { state: 'granted' };
+                },
+            },
+            mediaDevices: {
+                enumerateDevices: async () => [
+                    { kind: 'videoinput', label: '' },
+                ],
+            },
+        });
+        harness = new TestSessionHarness({
+            config: { defaultAudioEnabled: true },
+            initialMediaRole: 'held',
+        });
+        await expect(harness.session.preflightForeground()).resolves.toBe('needsPermission');
+    });
+});
+
 describe('SerenadaSession durable recovery is foreground-only (Candidate A, design §5)', () => {
     let harness: TestSessionHarness;
     beforeEach(() => { vi.useFakeTimers(); });

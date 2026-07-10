@@ -409,6 +409,31 @@ describe('MultiSessionSignalingProvider (F2)', () => {
             expect(b.state.phase).not.toBe('error');
             b.destroy();
         });
+
+        it('direct: two cores sharing one v1 provider object cannot both bind (guard is per-provider, not per-core)', () => {
+            // The single-session contract is a property of the PROVIDER object:
+            // two cores configured with the SAME v1 provider must not both bind it.
+            const provider = new FakeSignalingProvider();
+            const coreA = new SerenadaCore({ signalingProvider: provider });
+            const coreB = new SerenadaCore({ signalingProvider: provider });
+
+            const a = coreA.join({ roomId: 'room-A' });
+            expect(a.state.phase).not.toBe('error');
+
+            // Second core, SAME provider object: the process-wide identity guard
+            // refuses with the identical typed failure.
+            const b = coreB.join({ roomId: 'room-B' });
+            expect(b.state.phase).toBe('error');
+            expect(b.state.error?.code).toBe('providerUnavailable');
+            expect(b.state.error?.message).toBe(PROVIDER_SINGLE_SESSION_MESSAGE);
+
+            // Release the first core's bind: the second core can now reuse the
+            // provider (sequential reuse across cores).
+            a.destroy();
+            const b2 = coreB.join({ roomId: 'room-B' });
+            expect(b2.state.phase).not.toBe('error');
+            b2.destroy();
+        });
     });
 });
 

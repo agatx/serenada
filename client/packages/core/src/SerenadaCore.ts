@@ -8,6 +8,7 @@ import type { ResolvedSerenadaConfig } from './configValidation.js';
 import { requireServerHost, resolveSerenadaConfig } from './configValidation.js';
 import { SerenadaServerProvider } from './SerenadaServerProvider.js';
 import type {
+    AnySignalingProvider,
     PeerMessage,
     ProviderCapabilities,
     SignalingProvider,
@@ -31,6 +32,17 @@ import {
 export const PROVIDER_SINGLE_SESSION_MESSAGE =
     'Signaling provider is single-session (v1); a session is already using it. '
     + 'Provide a version-2 MultiSessionSignalingProvider for multi-call.';
+
+/**
+ * Process-wide set of v1 `SignalingProvider` objects currently bound to a live
+ * session, keyed by provider IDENTITY. The single-session contract is a property
+ * of the provider object, not of a `SerenadaCore` instance: two cores configured
+ * with the SAME v1 provider must not both bind it (that cross-wires two sessions
+ * onto one channel). A per-core guard cannot see the other core's bind, so the
+ * guard lives here. Cleared when the bound session tears down (see
+ * {@link createV1LivenessChannel}) or a failed session construction rolls back.
+ */
+const boundV1Providers = new WeakSet<AnySignalingProvider>();
 
 /**
  * Wrap a single-session v1 `SignalingProvider` so its teardown releases the
@@ -235,9 +247,11 @@ export class SerenadaCore {
         } catch (err) {
             // Session construction failed after the v1 liveness bind: roll it back
             // so the provider is reusable (the channel's `disconnect()` unbind
-            // never runs when the session never existed).
+            // never runs when the session never existed). Release both the
+            // per-core reference and the process-wide provider-identity guard.
             if (this.v1BoundChannel === signalingProvider) {
                 this.v1BoundChannel = null;
+                boundV1Providers.delete(this.resolvedConfig.signalingProvider!);
             }
             throw err;
         }
@@ -359,15 +373,18 @@ export class SerenadaCore {
             // v2: one channel per session, permanently bound to this canonical room.
             return provider.openSession(roomId);
         }
-        // v1: single-session. Refuse a second concurrent bind.
-        if (this.v1BoundChannel !== null) {
+        // v1: single-session. Refuse a second concurrent bind of the SAME
+        // provider object, across ANY core (identity-keyed, process-wide).
+        if (boundV1Providers.has(provider)) {
             throw new ProviderUnavailableError(PROVIDER_SINGLE_SESSION_MESSAGE);
         }
         const channel = createV1LivenessChannel(provider, () => {
+            boundV1Providers.delete(provider);
             if (this.v1BoundChannel === channel) {
                 this.v1BoundChannel = null;
             }
         });
+        boundV1Providers.add(provider);
         this.v1BoundChannel = channel;
         return channel;
     }

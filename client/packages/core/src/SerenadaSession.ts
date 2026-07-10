@@ -1681,43 +1681,69 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const needsCamera = this.desiredVideoMode !== 'off' && this.availableCameraModes.length > 0;
         // Desired media needs no device permission -> always ok (no prompt).
         if (!needsMic && !needsCamera) return 'ok';
-        // No Permissions API to consult (e.g. Safari): fall back to the
-        // session-level "capture already succeeded once" latch. Without it a
-        // grant is invisible and switching to a call that wants mic/camera would
-        // be permanently impossible even after a host-driven getUserMedia grant
-        // (the documented prompt-then-retry protocol would loop forever).
-        const permissions = (typeof navigator !== 'undefined' ? navigator.permissions : undefined);
-        if (!permissions?.query) return this.preflightFromCaptureLatch(needsMic, needsCamera);
-        try {
-            const [cameraResult, micResult] = await Promise.all([
-                needsCamera
-                    ? permissions.query({ name: 'camera' as PermissionName }).catch(() => null)
-                    : Promise.resolve(null),
-                needsMic
-                    ? permissions.query({ name: 'microphone' as PermissionName }).catch(() => null)
-                    : Promise.resolve(null),
-            ]);
-            // Granted only when the state is exactly 'granted'. 'prompt'/'denied'/
-            // unknown all read as not-granted -> needsPermission (no prompt here).
-            if (needsMic && micResult?.state !== 'granted') return 'needsPermission';
-            if (needsCamera && cameraResult?.state !== 'granted') return 'needsPermission';
-            return 'ok';
-        } catch {
-            // Query threw (unusable Permissions API): same latch fallback.
-            return this.preflightFromCaptureLatch(needsMic, needsCamera);
-        }
+        // Each required kind is resolved INDEPENDENTLY (a working per-kind
+        // Permissions API query, else the fallbacks) so one kind's unusable /
+        // rejected query never masks the other. Not granted for any required
+        // kind -> needsPermission (never a prompt here; the host owns that).
+        if (needsMic && !(await this.preflightKindGranted('microphone'))) return 'needsPermission';
+        if (needsCamera && !(await this.preflightKindGranted('camera'))) return 'needsPermission';
+        return 'ok';
     }
 
     /**
-     * Grant fallback when the Permissions API is unavailable/unusable: a prior
-     * successful `getUserMedia` for a kind proves the grant. Capture stays
-     * authoritative — without any prior successful capture this stays
-     * conservative and returns `'needsPermission'` so the host still prompts.
+     * Resolve whether a single device kind is already granted for the desired
+     * media, WITHOUT opening a prompt. Layered signals (contract §3):
+     *  1. Permissions API `query` — primary. A definite `granted`/`prompt`/
+     *     `denied` is authoritative. A per-kind rejection (e.g. Firefox rejects
+     *     the `camera`/`microphone` names) or an unknown/absent state falls
+     *     through to the fallbacks rather than reading as not-granted.
+     *  2. The session-level "capture already succeeded once" latch — a prior
+     *     in-SDK `getUserMedia` proves the grant.
+     *  3. `enumerateDevices` label visibility — device labels are non-empty only
+     *     after a same-origin grant for that kind, so a host-driven getUserMedia
+     *     grant (the documented prompt-then-retry protocol) becomes visible even
+     *     on a browser with no usable Permissions API. Async, so it runs last.
+     * Actual capture remains authoritative; every fallback is conservative.
      */
-    private preflightFromCaptureLatch(needsMic: boolean, needsCamera: boolean): 'ok' | 'needsPermission' {
-        const micOk = !needsMic || this.media.audioCaptureEverSucceeded;
-        const cameraOk = !needsCamera || this.media.videoCaptureEverSucceeded;
-        return micOk && cameraOk ? 'ok' : 'needsPermission';
+    private async preflightKindGranted(kind: 'microphone' | 'camera'): Promise<boolean> {
+        const permissions = (typeof navigator !== 'undefined' ? navigator.permissions : undefined);
+        if (permissions?.query) {
+            try {
+                const result = await permissions.query({ name: kind as PermissionName });
+                const state = result?.state;
+                if (state === 'granted') return true;
+                // A definite prompt/denied answer is authoritative: not granted.
+                if (state === 'prompt' || state === 'denied') return false;
+                // Unknown/missing state: fall through to the secondary signals.
+            } catch {
+                // Query rejected for this kind (unusable name): fall through.
+            }
+        }
+        // Secondary: the capture-success latch.
+        const latch = kind === 'microphone'
+            ? this.media.audioCaptureEverSucceeded
+            : this.media.videoCaptureEverSucceeded;
+        if (latch) return true;
+        // Tertiary: enumerateDevices label visibility.
+        return this.hasLabeledDevicesForKind(kind);
+    }
+
+    /**
+     * True when `enumerateDevices` reports at least one device of `kind` with a
+     * non-empty label — the platform only reveals labels after a same-origin
+     * permission grant for that kind, so this catches a host-driven grant that
+     * the Permissions API cannot report. Conservative: any absence/error -> false.
+     */
+    private async hasLabeledDevicesForKind(kind: 'microphone' | 'camera'): Promise<boolean> {
+        const mediaDevices = (typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined);
+        if (!mediaDevices?.enumerateDevices) return false;
+        const wantKind = kind === 'microphone' ? 'audioinput' : 'videoinput';
+        try {
+            const devices = await mediaDevices.enumerateDevices();
+            return devices.some((device) => device.kind === wantKind && device.label !== '');
+        } catch {
+            return false;
+        }
     }
 
     /**
