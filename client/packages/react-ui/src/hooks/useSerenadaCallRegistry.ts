@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type {
     CallId,
     CallRegistryState,
@@ -29,11 +29,12 @@ export interface UseSerenadaCallRegistryOptions {
 
 export interface UseSerenadaCallRegistryResult {
     /**
-     * The live registry instance. Owned by the hook (constructed once per stable
-     * config and torn down on unmount). Hosts can read it for advanced usage, but
-     * the reactive fields below are the common surface.
+     * The live registry instance, or `null` on the very first render before the
+     * mount effect constructs it (mirrors `useSerenadaSession`'s `session`). Owned
+     * by the hook (constructed on mount, torn down on unmount). Hosts can read it
+     * for advanced usage, but the reactive fields below are the common surface.
      */
-    registry: SerenadaCallRegistry;
+    registry: SerenadaCallRegistry | null;
     /** All managed calls (value snapshots), reactive. */
     calls: ManagedCallState[];
     /**
@@ -76,6 +77,11 @@ const EMPTY_REGISTRY_STATE: CallRegistryState = {
 // in ./constants.ts). A module constant avoids accessing a ref during render.
 const EMPTY_HELD_CALLS: ManagedCallState[] = [];
 
+// Rejection for an operation invoked before the mount effect built the registry.
+function notReady(): Error {
+    return new Error('Registry not ready');
+}
+
 /**
  * Construct and own a {@link SerenadaCallRegistry} (wrapping a {@link
  * SerenadaCore}) and expose its reactive state via `useSyncExternalStore`,
@@ -95,8 +101,17 @@ export function useSerenadaCallRegistry(
     const { config, endedCallRetentionMs } = options;
     const transportsKey = config.transports?.join('|') ?? '';
 
-    const registry = useMemo(
-        () => new SerenadaCallRegistry(
+    // Construct the registry INSIDE the mount effect (not `useMemo`) and publish
+    // it via state, mirroring `useSerenadaSession`. `useMemo` is the wrong home:
+    // React StrictMode (dev) mounts, runs the cleanup (which `close()`s the
+    // registry — and `close()` is terminal), then RE-RUNS the effect with the
+    // SAME memoized registry, so every subsequent join fails 'Registry is
+    // closed'. Building it in the effect gives each mount a fresh, open registry
+    // and closes it exactly once on cleanup.
+    const [registry, setRegistry] = useState<SerenadaCallRegistry | null>(null);
+
+    useEffect(() => {
+        const built = new SerenadaCallRegistry(
             new SerenadaCore({
                 ...config,
                 transports: config.transports ? [...config.transports] : undefined,
@@ -105,41 +120,40 @@ export function useSerenadaCallRegistry(
                 endedCallRetentionMs,
                 logger: config.logger,
             },
-        ),
-        // Reconstruct only on the same config keys useSerenadaSession keys on,
-        // plus the registry-specific retention. A reconstruct tears down the old
-        // registry (cleanup effect below) and builds a fresh one. `config.logger`
-        // is deliberately NOT a dep: a host passing an inline `logger` (the common
-        // React idiom) mints a new function identity every parent re-render, which
-        // would reconstruct the registry and silently `leave()` every live call
-        // mid-session. The logger is still captured by closure above; a stale
-        // logger after a logger swap is the same accepted tradeoff useSerenadaSession
-        // makes (it does not key on `logger` either).
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        [
-            config.serverHost,
-            config.defaultAudioEnabled,
-            config.defaultVideoEnabled,
-            transportsKey,
-            config.turnsOnly,
-            endedCallRetentionMs,
-        ],
-    );
-
-    // Tear down the registry on unmount (or when it is reconstructed): close()
-    // leaves every live call (releasing the foreground lease and owning mode) by
-    // iterating the registry's authoritative call map, and refuses any in-flight
-    // queued create that would otherwise land after unmount — which the previous
-    // published-snapshot loop could miss, leaking a session nothing would leave.
-    useEffect(() => {
+        );
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- publish the mount-built registry to consumers (mirrors useSerenadaSession); StrictMode-safe fresh instance per mount
+        setRegistry(built);
+        // Tear down on unmount (or when a config key below changes): close()
+        // leaves every live call (releasing the foreground lease and owning mode)
+        // by iterating the registry's authoritative call map, and refuses any
+        // in-flight queued create that would otherwise land after unmount.
         return () => {
-            void registry.close();
+            void built.close();
+            setRegistry(null);
         };
-    }, [registry]);
+        // Rebuild only on the same config keys useSerenadaSession keys on, plus
+        // the registry-specific retention. `config.logger` is deliberately NOT a
+        // dep: a host passing an inline `logger` (the common React idiom) mints a
+        // new function identity every parent re-render, which would rebuild the
+        // registry and silently `leave()` every live call mid-session. The logger
+        // is still captured by closure above; a stale logger after a logger swap
+        // is the same accepted tradeoff useSerenadaSession makes.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        config.serverHost,
+        config.defaultAudioEnabled,
+        config.defaultVideoEnabled,
+        transportsKey,
+        config.turnsOnly,
+        endedCallRetentionMs,
+    ]);
 
     const state = useSyncExternalStore(
-        useMemo(() => (onChange: () => void) => registry.subscribe(onChange), [registry]),
-        () => registry.state,
+        useMemo(
+            () => (onChange: () => void) => (registry ? registry.subscribe(onChange) : () => {}),
+            [registry],
+        ),
+        () => registry?.state ?? EMPTY_REGISTRY_STATE,
         () => EMPTY_REGISTRY_STATE,
     );
 
@@ -152,21 +166,30 @@ export function useSerenadaCallRegistry(
     const activeState =
         state.calls.find((call) => call.id === state.activeCallId) ?? null;
     const activeCall = useMemo(
-        () => registry.activeCall,
+        () => registry?.activeCall ?? null,
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [registry, activeState],
     );
 
-    // Stable operation callbacks bound to the current registry.
+    // Stable operation callbacks bound to the current registry. Before the mount
+    // effect has built the registry (the first render only), operations reject:
+    // React runs the effect before any user interaction, so this is a transient
+    // guard, not a real path.
     const ops = useMemo(
         () => ({
-            sessionFor: (callId: CallId) => registry.sessionFor(callId),
-            joinHeld: (room: RegistryRoomInput) => registry.joinHeld(room),
-            joinAndSwitch: (room: RegistryRoomInput) => registry.joinAndSwitch(room),
-            switchTo: (callId: CallId) => registry.switchTo(callId),
-            hold: (callId: CallId) => registry.hold(callId),
-            leave: (callId: CallId) => registry.leave(callId),
-            end: (callId: CallId) => registry.end(callId),
+            sessionFor: (callId: CallId) => registry?.sessionFor(callId) ?? null,
+            joinHeld: (room: RegistryRoomInput) =>
+                registry ? registry.joinHeld(room) : Promise.reject(notReady()),
+            joinAndSwitch: (room: RegistryRoomInput) =>
+                registry ? registry.joinAndSwitch(room) : Promise.reject(notReady()),
+            switchTo: (callId: CallId) =>
+                registry ? registry.switchTo(callId) : Promise.reject(notReady()),
+            hold: (callId: CallId) =>
+                registry ? registry.hold(callId) : Promise.reject(notReady()),
+            leave: (callId: CallId) =>
+                registry ? registry.leave(callId) : Promise.reject(notReady()),
+            end: (callId: CallId) =>
+                registry ? registry.end(callId) : Promise.reject(notReady()),
         }),
         [registry],
     );
