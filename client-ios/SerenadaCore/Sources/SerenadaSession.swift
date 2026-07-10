@@ -441,6 +441,12 @@ public final class SerenadaSession: ObservableObject {
     private let recoveryStorage: RecoveryStorage
     private var sessionStartTs: Int64?
     private var callStartedAtMs: Int64?
+    /// Freshest reconnect credentials retained IN MEMORY for both foreground and
+    /// held calls (durable recovery is foreground-only — Candidate A). A held call
+    /// keeps these so a later resume-to-foreground can write the durable record
+    /// from memory with no server round-trip.
+    private var cachedReconnectToken: String?
+    private var cachedReconnectTokenTTLMs: Int64?
 
     public convenience init(
         roomId: String,
@@ -1927,6 +1933,13 @@ public final class SerenadaSession: ObservableObject {
         //    path updates local state without a redundant second broadcast.
         applyLocalVideoPreference()
         updateEffectiveMicState()
+
+        // 6. Durable recovery is foreground-only (Candidate A). This call just
+        //    became the foreground owner, so write the cross-launch record NOW
+        //    from the in-memory credentials — the previous foreground call cleared
+        //    its own record on hold, so without this the store would have no
+        //    record (or a stale one) until the next token refresh.
+        persistForegroundRecoveryFromMemory()
     }
 
     /// Re-attach remote renderer registrations to freshly reacquired tracks
@@ -2703,6 +2716,11 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func resetResources(clearRecovery: Bool = false) {
+        // Capture the recovery identity BEFORE the null-out below wipes `clientId`,
+        // so a clear only removes a record THIS call owns (Candidate A ownership
+        // check): a stale/held call tearing down must not clear the record the
+        // current foreground call wrote.
+        let recoveryOwnerCid = clientId
         joinLifecycleTask?.cancel()
         joinLifecycleTask = nil
         statsPoller?.stop()
@@ -2737,12 +2755,16 @@ public final class SerenadaSession: ObservableObject {
         iceFetchGeneration += 1
         sessionStartTs = nil
         callStartedAtMs = nil
+        cachedReconnectToken = nil
+        cachedReconnectTokenTTLMs = nil
         sessionActivated = false
         localMediaReadyForNegotiation = false
         playbackDuckingActive = false
         externalAudioMuted = false
         routeInputAvailable = true
-        if clearRecovery { recoveryStorage.clear() }
+        if clearRecovery, let recoveryOwnerCid {
+            recoveryStorage.clearIfOwned(roomId: roomId, cid: recoveryOwnerCid)
+        }
 
         let videoCaptureSupported = !availableCameraModes.isEmpty
         userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
@@ -3464,8 +3486,17 @@ public final class SerenadaSession: ObservableObject {
     /// Snapshots the in-memory reconnect state into the cross-launch
     /// recovery store so a relaunched process can offer a "Rejoin call?"
     /// prompt. No-op until the join handshake has produced a CID + token.
+    ///
+    /// Durable recovery is FOREGROUND-ONLY (Candidate A): only the foreground call
+    /// owns the cross-launch "Rejoin?" record, so a background/held call cannot
+    /// shadow it. The freshest credentials are always retained in memory first (a
+    /// held call keeps them so a later resume-to-foreground can write the record
+    /// from memory — see `persistForegroundRecoveryFromMemory`).
     private func persistRecoveryRecord(token: String?, ttlMs: Int64?) {
         guard let cid = clientId, let token = token else { return }
+        cachedReconnectToken = token
+        cachedReconnectTokenTTLMs = ttlMs
+        guard mediaRole == .foreground else { return }
         if sessionStartTs == nil { sessionStartTs = Self.nowMs() }
         let ttl = ttlMs.flatMap { $0 > 0 ? $0 : nil } ?? Self.defaultRecoveryTokenTTLMs
         let record = RecoveryRecord(
@@ -3477,6 +3508,14 @@ public final class SerenadaSession: ObservableObject {
             expiresAtMs: Self.nowMs() + ttl
         )
         recoveryStorage.save(record)
+    }
+
+    /// Write the durable recovery record from the IN-MEMORY reconnect credentials
+    /// retained by `persistRecoveryRecord`. Called on resume-to-foreground so the
+    /// stored record describes the actual foreground call immediately (no gap
+    /// waiting for the next `joined`/token-refresh). No-op until credentials exist.
+    private func persistForegroundRecoveryFromMemory() {
+        persistRecoveryRecord(token: cachedReconnectToken, ttlMs: cachedReconnectTokenTTLMs)
     }
 
     private static func nowMs() -> Int64 {

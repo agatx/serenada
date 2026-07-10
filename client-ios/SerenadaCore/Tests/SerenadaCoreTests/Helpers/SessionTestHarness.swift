@@ -29,7 +29,11 @@ final class SessionTestHarness {
         // that does NOT self-acquire/self-release the lease) passes `false`.
         acquireForegroundLease: Bool? = nil,
         isCapabilityGranted: ((MediaCapability) -> Bool)? = nil,
-        arbiter: ForegroundMediaArbiter? = nil
+        arbiter: ForegroundMediaArbiter? = nil,
+        // Inject a controllable recovery store (durable "Rejoin?" record). Durable
+        // recovery is foreground-only (Candidate A); a test injects a shared store
+        // to assert which call owns the cross-launch record.
+        recoveryStorage: RecoveryStorage = RecoveryStorage()
     ) {
         // The foreground arbiter is a PROCESS singleton: a prior test case may
         // have left a live lease/mode, which would make this session's direct
@@ -68,6 +72,7 @@ final class SessionTestHarness {
             audioController: fakeAudio,
             mediaEngine: fakeMedia,
             clock: fakeClock,
+            recoveryStorage: recoveryStorage,
             initialMediaRole: initialMediaRole,
             acquireForegroundLease: resolvedAcquireLease,
             isCapabilityGranted: isCapabilityGranted,
@@ -93,7 +98,9 @@ final class SessionTestHarness {
     func simulateJoinedResponse(
         cid: String = "local-cid-1",
         participants: [(cid: String, joinedAt: Int)] = [],
-        hostCid: String? = nil
+        hostCid: String? = nil,
+        reconnectToken: String? = nil,
+        reconnectTokenTTLMs: Int64? = nil
     ) {
         let resolvedHost = hostCid ?? cid
         let participantList = participants.isEmpty
@@ -102,7 +109,9 @@ final class SessionTestHarness {
         fakeProvider.simulateJoined(
             peerId: cid,
             participants: participantList,
-            hostPeerId: resolvedHost
+            hostPeerId: resolvedHost,
+            reconnectToken: reconnectToken,
+            reconnectTokenTTLMs: reconnectTokenTTLMs
         )
     }
 
@@ -183,6 +192,8 @@ final class SessionTestHarness {
         localJoinedAt: Int = 1,
         remoteJoinedAt: Int = 2,
         hostCid: String? = nil,
+        reconnectToken: String? = nil,
+        reconnectTokenTTLMs: Int64? = nil,
         iceServers: [IceServerConfig] = [IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")]
     ) async {
         fakeProvider.iceServerResults = [.success(iceServers)]
@@ -195,7 +206,9 @@ final class SessionTestHarness {
                 (cid: localCid, joinedAt: localJoinedAt),
                 (cid: remoteCid, joinedAt: remoteJoinedAt)
             ],
-            hostCid: hostCid ?? localCid
+            hostCid: hostCid ?? localCid,
+            reconnectToken: reconnectToken,
+            reconnectTokenTTLMs: reconnectTokenTTLMs
         )
         await yieldToMainActor()
         await fakeClock.advance(byMs: 100)
@@ -215,6 +228,8 @@ final class SessionTestHarness {
         localJoinedAt: Int = 1,
         remoteJoinedAt: Int = 2,
         hostCid: String? = nil,
+        reconnectToken: String? = nil,
+        reconnectTokenTTLMs: Int64? = nil,
         iceServers: [IceServerConfig] = [IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")]
     ) async {
         fakeProvider.iceServerResults = [.success(iceServers)]
@@ -226,7 +241,9 @@ final class SessionTestHarness {
                 (cid: localCid, joinedAt: localJoinedAt),
                 (cid: remoteCid, joinedAt: remoteJoinedAt)
             ],
-            hostCid: hostCid ?? localCid
+            hostCid: hostCid ?? localCid,
+            reconnectToken: reconnectToken,
+            reconnectTokenTTLMs: reconnectTokenTTLMs
         )
         await yieldToMainActor()
         await fakeClock.advance(byMs: 100)

@@ -73,4 +73,16 @@ public final class RecoveryStorage: @unchecked Sendable {
     public func clear() {
         defaults.removeObject(forKey: Self.recordKey)
     }
+
+    /// Clear the stored record ONLY if it belongs to the given call identity
+    /// (matching `roomId` + `cid`). A session's terminal reset must not wipe a
+    /// record that a DIFFERENT call (e.g. the one that took over foreground) now
+    /// owns: with multiple concurrent calls the store holds one record for the
+    /// current foreground call, so a stale/held call tearing down would otherwise
+    /// clear the live foreground call's record. No-op when nothing is stored or
+    /// the stored record belongs to another call.
+    public func clearIfOwned(roomId: String, cid: String) {
+        guard let record = load(), record.roomId == roomId, record.cid == cid else { return }
+        defaults.removeObject(forKey: Self.recordKey)
+    }
 }
