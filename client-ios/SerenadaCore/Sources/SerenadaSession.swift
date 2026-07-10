@@ -2741,13 +2741,23 @@ public final class SerenadaSession: ObservableObject {
         statsPoller?.stop()
         audioLevelPoller?.stop()
         peerNegotiationEngine?.resetAll()
-        signalingProvider.disconnect()
-        // Unbind from the channel at teardown so a late/queued provider event
-        // delivered after close is not processed by this now-terminal session.
-        // `resetResources` is terminal-only (leave/end/error/cancel) — reconnect
-        // reuses the still-bound delegate and never routes through here — so
-        // clearing it here cannot strand a live session.
-        signalingProvider.delegate = nil
+        // Fence v1 teardown to the bind owner. A single-session (v1) provider is a
+        // shared object; when this session went terminal a NEWER session may have
+        // rebound it. This session's handle stays callable (e.g. a late `leave()`
+        // after an error), so disconnecting the channel or clearing its delegate
+        // here would clobber the newer session. `isTeardownOwner` returns true for
+        // exclusively-owned channels (server/v2) and for the session that still
+        // owns the v1 bind; false only for a stale handle whose provider was
+        // rebound. Local state below is cleared regardless.
+        if V1ProviderRegistry.isTeardownOwner(signalingProvider, session: self) {
+            signalingProvider.disconnect()
+            // Unbind from the channel at teardown so a late/queued provider event
+            // delivered after close is not processed by this now-terminal session.
+            // `resetResources` is terminal-only (leave/end/error/cancel) — reconnect
+            // reuses the still-bound delegate and never routes through here — so
+            // clearing it here cannot strand a live session.
+            signalingProvider.delegate = nil
+        }
         peerSlots.values.forEach { $0.closePeerConnection() }
         peerSlots.removeAll()
         webRtcEngine.release()

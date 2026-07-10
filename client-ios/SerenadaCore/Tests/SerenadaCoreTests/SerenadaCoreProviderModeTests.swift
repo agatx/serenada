@@ -144,6 +144,118 @@ final class SerenadaCoreProviderModeTests: XCTestCase {
         second.leave()
     }
 
+    private func yieldToMainActor() async {
+        await Task.yield()
+        await Task.yield()
+        await Task.yield()
+        await Task.yield()
+    }
+
+    /// Build a registry-bound session on the shared v1 `provider` with fake
+    /// media/audio and granted capabilities, so the join settles past the
+    /// permission gate in the simulator (mirrors SessionTestHarness wiring)
+    /// and can reach a REAL terminal phase instead of the awaitingPermissions
+    /// mask. Binds the provider in ``V1ProviderRegistry`` exactly as
+    /// `SerenadaCore.join()` does.
+    private func makeBoundSession(
+        roomId: String,
+        provider: FakeSignalingProvider
+    ) -> SerenadaSession {
+        var config = SerenadaConfig(signalingProvider: provider)
+        config.audioCoordinator = FakeAudioCoordinator()
+        let session = SerenadaSession(
+            roomId: roomId,
+            config: config,
+            initialSignalingProvider: provider,
+            audioController: FakeAudioController(),
+            mediaEngine: FakeMediaEngine(),
+            acquireForegroundLease: false,
+            isCapabilityGranted: { _ in true }
+        )
+        V1ProviderRegistry.bind(provider, to: session)
+        return session
+    }
+
+    private func advancePastPermissions(_ session: SerenadaSession) async {
+        await yieldToMainActor()
+        if session.state.phase == .awaitingPermissions {
+            session.resumeJoin()
+            await yieldToMainActor()
+        }
+    }
+
+    func testTerminalSessionLateLeaveDoesNotClobberRebinder() async {
+        // A terminal session's handle stays callable. Once a NEWER session rebinds
+        // the same shared v1 provider, a late leave() on the old handle must NOT
+        // disconnect the channel or clear the delegate the newer session installed.
+        let provider = FakeSignalingProvider()
+
+        let sessionA = makeBoundSession(roomId: "room-a", provider: provider)
+        await advancePastPermissions(sessionA)
+
+        // Drive A to a terminal .error while it owns the bind. A's own teardown
+        // disconnects the channel once (expected) and frees the bind.
+        provider.simulateConnected()
+        provider.simulateError(code: "ROOM_CAPACITY_UNSUPPORTED", message: "Room is full")
+        await yieldToMainActor()
+        XCTAssertEqual(sessionA.state.phase, .error)
+        XCTAssertEqual(provider.disconnectCalls, 1, "A's own error teardown disconnects once")
+
+        // B binds the same provider now that A is terminal, and installs its delegate.
+        XCTAssertFalse(V1ProviderRegistry.isInUse(provider), "terminal A no longer holds the bind")
+        let sessionB = makeBoundSession(roomId: "room-b", provider: provider)
+        XCTAssertNotNil(provider.delegate, "B installed its delegate on the shared provider")
+
+        let disconnectsBeforeLateLeave = provider.disconnectCalls
+        let delegateBeforeLateLeave = provider.delegate
+
+        // A's stale handle is still callable — a late leave() must be a no-op on
+        // the shared provider that B now owns.
+        sessionA.leave()
+
+        XCTAssertEqual(provider.disconnectCalls, disconnectsBeforeLateLeave,
+                       "A's late leave must not disconnect the provider B owns")
+        XCTAssertTrue(provider.delegate === delegateBeforeLateLeave,
+                      "A's late leave must not clear B's delegate")
+        XCTAssertNil(sessionB.state.error, "B is unaffected by A's late leave")
+
+        // Double-leave stays safe.
+        sessionA.leave()
+        XCTAssertEqual(provider.disconnectCalls, disconnectsBeforeLateLeave)
+        XCTAssertTrue(provider.delegate === delegateBeforeLateLeave)
+
+        // B still owns the bind, so B's teardown DOES disconnect the channel.
+        sessionB.leave()
+        XCTAssertEqual(provider.disconnectCalls, disconnectsBeforeLateLeave + 1,
+                       "the bind owner's teardown disconnects the provider")
+    }
+
+    func testRegistryCompactsTerminalBindings() {
+        // Fill the registry with several LIVE v1 bindings, then let every session
+        // reach a terminal phase. The next bind/check must sweep them all so the
+        // process-wide map does not grow without bound for hosts that cycle
+        // through a fresh provider + core per call.
+        _ = V1ProviderRegistry.isInUse(FakeSignalingProvider())
+        let baseline = V1ProviderRegistry.rawBindingCountForTesting()
+
+        var sessions: [SerenadaSession] = []
+        for i in 0..<5 {
+            let provider = FakeSignalingProvider()
+            let core = SerenadaCore(config: SerenadaConfig(signalingProvider: provider))
+            sessions.append(core.join(roomId: "room-\(i)"))
+        }
+        XCTAssertEqual(V1ProviderRegistry.rawBindingCountForTesting(), baseline + 5,
+                       "live sessions are retained in the registry")
+
+        // leave() is synchronous and terminal (.idle), like the sequential-reuse test.
+        for session in sessions { session.leave() }
+
+        // A single check compacts every terminal key back to the baseline.
+        _ = V1ProviderRegistry.isInUse(FakeSignalingProvider())
+        XCTAssertEqual(V1ProviderRegistry.rawBindingCountForTesting(), baseline,
+                       "compaction swept the terminal bindings")
+    }
+
     func testProviderModeSessionExposesNilServerHostAndRoomUrl() {
         let core = SerenadaCore(config: SerenadaConfig(signalingProvider: FakeSignalingProvider()))
         let session = core.join(roomId: "room-123")

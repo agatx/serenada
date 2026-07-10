@@ -393,14 +393,15 @@ private final class UnavailableSignalingProvider: SignalingProvider {
 /// provider identity across ALL ``SerenadaCore`` instances — two cores sharing the
 /// same v1 provider object must not both bind it and clobber each other's channel.
 ///
-/// Entries are weak and pruned when the bound session reaches a terminal phase
-/// (`.idle`/`.ending`/`.error`) — that session has already run its teardown
-/// (`disconnect()` + delegate unbind), so it no longer holds the channel. This lets
-/// sequential reuse work and never retains providers or sessions. `@MainActor`
-/// isolation (every ``SerenadaCore`` join path is main-actor) is the sole
-/// synchronization discipline.
+/// Entries are weak and reclaimed by `compact()` (run on every bind/check) once
+/// the bound session is gone or reaches a terminal phase (`.idle`/`.ending`/
+/// `.error`). This lets sequential reuse work, never retains providers or
+/// sessions, and keeps the map from accumulating dead boxes for hosts that spin
+/// up a fresh provider + core per call. `@MainActor` isolation (every
+/// ``SerenadaCore`` join path is main-actor) is the sole synchronization
+/// discipline.
 @MainActor
-private enum V1ProviderRegistry {
+enum V1ProviderRegistry {
     private final class WeakSessionBox {
         weak var session: SerenadaSession?
         init(_ session: SerenadaSession) { self.session = session }
@@ -408,25 +409,55 @@ private enum V1ProviderRegistry {
 
     private static var bindings: [ObjectIdentifier: WeakSessionBox] = [:]
 
-    /// Whether `provider` is currently held by a live (non-terminal) session.
-    /// Prunes the entry when the bound session is gone or terminal.
-    static func isInUse(_ provider: SignalingProvider) -> Bool {
-        let key = ObjectIdentifier(provider)
-        guard let bound = bindings[key]?.session else {
-            bindings[key] = nil
-            return false
-        }
-        switch bound.state.phase {
+    private static func isTerminal(_ phase: SerenadaCallPhase) -> Bool {
+        switch phase {
         case .idle, .ending, .error:
-            bindings[key] = nil
-            return false
-        case .awaitingPermissions, .joining, .waiting, .inCall:
             return true
+        case .awaitingPermissions, .joining, .waiting, .inCall:
+            return false
         }
+    }
+
+    /// Drop every box whose session is gone or terminal. Run on each bind/check
+    /// so the map tracks only live sessions and never grows for the process
+    /// lifetime as hosts cycle through providers.
+    private static func compact() {
+        bindings = bindings.filter { _, box in
+            guard let session = box.session else { return false }
+            return !isTerminal(session.state.phase)
+        }
+    }
+
+    /// Whether `provider` is currently held by a live (non-terminal) session.
+    static func isInUse(_ provider: SignalingProvider) -> Bool {
+        compact()
+        return bindings[ObjectIdentifier(provider)]?.session != nil
     }
 
     /// Record `session` as the holder of `provider`.
     static func bind(_ provider: SignalingProvider, to session: SerenadaSession) {
+        compact()
         bindings[ObjectIdentifier(provider)] = WeakSessionBox(session)
     }
+
+    /// Whether `session` may run v1 teardown (`disconnect()` + delegate unbind)
+    /// on `provider`. True when `provider` was never registry-bound (server/v2
+    /// channels are owned solely by their session) OR `session` still owns the
+    /// v1 bind. False only when a NEWER session rebound this shared v1 provider
+    /// after `session` went terminal — the stale handle must not disconnect the
+    /// channel or clear the delegate the newer session installed. Pure read;
+    /// dead/terminal keys are reclaimed by `compact()` on the next bind/check.
+    static func isTeardownOwner(_ provider: SignalingProvider, session: SerenadaSession) -> Bool {
+        guard let box = bindings[ObjectIdentifier(provider)] else { return true }
+        return box.session === session
+    }
+
+    #if DEBUG
+    /// Test-only: raw number of tracked bindings WITHOUT compacting, so tests can
+    /// observe the map grow with live sessions and shrink once a bind/check sweeps
+    /// terminal entries.
+    static func rawBindingCountForTesting() -> Int {
+        bindings.count
+    }
+    #endif
 }
