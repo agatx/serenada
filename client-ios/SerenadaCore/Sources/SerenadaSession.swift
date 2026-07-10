@@ -2025,13 +2025,22 @@ public final class SerenadaSession: ObservableObject {
         // §6). The role/activation flip above is synchronous; the actual
         // `deactivateCallSession` runs in a fire-and-forget task. Never throws (a
         // timeout/cancel inside the lifecycle task is the coordinator's concern).
-        await awaitForegroundReleaseSettledInternal()
+        await awaitForegroundReleaseSettled()
     }
 
     /// Await the in-flight audio-coordinator lifecycle task (the deactivation
-    /// kicked off by `applyHeldRoleInternal`). Folded out of `releaseForeground` so
-    /// the latter's intent (release THEN settle) reads in one place. Never throws.
-    private func awaitForegroundReleaseSettledInternal() async {
+    /// kicked off by `applyHeldRoleInternal`) WITHOUT a token guard, so a caller
+    /// can wait for the teardown to settle even when `releaseForeground`'s own
+    /// token guard would short-circuit.
+    ///
+    /// This is the retry safety valve for FIX C: the registry nils/flips the
+    /// session synchronously on the FIRST (timed-out) release, so a retry's
+    /// `releaseForeground(token)` no longer matches the (now-nil) owner token and
+    /// returns immediately — WITHOUT re-awaiting the still-running coordinator
+    /// deactivation. The registry drains call this after `releaseForeground` so a
+    /// retry only reports the release settled once the ORIGINAL deactivation has
+    /// actually finished, never trivially. Never throws.
+    func awaitForegroundReleaseSettled() async {
         guard let task = audioCoordinatorLifecycleTask else { return }
         _ = try? await task.value
     }

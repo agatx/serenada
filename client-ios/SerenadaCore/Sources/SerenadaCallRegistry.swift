@@ -231,6 +231,13 @@ protocol RegistryManagedSession: AnyObject {
     /// sequences "release old fully before acquiring new" (contract §6). Idempotent
     /// / no-throw. The registry bounds this with `FOREGROUND_RELEASE_TIMEOUT`.
     func releaseForeground(_ token: ForegroundOwnerToken) async
+    /// Await the in-flight coordinator teardown WITHOUT a token guard (FIX C). A
+    /// release that times out flips the session synchronously and nils its owner
+    /// token, so a retry's `releaseForeground(token)` short-circuits on the token
+    /// guard and returns before the still-running teardown finishes. The drains
+    /// call this AFTER `releaseForeground` so a retry only treats the release as
+    /// settled once the ORIGINAL teardown has actually completed. No-throw.
+    func awaitForegroundReleaseSettled() async
     func abortForegroundActivation(_ token: ForegroundOwnerToken)
     func registryLeave()
     func registryEnd()
@@ -969,6 +976,10 @@ public final class SerenadaCallRegistry: ObservableObject {
             // away). `releaseForeground` is no-throw, so this never rethrows.
             _ = try? await withTimeout(WebRtcResilience.foregroundReleaseTimeoutMs) {
                 await call.managedSession.releaseForeground(token)
+                // Await the teardown settle even when a prior release left it
+                // pending (token already nil'd → `releaseForeground` short-circuits;
+                // FIX C). Bounded by the same window; teardown proceeds regardless.
+                await call.managedSession.awaitForegroundReleaseSettled()
             }
             // leave/end teardown proceeds regardless (the session is going away);
             // free the lease so a future call can claim it.
@@ -1089,6 +1100,15 @@ public final class SerenadaCallRegistry: ObservableObject {
         let session = call.managedSession
         let completed = (try? await withTimeout(WebRtcResilience.foregroundReleaseTimeoutMs) {
             await session.releaseForeground(token)
+            // Token-independent settle (FIX C): on a RETRY after a prior release
+            // timed out, `releaseForeground`'s own token guard short-circuits (the
+            // first, timed-out attempt already nil'd the owner token) and returns
+            // WITHOUT re-awaiting the still-running coordinator teardown. Await it
+            // here, unconditionally, so a retry only confirms fully-settled once the
+            // ORIGINAL deactivation has actually finished — never trivially. Both
+            // awaits share this ONE release-timeout window; a stuck coordinator
+            // still trips the deadline (Invariant 1: old keeps its lease).
+            await session.awaitForegroundReleaseSettled()
         }) != nil
         return completed
     }

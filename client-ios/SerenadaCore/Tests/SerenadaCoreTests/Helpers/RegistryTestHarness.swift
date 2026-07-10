@@ -270,6 +270,10 @@ final class StallReleaseSession: RegistryManagedSession {
         mediaActivationState = .inactive
     }
 
+    /// This stub models the stall INSIDE `releaseForeground` (no separate
+    /// lifecycle task), so once release returns the teardown is settled: no-op.
+    func awaitForegroundReleaseSettled() async {}
+
     private var stallContinuation: CheckedContinuation<Void, Never>?
     private func resumeStall() {
         let c = stallContinuation
@@ -344,6 +348,7 @@ final class LyingRoleSession: RegistryManagedSession {
         // fully-held (`mediaRole == .held && mediaActivationState == .inactive`).
         mediaActivationState = .inactive
     }
+    func awaitForegroundReleaseSettled() async {}
     func abortForegroundActivation(_ token: ForegroundOwnerToken) {
         mediaActivationState = .inactive
     }
@@ -410,6 +415,7 @@ final class TerminalDrivableSession: RegistryManagedSession {
         mediaRole = .held
         mediaActivationState = .inactive
     }
+    func awaitForegroundReleaseSettled() async {}
     func abortForegroundActivation(_ token: ForegroundOwnerToken) {
         mediaRole = .held
         mediaActivationState = .inactive

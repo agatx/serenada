@@ -513,6 +513,99 @@ final class SerenadaCallRegistryTests: XCTestCase {
         await h.teardown()
     }
 
+    // MARK: - FIX C: retry after a release timeout awaits the SAME pending teardown
+
+    /// After a release times out, the session has already nil'd its owner token
+    /// synchronously, so a naive RETRY `releaseForeground(token)` short-circuits on
+    /// the token guard and returns WITHOUT re-awaiting the still-running coordinator
+    /// deactivation — the registry would then trivially "confirm" the drain, release
+    /// the lease, and grant a NEW owner while the OLD teardown is still running.
+    /// The fix awaits the token-independent settle in the drain, so a retry only
+    /// confirms once the ORIGINAL deactivation has actually finished.
+    func testRetryAfterReleaseTimeoutAwaitsPendingTeardownBeforeGrantingNewOwner() async {
+        let h = RegistryTestHarness()
+        let blockingOld = BlockingDeactivateCoordinator()
+
+        let rA = await h.registry.joinAndSwitch(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa", coordinator: blockingOld))
+        guard case let .active(idA) = rA else { return XCTFail("A: \(rA)") }
+        let tokenA = h.arbiter.currentOwnerToken
+        XCTAssertNotNil(tokenA)
+
+        let rB = await h.registry.joinHeld(h.room("bbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+        guard case let .joined(idB) = rB else { return XCTFail("B: \(rB)") }
+
+        // 1) First switch A->B: A's coordinator deactivation hangs, so the release
+        //    times out and A keeps its lease (Invariant 1). The session's owner
+        //    token is now nil (flipped synchronously) but the teardown is unfinished.
+        blockingOld.blockNextDeactivation = true
+        let switch1 = Task { await h.registry.switchToCall(id: idB) }
+        await waitUntil { blockingOld.deactivationInFlight }
+        await waitUntil { h.fakeRegistryClock.pendingSleepCount > 0 }
+        await h.fakeRegistryClock.advance(byMs: Int64(WebRtcResilience.foregroundReleaseTimeoutMs + 500))
+        guard case .failed = await switch1.value else { return XCTFail("first switch must time out") }
+        XCTAssertEqual(h.registry.activeCallId, idA)
+        XCTAssertEqual(h.arbiter.currentOwnerToken, tokenA, "old keeps its lease on timeout")
+
+        // 2) RETRY the switch while the deactivation is STILL hanging: it must
+        //    re-drain the SAME pending teardown (not short-circuit) and time out
+        //    again — no new owner may be granted.
+        let switch2 = Task { await h.registry.switchToCall(id: idB) }
+        await waitUntil { h.fakeRegistryClock.pendingSleepCount > 0 }
+        await h.fakeRegistryClock.advance(byMs: Int64(WebRtcResilience.foregroundReleaseTimeoutMs + 500))
+        guard case .failed = await switch2.value else {
+            return XCTFail("retry must NOT trivially succeed while the old teardown is still running")
+        }
+        XCTAssertEqual(h.arbiter.currentOwnerToken, tokenA, "no new owner while the old teardown is unsettled")
+        XCTAssertNil(h.session(for: idB)?.foregroundOwnerTokenForTest, "B never acquired a lease during the pending release")
+
+        // 3) Let the deactivation finish, then retry once more: the settle now
+        //    completes, so the drain confirms and the switch succeeds.
+        blockingOld.releaseDeactivation()
+        let switch3 = await h.registry.switchToCall(id: idB)
+        guard case .active = switch3 else { return XCTFail("retry after settle must succeed, got \(switch3)") }
+        XCTAssertEqual(h.registry.activeCallId, idB)
+        XCTAssertEqual(h.arbiter.currentOwnerToken?.ownerId, idB, "lease handed to B exactly once, after settle")
+
+        await h.teardown()
+    }
+
+    /// Leaving the old call while its release is still pending (deactivation hung)
+    /// must tear it down and release its lease exactly once; teardown proceeds
+    /// regardless of the settle (the session is going away) and no new owner is
+    /// auto-promoted.
+    func testLeaveDuringPendingReleaseTearsDownAndReleasesLeaseOnce() async {
+        let h = RegistryTestHarness()
+        let blockingOld = BlockingDeactivateCoordinator()
+
+        let rA = await h.registry.joinAndSwitch(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa", coordinator: blockingOld))
+        guard case let .active(idA) = rA else { return XCTFail("A: \(rA)") }
+        let rB = await h.registry.joinHeld(h.room("bbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+        guard case let .joined(idB) = rB else { return XCTFail("B: \(rB)") }
+
+        // Switch A->B times out (A deactivation hangs); A keeps its lease.
+        blockingOld.blockNextDeactivation = true
+        let switch1 = Task { await h.registry.switchToCall(id: idB) }
+        await waitUntil { blockingOld.deactivationInFlight }
+        await waitUntil { h.fakeRegistryClock.pendingSleepCount > 0 }
+        await h.fakeRegistryClock.advance(byMs: Int64(WebRtcResilience.foregroundReleaseTimeoutMs + 500))
+        guard case .failed = await switch1.value else { return XCTFail("first switch must time out") }
+
+        // Leave A while its release is still pending. Teardown bounds the settle by
+        // the release timeout but proceeds regardless; drive the clock so it does.
+        let leaveTask = Task { await h.registry.leaveCall(id: idA) }
+        await waitUntil { h.fakeRegistryClock.pendingSleepCount > 0 }
+        await h.fakeRegistryClock.advance(byMs: Int64(WebRtcResilience.foregroundReleaseTimeoutMs + 500))
+        await leaveTask.value
+
+        XCTAssertNil(h.arbiter.currentOwnerToken, "A's lease is released exactly once on leave")
+        XCTAssertNil(h.registry.activeCallId, "no auto-promote to B")
+        XCTAssertEqual(h.registry.calls.first { $0.id == idA }?.membershipPhase, .idle, "A is torn down")
+        XCTAssertEqual(h.session(for: idB)?.mediaRole, .held, "B stays held")
+
+        blockingOld.releaseDeactivation()
+        await h.teardown()
+    }
+
     // MARK: - FIX F: failed held join releases registry mode (direct join can proceed)
 
     /// A held join that fails/times out must be marked ENDED and must release the
