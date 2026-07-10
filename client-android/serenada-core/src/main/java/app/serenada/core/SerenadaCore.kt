@@ -5,6 +5,8 @@ import android.os.Handler
 import android.os.Looper
 import app.serenada.core.call.CallMediaRole
 import app.serenada.core.network.CoreApiClient
+import java.util.Collections
+import java.util.IdentityHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -74,22 +76,25 @@ class SerenadaCore(
         val resolved = resolveRoomUrl(url)
         val roomId = resolved?.roomId ?: url
         val sessionConfig = sessionConfigFor(resolved?.serverHost)
-        val session = SerenadaSession(
-            roomId = roomId,
-            roomUrl = resolved?.roomUrl ?: url,
-            config = sessionConfig,
-            context = context,
-            delegate = { delegate },
-            okHttpClient = okHttpClient,
-            initialSignalingProvider = createSignalingProvider(sessionConfig, roomId),
-            logger = logger,
-            displayName = displayName,
-            peerId = peerId,
-            // Public single-call join always foregrounds and routes through the
-            // process-wide arbiter (mode DIRECT). A second concurrent direct join
-            // fails fast with ForegroundLeaseUnavailable (contract §2).
-            acquireForegroundLease = true,
-        )
+        val signalingProvider = createSignalingProvider(sessionConfig, roomId)
+        val session = buildSessionReleasingProviderOnFailure(signalingProvider) {
+            SerenadaSession(
+                roomId = roomId,
+                roomUrl = resolved?.roomUrl ?: url,
+                config = sessionConfig,
+                context = context,
+                delegate = { delegate },
+                okHttpClient = okHttpClient,
+                initialSignalingProvider = signalingProvider,
+                logger = logger,
+                displayName = displayName,
+                peerId = peerId,
+                // Public single-call join always foregrounds and routes through the
+                // process-wide arbiter (mode DIRECT). A second concurrent direct join
+                // fails fast with ForegroundLeaseUnavailable (contract §2).
+                acquireForegroundLease = true,
+            )
+        }
         session.start()
         return session
     }
@@ -108,20 +113,23 @@ class SerenadaCore(
         assertMainThread()
         val sessionConfig = sessionConfigFor(serverHost)
         val roomUrl = resolvedConfig.serverHost?.let { buildRoomUrl(serverHost ?: it, roomId) }
-        val session = SerenadaSession(
-            roomId = roomId,
-            roomUrl = roomUrl,
-            config = sessionConfig,
-            context = context,
-            delegate = { delegate },
-            okHttpClient = okHttpClient,
-            initialSignalingProvider = createSignalingProvider(sessionConfig, roomId),
-            logger = logger,
-            displayName = displayName,
-            peerId = peerId,
-            // Public single-call join always foregrounds via the arbiter (DIRECT).
-            acquireForegroundLease = true,
-        )
+        val signalingProvider = createSignalingProvider(sessionConfig, roomId)
+        val session = buildSessionReleasingProviderOnFailure(signalingProvider) {
+            SerenadaSession(
+                roomId = roomId,
+                roomUrl = roomUrl,
+                config = sessionConfig,
+                context = context,
+                delegate = { delegate },
+                okHttpClient = okHttpClient,
+                initialSignalingProvider = signalingProvider,
+                logger = logger,
+                displayName = displayName,
+                peerId = peerId,
+                // Public single-call join always foregrounds via the arbiter (DIRECT).
+                acquireForegroundLease = true,
+            )
+        }
         session.start()
         return session
     }
@@ -162,21 +170,24 @@ class SerenadaCore(
             }
         }
         val sessionConfig = sessionConfigFor(serverHostForConfig)
-        val session = SerenadaSession(
-            roomId = resolvedRoomId,
-            roomUrl = resolvedRoomUrl,
-            config = sessionConfig,
-            context = context,
-            delegate = { delegate },
-            okHttpClient = okHttpClient,
-            initialSignalingProvider = createSignalingProvider(sessionConfig, resolvedRoomId),
-            logger = logger,
-            displayName = displayName,
-            peerId = peerId,
-            initialMediaRole = initialMediaRole,
-            // The registry owns the foreground lease; the session never self-acquires.
-            acquireForegroundLease = false,
-        )
+        val signalingProvider = createSignalingProvider(sessionConfig, resolvedRoomId)
+        val session = buildSessionReleasingProviderOnFailure(signalingProvider) {
+            SerenadaSession(
+                roomId = resolvedRoomId,
+                roomUrl = resolvedRoomUrl,
+                config = sessionConfig,
+                context = context,
+                delegate = { delegate },
+                okHttpClient = okHttpClient,
+                initialSignalingProvider = signalingProvider,
+                logger = logger,
+                displayName = displayName,
+                peerId = peerId,
+                initialMediaRole = initialMediaRole,
+                // The registry owns the foreground lease; the session never self-acquires.
+                acquireForegroundLease = false,
+            )
+        }
         session.start()
         return session
     }
@@ -277,16 +288,6 @@ class SerenadaCore(
     }
 
     /**
-     * The single-session (v1) [SignalingProvider] currently bound by a live session,
-     * or null when free. Identity-based: at most one session may hold the configured
-     * v1 object at a time (contract §"v1 liveness guard"). Written only on the main
-     * thread (all joins and the vended channel's teardown run there), so no lock is
-     * needed. Server mode and [MultiSessionSignalingProvider] mode never touch this —
-     * both mint a fresh channel per session.
-     */
-    private var boundV1Provider: SignalingProvider? = null
-
-    /**
      * Resolve the signaling channel for one session (contract §"Custom provider").
      * Server mode builds a fresh [SerenadaServerProvider]; a
      * [MultiSessionSignalingProvider] vends a per-session channel via
@@ -320,20 +321,60 @@ class SerenadaCore(
      * second concurrent bind throws [SingleSessionProviderInUseException] instead of
      * silently reusing the object (which would cross-wire the two sessions). The
      * returned channel releases the bind on its [SignalingProvider.disconnect] — the
-     * call every session teardown makes — so sequential reuse keeps working.
+     * call every session teardown makes — so sequential reuse keeps working. The bind
+     * set is process-wide (see [boundV1Providers]), so the guard holds across
+     * independent [SerenadaCore] instances that share one v1 provider object too.
      */
     private fun bindSingleSessionProvider(provider: SignalingProvider): SignalingProvider {
-        if (boundV1Provider != null) {
-            throw SingleSessionProviderInUseException()
+        synchronized(boundV1Providers) {
+            if (!boundV1Providers.add(provider)) {
+                throw SingleSessionProviderInUseException()
+            }
         }
-        boundV1Provider = provider
         return SingleSessionV1Channel(provider) {
-            if (boundV1Provider === provider) boundV1Provider = null
+            synchronized(boundV1Providers) { boundV1Providers.remove(provider) }
+        }
+    }
+
+    /**
+     * Construct a session whose signaling [provider] was already created (and, for a
+     * v1 provider, whose liveness bind was already claimed by [createSignalingProvider]).
+     * If [construct] throws, no session exists to run the teardown that releases the
+     * bind, so release it here before rethrowing — otherwise the v1 object stays bound
+     * forever and every later join on any core fails [SingleSessionProviderInUseException].
+     * [SignalingProvider.disconnect] on the vended v1 channel frees the bind; on a fresh
+     * server / multi-session channel it is a harmless disconnect of a never-connected
+     * provider. Covers both the direct [join] paths and the registry's [joinInternal].
+     */
+    internal fun buildSessionReleasingProviderOnFailure(
+        provider: SignalingProvider,
+        construct: () -> SerenadaSession,
+    ): SerenadaSession {
+        return try {
+            construct()
+        } catch (e: Throwable) {
+            runCatching { provider.disconnect() }
+            throw e
         }
     }
 
     companion object {
         const val VERSION = "0.9.1"
+
+        /**
+         * Process-wide set of single-session (v1) [SignalingProvider] objects currently
+         * bound by a live session, keyed by object IDENTITY (contract §"v1 liveness
+         * guard"). The guard is per provider OBJECT, not per [SerenadaCore]: two cores
+         * configured with the SAME v1 provider would each keep an empty per-instance
+         * guard and both bind it, overwriting the shared [SignalingProvider.listener]
+         * and cross-wiring the two sessions. Keying here — above any single core — makes
+         * at most one session hold a given v1 object across the whole process. Server
+         * mode and [MultiSessionSignalingProvider] mode never touch this (both mint a
+         * fresh channel per session). Guarded by its own monitor so binds/releases stay
+         * consistent regardless of the calling thread.
+         */
+        private val boundV1Providers: MutableSet<SignalingProvider> =
+            Collections.newSetFromMap(IdentityHashMap())
     }
 }
 

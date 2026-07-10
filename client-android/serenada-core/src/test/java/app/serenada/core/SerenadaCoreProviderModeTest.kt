@@ -225,6 +225,67 @@ class SerenadaCoreProviderModeTest {
     }
 
     @Test
+    fun `v1 bind is released when session construction throws so a later join succeeds`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        // A join claims the v1 bind (createSignalingProvider) and then constructs the
+        // session; if construction throws AFTER the provider was created, no session
+        // exists to release the bind — the join seam must release it before rethrowing.
+        val provider = core.createSignalingProvider(core.config, "room-1")
+        try {
+            core.buildSessionReleasingProviderOnFailure(provider) {
+                throw RuntimeException("boom during session construction")
+            }
+            fail("Expected the construction failure to propagate")
+        } catch (error: RuntimeException) {
+            assertEquals("boom during session construction", error.message)
+        }
+
+        // Bind released: a subsequent v1 join on the same core binds instead of
+        // failing SingleSessionProviderInUseException.
+        val second = core.createSignalingProvider(core.config, "room-2")
+        assertNotNull(second)
+        second.disconnect()
+    }
+
+    @Test
+    fun `v1 guard is process-wide so two cores sharing one v1 provider cannot both bind`() {
+        val v1 = FakeSignalingProvider()
+        val coreA = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+        val coreB = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        val channelA = coreA.createSignalingProvider(coreA.config, "room-1")
+
+        // The second core shares the SAME v1 object. The guard is per provider object
+        // (process-wide), not per core, so binding from the other core must fail rather
+        // than clobber the shared listener.
+        try {
+            coreB.createSignalingProvider(coreB.config, "room-2")
+            fail("Expected the second core's bind of the shared v1 provider to fail")
+        } catch (error: SingleSessionProviderInUseException) {
+            assertEquals(SINGLE_SESSION_PROVIDER_IN_USE_MESSAGE, error.message)
+            assertEquals(CallError.ProviderUnavailable, error.callError)
+        }
+
+        // Closing the first channel releases the process-wide bind; the second core may
+        // now bind the same provider object.
+        channelA.disconnect()
+        val channelB = coreB.createSignalingProvider(coreB.config, "room-3")
+        assertNotNull(channelB)
+        channelB.disconnect()
+    }
+
+    @Test
     fun `v1 channel detaches the listener on close so late events are dropped`() {
         val v1 = FakeSignalingProvider()
         val core = SerenadaCore(
