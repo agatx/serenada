@@ -203,11 +203,20 @@ HOOK_EOF
 # when the cert isn't due, leaving the renewal config still pointing at
 # standalone/nginx. Force-renewal guarantees certbot rewrites the lineage
 # config with authenticator=webroot. This block only runs once per VPS (the
-# AUTH check skips it on subsequent deploys), so the extra issuance is a
+# AUTH+path check skips it on subsequent deploys), so the extra issuance is a
 # one-time cost during migration.
+#
+# Checking authenticator alone is NOT enough: a config can say webroot but
+# carry a stale/malformed path (e.g. a hand-edited [webroot] section pointing
+# at a path that only exists inside the nginx container). That exact state
+# expired serenada.app in July 2026 — certbot failed twice daily with
+# "Missing command line flag or config entry" while the authenticator check
+# reported everything as already migrated. So also require webroot_path to
+# match the live docker volume mountpoint.
 AUTH=\$(\$SUDO awk -F' = ' '/^authenticator/{print \$2; exit}' "\$CERT_CONF")
-if [ "\$AUTH" != "webroot" ]; then
-    echo "🔧 Cert was using authenticator=\$AUTH; reconfiguring to webroot..."
+CONF_WEBROOT=\$(\$SUDO awk -F' = ' '/^webroot_path/{print \$2; exit}' "\$CERT_CONF" | tr -d ' ' | sed 's/,\$//')
+if [ "\$AUTH" != "webroot" ] || [ "\$CONF_WEBROOT" != "\$WEBROOT_PATH" ]; then
+    echo "🔧 Cert renewal config invalid (authenticator=\$AUTH, webroot_path=\${CONF_WEBROOT:-unset}); reconfiguring to webroot..."
     DOMAINS=\$(\$SUDO certbot certificates --cert-name "${DOMAIN}" 2>/dev/null \\
         | awk -F': ' '/Domains:/{print \$2; exit}')
     [ -z "\$DOMAINS" ] && DOMAINS="${DOMAIN}"
@@ -234,10 +243,28 @@ fi
 # is harmless if both are enabled.
 if command -v crontab >/dev/null 2>&1; then
     CRON_CMD="0 3 * * 0 certbot renew --quiet"
-    ( \$SUDO crontab -l 2>/dev/null | grep -v 'certbot renew'; echo "\$CRON_CMD" ) | \$SUDO crontab -
+    # '|| true' matters: with no pre-existing crontab (or one with no other
+    # entries), grep exits 1 and set -e would kill the subshell BEFORE the
+    # echo — installing an empty crontab while the deploy still reports
+    # success. That silently left serenada.app without the cron entry.
+    ( \$SUDO crontab -l 2>/dev/null | grep -v 'certbot renew' || true; echo "\$CRON_CMD" ) | \$SUDO crontab -
+    \$SUDO crontab -l | grep -qF "\$CRON_CMD"
     echo "✅ SSL auto-renewal cron job is configured (weekly, zero-downtime)"
 else
     echo "⚠️  crontab not found — install cron (apt install cron) to enable SSL auto-renewal"
+fi
+
+# Prove the renewal path actually works end-to-end (staging ACME server, real
+# HTTP-01 challenge through the live nginx). A misconfigured lineage otherwise
+# fails silently twice a day in certbot.timer until the cert expires — this
+# turns that into a visible deploy failure.
+echo "🧪 Verifying cert renewal end-to-end (certbot renew --dry-run)..."
+if \$SUDO certbot renew --cert-name "${DOMAIN}" --dry-run --quiet; then
+    echo "✅ Renewal dry-run succeeded for ${DOMAIN}"
+else
+    echo "❌ Renewal dry-run FAILED for ${DOMAIN} — auto-renewal is broken."
+    echo "   Debug on the VPS with: certbot renew --cert-name ${DOMAIN} --dry-run"
+    exit 1
 fi
 RENEWAL_EOF
 

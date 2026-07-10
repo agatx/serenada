@@ -225,14 +225,25 @@ private struct URLFirstCallFlow: View {
             core = newCore
             let newSession = newCore.join(url: url)
             newSession.onPermissionsRequired = { permissions in
+                // This callback covers both the join gate and in-call toggles. Disambiguate by
+                // phase so an in-call permission request never tears the live call down via
+                // cancelJoin().
+                let isJoin = newSession.state.phase == .awaitingPermissions
                 Task {
                     let granted = await SerenadaPermissions.request(permissions)
-                    if granted {
-                        newSession.resumeJoin()
-                    } else {
-                        newSession.cancelJoin()
-                        onDismiss?()
+                    if isJoin {
+                        if granted {
+                            newSession.resumeJoin()
+                        } else {
+                            newSession.cancelJoin()
+                            onDismiss?()
+                        }
+                    } else if granted {
+                        // Re-apply the in-call toggle that was blocked, now that access is granted.
+                        if permissions.contains(.camera) { newSession.toggleVideo() }
+                        if permissions.contains(.microphone) { newSession.toggleAudio() }
                     }
+                    // In-call + denied: leave the call running; the host UI may steer to Settings.
                 }
             }
             session = newSession
