@@ -135,6 +135,9 @@ final class AutoJoinSignalingProvider: SignalingProvider, @unchecked Sendable {
     private let localCid: String
     private let remoteCid: String?
     private let autoJoin: Bool
+    /// Room ids the session asked this provider channel to join. Lets a
+    /// provider-mode test assert the CANONICAL room id reached the channel.
+    private(set) var joinedRoomIds: [String] = []
 
     init(localCid: String, remoteCid: String?, autoJoin: Bool) {
         self.localCid = localCid
@@ -152,6 +155,7 @@ final class AutoJoinSignalingProvider: SignalingProvider, @unchecked Sendable {
     func disconnect() {}
 
     func joinRoom(_ roomId: String, options: JoinOptions) {
+        joinedRoomIds.append(roomId)
         guard autoJoin else { return }
         let delegate = self.delegate
         let localCid = self.localCid

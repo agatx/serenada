@@ -448,12 +448,20 @@ public final class SerenadaCallRegistry: ObservableObject {
             self.sessionFactory = sessionFactory
         } else {
             self.sessionFactory = { room, role in
-                let url = room.url ?? room.roomId.flatMap { core.roomURL(forRoomId: $0) }
-                guard let url else {
-                    preconditionFailure("RoomRef must carry a URL or a roomId resolvable to a server host")
-                }
+                // Total (never crashes): `createAndRegister` validates
+                // `canonicalRoomId(room)` BEFORE claiming the registry mode, so a
+                // room id is always resolvable here (a RoomRef carries a url or a
+                // bare roomId). Resolve a URL only in server mode — provider mode has
+                // no server host, so `roomURL` stays nil and the managed session
+                // opens the provider channel with the bare room id (mirrors the
+                // direct `join(roomId:)` path).
+                let roomId = room.roomId
+                    ?? room.url.map { DeepLinkParser.extractRoomId(from: $0) ?? $0.lastPathComponent }
+                    ?? ""
+                let roomURL = room.url ?? core.roomURL(forRoomId: roomId)
                 return core.makeManagedSession(
-                    url: url,
+                    roomId: roomId,
+                    roomURL: roomURL,
                     initialMediaRole: role,
                     displayName: room.displayName,
                     peerId: room.peerId,
@@ -1226,9 +1234,17 @@ public final class SerenadaCallRegistry: ObservableObject {
     }
 
     private func canonicalRoomId(_ room: RoomRef) -> String? {
+        let token: String?
         if let url = room.url {
-            return DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
+            token = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
+        } else {
+            token = room.roomId
         }
-        return room.roomId
+        // Reject an empty token so an invalid RoomRef fails BEFORE claiming the
+        // registry mode (no leaked claim) rather than constructing a room-less
+        // session. This is the validation gate the default sessionFactory relies on
+        // to stay total.
+        guard let token, !token.isEmpty else { return nil }
+        return token
     }
 }

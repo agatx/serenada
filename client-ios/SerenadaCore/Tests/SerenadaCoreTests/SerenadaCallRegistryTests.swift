@@ -713,4 +713,81 @@ final class SerenadaCallRegistryTests: XCTestCase {
 
         await h.teardown()
     }
+
+    // MARK: - Default sessionFactory over a provider-mode core (F3)
+
+    /// The `RegistryTestHarness` always injects its own factory, so these cases use
+    /// the DEFAULT factory (`core.makeManagedSession`) over a custom-signaling
+    /// (provider-mode) core, where `core.roomURL(forRoomId:)` returns nil. Before
+    /// the fix a bare `RoomRef(roomId:)` join crashed in that factory
+    /// (`preconditionFailure`). Each case owns a dedicated arbiter for isolation.
+
+    /// Build a provider-mode registry using the DEFAULT session factory.
+    private func makeProviderModeRegistry(
+        provider: AutoJoinSignalingProvider,
+        arbiter: ForegroundMediaArbiter
+    ) -> SerenadaCallRegistry {
+        let core = SerenadaCore(config: SerenadaConfig(signalingProvider: provider))
+        return SerenadaCallRegistry(core: core, arbiter: arbiter, clock: FakeSessionClock())
+    }
+
+    func testProviderModeBareRoomRefJoinsHeldWithoutCrashing() async {
+        let arbiter = ForegroundMediaArbiter()
+        let provider = AutoJoinSignalingProvider(localCid: "local-1", remoteCid: "remote-1", autoJoin: true)
+        let registry = makeProviderModeRegistry(provider: provider, arbiter: arbiter)
+
+        let result = await registry.joinHeld(RoomRef(roomId: "room-abc"))
+
+        guard case let .joined(id) = result else {
+            return XCTFail("provider-mode bare-room joinHeld should succeed, got \(result)")
+        }
+        let call = registry.call(id: id)
+        XCTAssertEqual(call?.roomId, "room-abc", "the canonical bare room id is preserved")
+        XCTAssertNil(call?.roomUrl, "provider mode resolves NO room URL (bare join)")
+        XCTAssertNil(call?.session?.roomUrl, "the managed session keeps roomUrl nil in provider mode")
+        XCTAssertEqual(provider.joinedRoomIds, ["room-abc"],
+                       "the provider channel is opened with the canonical bare room id")
+
+        await registry.close()
+        arbiter.resetForTests()
+    }
+
+    func testProviderModeUrlRoomRefStillJoinsHeld() async {
+        let arbiter = ForegroundMediaArbiter()
+        let provider = AutoJoinSignalingProvider(localCid: "local-1", remoteCid: "remote-1", autoJoin: true)
+        let registry = makeProviderModeRegistry(provider: provider, arbiter: arbiter)
+
+        let url = URL(string: "https://serenada.app/call/roomtoken1234567890abcdef")!
+        let result = await registry.joinHeld(RoomRef(url: url))
+
+        guard case let .joined(id) = result else {
+            return XCTFail("provider-mode URL joinHeld should succeed, got \(result)")
+        }
+        let canonical = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
+        let call = registry.call(id: id)
+        XCTAssertEqual(call?.roomId, canonical)
+        XCTAssertEqual(call?.roomUrl, url, "a URL-based ref keeps its informational room URL")
+        XCTAssertEqual(provider.joinedRoomIds, [canonical],
+                       "the provider channel is opened with the canonical room id from the URL")
+
+        await registry.close()
+        arbiter.resetForTests()
+    }
+
+    func testProviderModeEmptyRoomRefFailsWithoutLeakingModeClaim() async {
+        let arbiter = ForegroundMediaArbiter()
+        let provider = AutoJoinSignalingProvider(localCid: "local-1", remoteCid: "remote-1", autoJoin: true)
+        let registry = makeProviderModeRegistry(provider: provider, arbiter: arbiter)
+
+        let result = await registry.joinHeld(RoomRef(roomId: ""))
+
+        guard case .failed = result else {
+            return XCTFail("an empty room ref must fail, got \(result)")
+        }
+        XCTAssertNil(arbiter.owningMode, "a rejected create must not claim (or leak) the owning mode")
+        XCTAssertTrue(provider.joinedRoomIds.isEmpty, "no session/channel is opened for an invalid ref")
+        XCTAssertTrue(registry.calls.isEmpty)
+
+        arbiter.resetForTests()
+    }
 }

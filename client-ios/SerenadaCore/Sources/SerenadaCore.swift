@@ -199,16 +199,21 @@ public final class SerenadaCore {
     /// wiring of `join(url:)` so a registry-created session signals identically to
     /// a direct one; only the role and lease ownership differ.
     func makeManagedSession(
-        url: URL,
+        roomId: String,
+        roomURL: URL?,
         initialMediaRole: CallMediaRole,
         displayName: String? = nil,
         peerId: String? = nil,
         arbiter: ForegroundMediaArbiter
     ) -> SerenadaSession {
-        let roomId = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
-        let target = DeepLinkParser.parseTarget(from: url)
+        // Resolve a server host only in server mode (a URL is always present
+        // then). In provider mode `resolvedConfig.serverHost` is nil and `roomURL`
+        // is nil too — the session keeps `roomUrl` nil and opens the provider
+        // channel with the bare `roomId` (mirrors the direct `join(roomId:)` path;
+        // `roomUrl` is informational only).
+        let target = roomURL.flatMap { DeepLinkParser.parseTarget(from: $0) }
         let serverHost = target?.host
-            ?? DeepLinkParser.normalizeHostValue(authorityHost(from: url))
+            ?? DeepLinkParser.normalizeHostValue(roomURL.flatMap { authorityHost(from: $0) })
             ?? resolvedConfig.serverHost
         let sessionConfig: SerenadaConfig
         if resolvedConfig.serverHost != nil {
@@ -231,7 +236,7 @@ public final class SerenadaCore {
         }
         return SerenadaSession(
             roomId: roomId,
-            roomUrl: url,
+            roomUrl: roomURL,
             config: sessionConfig,
             delegateProvider: { [weak self] in self?.delegate },
             logger: logger,
