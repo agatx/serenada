@@ -439,6 +439,71 @@ final class HoldResumeTests: XCTestCase {
         harness.tearDown()
     }
 
+    /// Post-merge regression (F5): main added a mic-permission gate at the top of
+    /// `toggleAudio`; the PR added the held-intent guard inside `setMicMuted`. A
+    /// HELD call with a DENIED mic permission must still record desired intent
+    /// (mirroring `setVideoEnabled`'s held ordering) — the gate must be SKIPPED
+    /// while held so `onPermissionsRequired` does NOT fire and the intent is not
+    /// dropped. Foreground denied-permission behavior is unchanged. The gate reads
+    /// `AVCaptureDevice.authorizationStatus` via an injectable seam because the
+    /// simulator default (`.notDetermined`) would silently pass it.
+    func testToggleAudioWhileHeldSkipsMicPermissionGateAndRecordsIntent() async {
+        let harness = await makeInCallHarness()
+        harness.session.microphonePermissionStatus = { .denied }
+        var permissionPrompts: [[MediaCapability]] = []
+        harness.session.onPermissionsRequired = { permissionPrompts.append($0) }
+
+        // FOREGROUND + denied: the gate BLOCKS, fires the callback, records no intent.
+        let audioBefore = harness.fakeMedia.toggleAudioCalls.count
+        let coordBefore = harness.fakeAudioCoordinator.micMutedValues.count
+        let broadcastsBefore = harness.fakeProvider
+            .broadcastMessages(ofType: "participant_media_state").count
+
+        harness.session.toggleAudio()
+        await yieldToMainActor()
+
+        XCTAssertEqual(permissionPrompts, [[.microphone]],
+                       "Foreground toggleAudio with denied mic must fire onPermissionsRequired")
+        XCTAssertEqual(harness.fakeMedia.toggleAudioCalls.count, audioBefore,
+                       "A blocked foreground toggle must not touch the audio track")
+        XCTAssertEqual(harness.fakeAudioCoordinator.micMutedValues.count, coordBefore,
+                       "A blocked foreground toggle must not call the coordinator")
+        XCTAssertEqual(
+            harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").count,
+            broadcastsBefore,
+            "A blocked foreground toggle must not broadcast")
+
+        // HOLD, then toggle audio with the SAME denied permission.
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        XCTAssertTrue(harness.session.desiredAudioEnabledForRegistry,
+                      "precondition: desired audio starts enabled")
+        permissionPrompts.removeAll()
+        let audioBeforeHeld = harness.fakeMedia.toggleAudioCalls.count
+        let coordBeforeHeld = harness.fakeAudioCoordinator.micMutedValues.count
+        let broadcastsBeforeHeld = harness.fakeProvider
+            .broadcastMessages(ofType: "participant_media_state").count
+
+        harness.session.toggleAudio()
+        await yieldToMainActor()
+
+        XCTAssertFalse(harness.session.desiredAudioEnabledForRegistry,
+                       "A held toggleAudio must record the muted desired intent even when mic permission is denied")
+        XCTAssertTrue(permissionPrompts.isEmpty,
+                      "A held toggleAudio must NOT fire onPermissionsRequired")
+        XCTAssertEqual(harness.fakeMedia.toggleAudioCalls.count, audioBeforeHeld,
+                       "A held toggleAudio must NOT touch the audio track")
+        XCTAssertEqual(harness.fakeAudioCoordinator.micMutedValues.count, coordBeforeHeld,
+                       "A held toggleAudio must NOT call the coordinator")
+        XCTAssertEqual(
+            harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").count,
+            broadcastsBeforeHeld,
+            "A held toggleAudio must NOT broadcast participant_media_state")
+        XCTAssertFalse(harness.session.actualAudioPublished)
+
+        harness.tearDown()
+    }
+
     /// A camera-mode flip while held must advance the DESIRED mode (so resume
     /// reacquires in the chosen mode) without engaging the capturer.
     func testFlipCameraWhileHeldUpdatesDesiredModeWithoutCapture() async {

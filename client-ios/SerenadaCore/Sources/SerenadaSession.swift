@@ -289,6 +289,12 @@ public final class SerenadaSession: ObservableObject {
     /// Defaults to the live `AVCaptureDevice`/`AVAudioSession` status; tests inject
     /// a fake. Returns whether the given capability is already granted.
     private let isCapabilityGranted: (MediaCapability) -> Bool
+    /// Microphone-authorization seam used by `ensureMicrophonePermissionForAudioToggle`.
+    /// Defaults to the live `AVCaptureDevice` status; tests inject a fake so the
+    /// simulator's `.notDetermined` default does not silently pass the gate.
+    internal var microphonePermissionStatus: () -> AVAuthorizationStatus = {
+        AVCaptureDevice.authorizationStatus(for: .audio)
+    }
     /// Process-wide arbiter. The DIRECT single-call `join()` path acquires the
     /// lease (mode `direct`) before activating media and releases it in
     /// `resetResources`; a second concurrent direct join fails fast. Registry-
@@ -697,7 +703,14 @@ public final class SerenadaSession: ObservableObject {
 
     /// Toggle local audio on or off.
     public func toggleAudio() {
-        guard ensureMicrophonePermissionForAudioToggle() else { return }
+        // Core Invariant 2: a held call owns NO capture, so a mute toggle records
+        // desired intent ONLY — skip the mic-permission gate (mirrors
+        // `setVideoEnabled`'s held ordering). Gating a held toggle behind a denied
+        // mic permission would fire `onPermissionsRequired` and drop the intent; the
+        // prompt/capture happen at resume. `setMicMuted` re-checks the held role.
+        if mediaRole != .held {
+            guard ensureMicrophonePermissionForAudioToggle() else { return }
+        }
         setMicMuted(!userMuted)
     }
 
@@ -707,7 +720,7 @@ public final class SerenadaSession: ObservableObject {
     /// because audio can't be captured without permission. `.notDetermined` is allowed through
     /// (the audio session prompts).
     private func ensureMicrophonePermissionForAudioToggle() -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        switch microphonePermissionStatus() {
         case .denied, .restricted:
             onPermissionsRequired?([.microphone])
             return false
