@@ -5,7 +5,6 @@ import android.os.Handler
 import android.os.Looper
 import app.serenada.core.call.CallMediaRole
 import app.serenada.core.network.CoreApiClient
-import java.util.Collections
 import java.util.IdentityHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -322,17 +321,36 @@ class SerenadaCore(
      * silently reusing the object (which would cross-wire the two sessions). The
      * returned channel releases the bind on its [SignalingProvider.disconnect] — the
      * call every session teardown makes — so sequential reuse keeps working. The bind
-     * set is process-wide (see [boundV1Providers]), so the guard holds across
+     * map is process-wide (see [boundV1Providers]), so the guard holds across
      * independent [SerenadaCore] instances that share one v1 provider object too.
+     *
+     * The map records the OWNING channel per provider object, not just membership, so a
+     * retiring channel only ever clears its OWN bind: a channel that already released
+     * (terminal reset) and then gets a late [SignalingProvider.disconnect] (host close)
+     * must not evict the entry a NEWER channel now owns for the same shared v1 object.
      */
     private fun bindSingleSessionProvider(provider: SignalingProvider): SignalingProvider {
         synchronized(boundV1Providers) {
-            if (!boundV1Providers.add(provider)) {
+            if (boundV1Providers.containsKey(provider)) {
                 throw SingleSessionProviderInUseException()
             }
-        }
-        return SingleSessionV1Channel(provider) {
-            synchronized(boundV1Providers) { boundV1Providers.remove(provider) }
+            val channel = SingleSessionV1Channel(provider) { owner ->
+                synchronized(boundV1Providers) {
+                    // Ownership-scoped one-shot: retire this channel's bind exactly
+                    // once, and only while it still owns the provider object. Returns
+                    // true on the first retire (so the channel forwards the underlying
+                    // disconnect) and false afterwards — or once a newer channel owns
+                    // the object — so a rebound provider is never torn down.
+                    if (boundV1Providers[provider] === owner) {
+                        boundV1Providers.remove(provider)
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+            boundV1Providers[provider] = channel
+            return channel
         }
     }
 
@@ -362,49 +380,61 @@ class SerenadaCore(
         const val VERSION = "0.9.1"
 
         /**
-         * Process-wide set of single-session (v1) [SignalingProvider] objects currently
-         * bound by a live session, keyed by object IDENTITY (contract §"v1 liveness
-         * guard"). The guard is per provider OBJECT, not per [SerenadaCore]: two cores
-         * configured with the SAME v1 provider would each keep an empty per-instance
-         * guard and both bind it, overwriting the shared [SignalingProvider.listener]
-         * and cross-wiring the two sessions. Keying here — above any single core — makes
-         * at most one session hold a given v1 object across the whole process. Server
-         * mode and [MultiSessionSignalingProvider] mode never touch this (both mint a
-         * fresh channel per session). Guarded by its own monitor so binds/releases stay
-         * consistent regardless of the calling thread.
+         * Process-wide map of single-session (v1) [SignalingProvider] objects currently
+         * bound by a live session to the [SingleSessionV1Channel] that owns the bind,
+         * keyed by object IDENTITY (contract §"v1 liveness guard"). The guard is per
+         * provider OBJECT, not per [SerenadaCore]: two cores configured with the SAME v1
+         * provider would each keep an empty per-instance guard and both bind it,
+         * overwriting the shared [SignalingProvider.listener] and cross-wiring the two
+         * sessions. Keying here — above any single core — makes at most one session hold
+         * a given v1 object across the whole process. Recording the owning channel (not
+         * bare membership) lets a retiring channel release only its OWN bind, never one a
+         * newer channel has since claimed for the same shared object. Server mode and
+         * [MultiSessionSignalingProvider] mode never touch this (both mint a fresh channel
+         * per session). Guarded by its own monitor so binds/releases stay consistent
+         * regardless of the calling thread.
          */
-        private val boundV1Providers: MutableSet<SignalingProvider> =
-            Collections.newSetFromMap(IdentityHashMap())
+        private val boundV1Providers: IdentityHashMap<SignalingProvider, SingleSessionV1Channel> =
+            IdentityHashMap()
     }
 }
 
 /**
  * Session-scoped wrapper around a single-session (v1) [SignalingProvider]. Delegates
- * every operation to the underlying provider but (1) detaches the session's listener
- * the instant the channel closes so a late/queued transport event can never reach a
- * torn-down session (closed-guard, contract §"Channel lifecycle"), and (2) releases
- * the [SerenadaCore] liveness bind via [onClose] exactly once, on the first
- * [disconnect] (the call every session teardown makes), so the v1 provider can be
- * reused by the next session.
+ * every operation to the underlying provider but is fully ONE-SHOT: the first
+ * [disconnect] retires the channel and only then touches the shared provider;
+ * everything after that is inert.
+ *
+ * On that first (and only) retire it (1) releases the [SerenadaCore] liveness bind via
+ * [retire] — ownership-scoped and synchronized with the companion lock, so it never
+ * evicts a bind a newer channel has since claimed for the same shared v1 object — then
+ * (2) detaches the session's listener and disconnects the underlying provider. Any
+ * later [disconnect]/[listener] mutation is dropped, so a terminal-error reset followed
+ * by a host `close()` on the same dead session can never tear down (or clear the
+ * listener of) a live session that has meanwhile rebound the shared provider object.
  */
 private class SingleSessionV1Channel(
     private val provider: SignalingProvider,
-    private val onClose: () -> Unit,
+    // Retires this channel's liveness bind. Returns true on the first call (this
+    // channel still owned the bind), false on any later call — the one-shot latch.
+    private val retire: (SingleSessionV1Channel) -> Boolean,
 ) : SignalingProvider by provider {
-    private var closed = false
+    private var retired = false
 
     override var listener: SignalingProvider.Listener?
         get() = provider.listener
         set(value) {
-            if (!closed) provider.listener = value
+            if (!retired) provider.listener = value
         }
 
     override fun disconnect() {
-        if (!closed) {
-            closed = true
-            provider.listener = null
-            onClose()
-        }
+        // Ownership-scoped one-shot: retire the bind under the companion lock. If this
+        // channel had already released (or a newer channel now owns the shared
+        // provider), do NOT forward to the underlying provider — that would tear down
+        // whoever owns it now.
+        if (!retire(this)) return
+        retired = true
+        provider.listener = null
         provider.disconnect()
     }
 }

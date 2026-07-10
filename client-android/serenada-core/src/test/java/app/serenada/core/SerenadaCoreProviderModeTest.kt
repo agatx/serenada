@@ -304,4 +304,66 @@ class SerenadaCoreProviderModeTest {
         channel.listener = listener
         assertNull(v1.listener)
     }
+
+    @Test
+    fun `retired v1 channel does not disconnect a provider a newer channel rebound`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        // Session A binds the shared v1 object and reaches a terminal error: its
+        // teardown (resetResources -> signalingProvider.disconnect()) retires channel A
+        // and releases the bind.
+        val channelA = core.createSignalingProvider(core.config, "room-A")
+        channelA.listener = object : SignalingProvider.Listener {}
+        channelA.disconnect()
+        assertEquals(1, v1.disconnectCalls)
+        assertNull(v1.listener)
+
+        // The same v1 object is now rebound for a NEW live session B.
+        val channelB = core.createSignalingProvider(core.config, "room-B")
+        var bReceived = 0
+        val listenerB = object : SignalingProvider.Listener {
+            override fun onPeerJoined(event: PeerEvent) {
+                bReceived += 1
+            }
+        }
+        channelB.listener = listenerB
+        assertSame(listenerB, v1.listener)
+
+        // Host now closes the dead session A. A late disconnect on the already-retired
+        // channel must be fully inert: it must NOT forward to the shared provider (no
+        // extra disconnect) nor detach B's listener.
+        channelA.disconnect()
+        assertEquals(1, v1.disconnectCalls)
+        assertSame(listenerB, v1.listener)
+
+        // B is still wired up and receiving.
+        v1.simulatePeerJoined("peer-1")
+        assertEquals(1, bReceived)
+
+        channelB.disconnect()
+    }
+
+    @Test
+    fun `double close on a v1 channel disconnects the underlying provider once`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+        val channel = core.createSignalingProvider(core.config, "room-1")
+
+        channel.disconnect()
+        channel.disconnect()
+
+        assertEquals(1, v1.disconnectCalls)
+
+        // The bind was released on the first close, so the same object rebinds cleanly.
+        val reused = core.createSignalingProvider(core.config, "room-2")
+        assertNotNull(reused)
+        reused.disconnect()
+    }
 }
