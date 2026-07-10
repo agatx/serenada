@@ -883,4 +883,191 @@ final class SerenadaCallRegistryTests: XCTestCase {
 
         arbiter.resetForTests()
     }
+
+    // MARK: - Multi-session signaling provider over the real registry path (F2)
+
+    /// These cases configure ONE global v2 ``FakeMultiSessionSignalingProvider`` and
+    /// drive TWO concurrent sessions through the DEFAULT factory (`makeManagedSession`)
+    /// so each session is backed by its OWN vended channel — proving the channel-per-
+    /// session fix isolates CIDs/events and scopes outbound ops + teardown per channel.
+
+    private func makeMultiSessionRegistry(
+        service: FakeMultiSessionSignalingProvider,
+        arbiter: ForegroundMediaArbiter
+    ) -> SerenadaCallRegistry {
+        let core = SerenadaCore(config: SerenadaConfig(multiSessionSignalingProvider: service))
+        return SerenadaCallRegistry(core: core, arbiter: arbiter, clock: FakeSessionClock())
+    }
+
+    /// Join both rooms held; returns their CallIds once each channel has joined.
+    private func joinTwoHeld(
+        _ registry: SerenadaCallRegistry,
+        _ roomA: String,
+        _ roomB: String
+    ) async -> (CallId, CallId)? {
+        guard case let .joined(idA) = await registry.joinHeld(RoomRef(roomId: roomA)),
+              case let .joined(idB) = await registry.joinHeld(RoomRef(roomId: roomB)) else {
+            return nil
+        }
+        await waitUntil {
+            registry.call(id: idA)?.session?.state.localParticipant.cid != nil
+                && registry.call(id: idB)?.session?.state.localParticipant.cid != nil
+        }
+        return (idA, idB)
+    }
+
+    func testTwoSessionsGetIsolatedChannelsWithDistinctCids() async {
+        let arbiter = ForegroundMediaArbiter()
+        let service = FakeMultiSessionSignalingProvider()
+        let registry = makeMultiSessionRegistry(service: service, arbiter: arbiter)
+
+        guard let (idA, idB) = await joinTwoHeld(registry, "room-A", "room-B") else {
+            return XCTFail("both multi-session held joins should succeed")
+        }
+
+        let a = registry.call(id: idA)?.session?.state
+        let b = registry.call(id: idB)?.session?.state
+        // CIDs stay isolated: neither session sees the other's local or remote CID.
+        XCTAssertEqual(a?.localParticipant.cid, "local-room-A")
+        XCTAssertEqual(b?.localParticipant.cid, "local-room-B")
+        XCTAssertTrue(a?.remoteParticipants.contains { $0.cid == "remote-room-A" } ?? false)
+        XCTAssertFalse(a?.remoteParticipants.contains { $0.cid == "remote-room-B" } ?? true)
+        XCTAssertTrue(b?.remoteParticipants.contains { $0.cid == "remote-room-B" } ?? false)
+        XCTAssertFalse(b?.remoteParticipants.contains { $0.cid == "remote-room-A" } ?? true)
+
+        // openSession: exactly one per session, each with the canonical room id, and
+        // each channel was asked to join only its own room.
+        XCTAssertEqual(service.openedRoomIds, ["room-A", "room-B"])
+        XCTAssertEqual(service.openCount(forRoomId: "room-A"), 1)
+        XCTAssertEqual(service.openCount(forRoomId: "room-B"), 1)
+        XCTAssertEqual(service.channel(forRoomId: "room-A")?.joinedRoomIds, ["room-A"])
+        XCTAssertEqual(service.channel(forRoomId: "room-B")?.joinedRoomIds, ["room-B"])
+
+        await registry.close()
+        arbiter.resetForTests()
+    }
+
+    func testLeavingOneCallClosesOnlyItsChannelAndLeavesTheOtherLive() async {
+        let arbiter = ForegroundMediaArbiter()
+        let service = FakeMultiSessionSignalingProvider()
+        let registry = makeMultiSessionRegistry(service: service, arbiter: arbiter)
+
+        guard let (idA, idB) = await joinTwoHeld(registry, "room-A", "room-B") else {
+            return XCTFail("both multi-session held joins should succeed")
+        }
+        let channelA = service.channel(forRoomId: "room-A")!
+        let channelB = service.channel(forRoomId: "room-B")!
+
+        await registry.leaveCall(id: idA)
+        await waitUntil { channelA.isClosed }
+
+        // Outbound leave + teardown hit ONLY A's channel; B's channel is untouched.
+        XCTAssertEqual(channelA.leaveCalls, 1, "leave routes to A's channel")
+        XCTAssertEqual(channelB.leaveCalls, 0, "B's channel receives no leave")
+        XCTAssertEqual(channelA.disconnectCalls, 1, "A's channel is closed exactly once at teardown")
+        XCTAssertFalse(channelB.isClosed, "closing A does not disconnect B")
+
+        // A second close is tolerated (idempotence) and does not resurrect anything.
+        channelA.disconnect()
+        XCTAssertTrue(channelA.isClosed)
+
+        // B still receives events after A closed.
+        let before = registry.call(id: idB)?.session?.state.remoteParticipants.count ?? 0
+        channelB.simulatePeerJoined(peerId: "late-peer-B")
+        await waitUntil { (registry.call(id: idB)?.session?.state.remoteParticipants.count ?? 0) > before }
+        XCTAssertTrue(
+            registry.call(id: idB)?.session?.state.remoteParticipants.contains { $0.cid == "late-peer-B" } ?? false,
+            "B's live channel keeps delivering events after A is gone"
+        )
+        XCTAssertEqual(registry.call(id: idA)?.session?.state.phase, .idle, "A stays torn down after leave")
+
+        await registry.close()
+        arbiter.resetForTests()
+    }
+
+    func testIceServerFetchesAreChannelScoped() async {
+        let arbiter = ForegroundMediaArbiter()
+        let service = FakeMultiSessionSignalingProvider()
+        let registry = makeMultiSessionRegistry(service: service, arbiter: arbiter)
+
+        guard let _ = await joinTwoHeld(registry, "room-A", "room-B") else {
+            return XCTFail("both multi-session held joins should succeed")
+        }
+        await waitUntil {
+            (service.channel(forRoomId: "room-A")?.getIceServersCallCount ?? 0) >= 1
+                && (service.channel(forRoomId: "room-B")?.getIceServersCallCount ?? 0) >= 1
+        }
+
+        // Each session fetched ICE through ITS OWN channel — not the other's, and
+        // not the service-level (diagnostics) API.
+        XCTAssertGreaterThanOrEqual(service.channel(forRoomId: "room-A")!.getIceServersCallCount, 1)
+        XCTAssertGreaterThanOrEqual(service.channel(forRoomId: "room-B")!.getIceServersCallCount, 1)
+        XCTAssertEqual(service.getIceServersCallCount, 0,
+                       "sessions fetch ICE via their channel, never the service-level diagnostics API")
+
+        await registry.close()
+        arbiter.resetForTests()
+    }
+
+    func testEventEmittedIntoClosedChannelIsNotObservedByAnySession() async {
+        let arbiter = ForegroundMediaArbiter()
+        let service = FakeMultiSessionSignalingProvider()
+        let registry = makeMultiSessionRegistry(service: service, arbiter: arbiter)
+
+        guard let (idA, idB) = await joinTwoHeld(registry, "room-A", "room-B") else {
+            return XCTFail("both multi-session held joins should succeed")
+        }
+        let channelA = service.channel(forRoomId: "room-A")!
+
+        await registry.leaveCall(id: idA)
+        await waitUntil { channelA.isClosed }
+
+        // A stale event injected into the now-closed channel A must reach nobody —
+        // the SDK unbound its delegate at teardown.
+        channelA.simulateMessage(from: "ghost", type: "offer")
+        channelA.simulatePeerJoined(peerId: "ghost-peer")
+        await yieldToMainActor()
+
+        XCTAssertNil(
+            registry.call(id: idA)?.session?.state.remoteParticipants.first { $0.cid == "ghost-peer" },
+            "the terminal session A does not process a post-close event"
+        )
+        XCTAssertNil(
+            registry.call(id: idB)?.session?.state.remoteParticipants.first { $0.cid == "ghost-peer" },
+            "a stale event on A's channel never leaks into B"
+        )
+
+        await registry.close()
+        arbiter.resetForTests()
+    }
+
+    func testConcurrentRegistryJoinOnV1ProviderFailsSecondButNotFirst() async {
+        let arbiter = ForegroundMediaArbiter()
+        let provider = AutoJoinSignalingProvider(localCid: "local-1", remoteCid: "remote-1", autoJoin: true)
+        let core = SerenadaCore(config: SerenadaConfig(signalingProvider: provider))
+        let registry = SerenadaCallRegistry(core: core, arbiter: arbiter, clock: FakeSessionClock())
+
+        let first = await registry.joinHeld(RoomRef(roomId: "room-A"))
+        guard case let .joined(idA) = first else {
+            return XCTFail("the first v1 held join should succeed, got \(first)")
+        }
+
+        // A single-session v1 provider cannot back a second concurrent session.
+        let second = await registry.joinHeld(RoomRef(roomId: "room-B"))
+        guard case let .failed(_, error) = second else {
+            return XCTFail("a second concurrent v1 join must fail, got \(second)")
+        }
+        guard case let .joinFailed(message) = error else {
+            return XCTFail("expected a joinFailed activation error, got \(error)")
+        }
+        XCTAssertTrue(message.contains("providerUnavailable"),
+                      "the failure carries the typed provider-unavailable code, got: \(message)")
+
+        // The first session is entirely unaffected.
+        XCTAssertNil(registry.call(id: idA)?.session?.state.error)
+        XCTAssertNotEqual(registry.call(id: idA)?.session?.state.phase, .error)
+
+        await registry.close()
+        arbiter.resetForTests()
+    }
 }

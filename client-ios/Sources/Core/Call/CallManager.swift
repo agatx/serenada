@@ -708,6 +708,8 @@ final class CallManager: ObservableObject {
             return L10n.callStatusSessionExpired
         case .permissionDenied:
             return L10n.callStatusConnectionFailed
+        case .providerUnavailable:
+            return L10n.errorUnknown
         case .serverError(let message), .unknown(let message):
             return message.isEmpty ? L10n.errorUnknown : message
         }

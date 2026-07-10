@@ -39,8 +39,17 @@ public let defaultCameraModes: [LocalCameraMode] = [.selfie, .world, .composite]
 public struct SerenadaConfig: Equatable, @unchecked Sendable {
     /// Server host or origin (e.g. "serenada.app" or "localhost:8080").
     public let serverHost: String?
-    /// Custom signaling provider. Provide exactly one of `serverHost` or `signalingProvider`.
+    /// Custom single-session signaling provider (v1). Provide exactly one of
+    /// `serverHost`, `signalingProvider`, or `multiSessionSignalingProvider`.
+    /// A v1 provider is single-call only: while one session is using it, a second
+    /// concurrent join fails with ``CallError/providerUnavailable``. For multi-call
+    /// (registry hold + switch) supply a `multiSessionSignalingProvider` instead.
     public let signalingProvider: SignalingProvider?
+    /// Custom multi-session signaling provider (v2). Vends one channel per session,
+    /// so the SDK can run several concurrent sessions over one custom service.
+    /// Provide exactly one of `serverHost`, `signalingProvider`, or
+    /// `multiSessionSignalingProvider`.
+    public let multiSessionSignalingProvider: MultiSessionSignalingProvider?
     /// Whether audio is enabled when joining a call. Defaults to `true`.
     public var defaultAudioEnabled: Bool
     /// Whether video is enabled when joining a call. Defaults to `true`. When this is `false`,
@@ -88,6 +97,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
     public init(
         serverHost: String? = nil,
         signalingProvider: SignalingProvider? = nil,
+        multiSessionSignalingProvider: MultiSessionSignalingProvider? = nil,
         defaultAudioEnabled: Bool = true,
         defaultVideoEnabled: Bool = true,
         videoMediaEnabled: Bool = true,
@@ -102,6 +112,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
     ) {
         self.serverHost = serverHost
         self.signalingProvider = signalingProvider
+        self.multiSessionSignalingProvider = multiSessionSignalingProvider
         self.defaultAudioEnabled = defaultAudioEnabled
         self.defaultVideoEnabled = defaultVideoEnabled
         self.videoMediaEnabled = videoMediaEnabled
@@ -127,6 +138,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
             && lhs.transports == rhs.transports
             && lhs.proximityMonitoringEnabled == rhs.proximityMonitoringEnabled
             && haveSameProvider(lhs.signalingProvider, rhs.signalingProvider)
+            && haveSameMultiSessionProvider(lhs.multiSessionSignalingProvider, rhs.multiSessionSignalingProvider)
             && lhs.audioCoordinator === rhs.audioCoordinator
             && lhs.audioIntent == rhs.audioIntent
     }
@@ -135,26 +147,41 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
 internal struct ResolvedSerenadaConfig {
     let serverHost: String?
     let signalingProvider: SignalingProvider?
+    let multiSessionSignalingProvider: MultiSessionSignalingProvider?
 }
 
 internal let SUPPORTED_SIGNALING_PROVIDER_VERSION = 1
+internal let MULTI_SESSION_SIGNALING_PROVIDER_VERSION = 2
 
 internal func resolveSerenadaConfig(_ config: SerenadaConfig) throws -> ResolvedSerenadaConfig {
     let serverHost = config.serverHost?
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .nilIfEmpty
     let signalingProvider = config.signalingProvider
+    let multiSessionSignalingProvider = config.multiSessionSignalingProvider
 
-    guard (serverHost == nil) != (signalingProvider == nil) else {
-        throw APIError.invalidResponse("Provide exactly one of serverHost or signalingProvider")
+    // Exactly one signaling source: server host, a v1 provider, or a v2
+    // multi-session provider. Zero or more than one is a configuration error.
+    let sourceCount = [serverHost != nil, signalingProvider != nil, multiSessionSignalingProvider != nil]
+        .filter { $0 }.count
+    guard sourceCount == 1 else {
+        throw APIError.invalidResponse(
+            "Provide exactly one of serverHost, signalingProvider, or multiSessionSignalingProvider"
+        )
     }
     if let signalingProvider, signalingProvider.version != SUPPORTED_SIGNALING_PROVIDER_VERSION {
         throw APIError.invalidResponse("Unsupported signalingProvider version: \(signalingProvider.version)")
     }
+    if let multiSessionSignalingProvider, multiSessionSignalingProvider.version != MULTI_SESSION_SIGNALING_PROVIDER_VERSION {
+        throw APIError.invalidResponse(
+            "Unsupported multiSessionSignalingProvider version: \(multiSessionSignalingProvider.version)"
+        )
+    }
 
     return ResolvedSerenadaConfig(
         serverHost: serverHost,
-        signalingProvider: signalingProvider
+        signalingProvider: signalingProvider,
+        multiSessionSignalingProvider: multiSessionSignalingProvider
     )
 }
 
@@ -167,6 +194,20 @@ internal func requireServerHost(_ config: SerenadaConfig) throws -> String {
 }
 
 private func haveSameProvider(_ lhs: SignalingProvider?, _ rhs: SignalingProvider?) -> Bool {
+    switch (lhs, rhs) {
+    case (nil, nil):
+        true
+    case let (lhs?, rhs?):
+        ObjectIdentifier(lhs) == ObjectIdentifier(rhs)
+    default:
+        false
+    }
+}
+
+private func haveSameMultiSessionProvider(
+    _ lhs: MultiSessionSignalingProvider?,
+    _ rhs: MultiSessionSignalingProvider?
+) -> Bool {
     switch (lhs, rhs) {
     case (nil, nil):
         true

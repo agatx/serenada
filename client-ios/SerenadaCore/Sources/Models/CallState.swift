@@ -250,6 +250,11 @@ public enum CallError: Equatable, Sendable {
     case sessionExpired
     /// Required media permissions were denied.
     case permissionDenied
+    /// The configured single-session (v1) `signalingProvider` is already in use by
+    /// another live session, so this concurrent join cannot bind it. A v1 provider
+    /// supports one call at a time; supply a `multiSessionSignalingProvider` (v2)
+    /// for concurrent/multi-call use (registry hold + switch).
+    case providerUnavailable
     /// Server returned an error.
     case serverError(String)
     /// An unknown error occurred.

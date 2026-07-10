@@ -87,6 +87,15 @@ public final class SerenadaCore {
     /// app-group-scoped store before opening any session.
     public let recoveryStorage: RecoveryStorage
 
+    /// The live session that currently holds the configured single-session (v1)
+    /// `signalingProvider`, if any. A v1 provider has one `delegate` slot and
+    /// room-less ops, so it can back only ONE live session at a time; a second
+    /// concurrent join fails with ``CallError/providerUnavailable`` rather than
+    /// silently clobbering the first session's channel. Weak so a dropped session
+    /// frees the binding, and a session that reached a terminal phase is treated as
+    /// released (see ``v1ProviderIsInUse``), so sequential reuse works.
+    private weak var boundV1Session: SerenadaSession?
+
     public init(config: SerenadaConfig, recoveryStorage: RecoveryStorage = RecoveryStorage()) {
         self.config = config
         self.recoveryStorage = recoveryStorage
@@ -147,19 +156,22 @@ public final class SerenadaCore {
         } else {
             sessionConfig = config
         }
+        let resolution = resolveSessionProvider(for: sessionConfig, roomId: roomId)
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,
             config: sessionConfig,
             delegateProvider: { [weak self] in self?.delegate },
             logger: logger,
-            initialSignalingProvider: createSignalingProvider(for: sessionConfig),
+            initialSignalingProvider: resolution.provider,
             displayName: displayName,
             peerId: peerId,
             recoveryStorage: recoveryStorage,
             // Public single-call join owns its own direct foreground lease.
-            acquireForegroundLease: true
+            acquireForegroundLease: true,
+            initialStartupError: resolution.startupError
         )
+        if resolution.bindsV1 { boundV1Session = session }
         return session
     }
 
@@ -172,19 +184,22 @@ public final class SerenadaCore {
     public func join(roomId: String, displayName: String? = nil, peerId: String? = nil) -> SerenadaSession {
         let url = resolvedConfig.serverHost.flatMap { buildRoomURL(host: $0, roomId: roomId) }
 
+        let resolution = resolveSessionProvider(for: config, roomId: roomId)
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,
             config: config,
             delegateProvider: { [weak self] in self?.delegate },
             logger: logger,
-            initialSignalingProvider: createSignalingProvider(for: config),
+            initialSignalingProvider: resolution.provider,
             displayName: displayName,
             peerId: peerId,
             recoveryStorage: recoveryStorage,
             // Public single-call join owns its own direct foreground lease.
-            acquireForegroundLease: true
+            acquireForegroundLease: true,
+            initialStartupError: resolution.startupError
         )
+        if resolution.bindsV1 { boundV1Session = session }
         return session
     }
 
@@ -234,13 +249,14 @@ public final class SerenadaCore {
         } else {
             sessionConfig = config
         }
-        return SerenadaSession(
+        let resolution = resolveSessionProvider(for: sessionConfig, roomId: roomId)
+        let session = SerenadaSession(
             roomId: roomId,
             roomUrl: roomURL,
             config: sessionConfig,
             delegateProvider: { [weak self] in self?.delegate },
             logger: logger,
-            initialSignalingProvider: createSignalingProvider(for: sessionConfig),
+            initialSignalingProvider: resolution.provider,
             displayName: displayName,
             peerId: peerId,
             recoveryStorage: recoveryStorage,
@@ -248,8 +264,11 @@ public final class SerenadaCore {
             // The registry owns the lease + owning-mode for managed sessions, so a
             // managed session NEVER self-acquires/self-releases the direct lease.
             acquireForegroundLease: false,
+            initialStartupError: resolution.startupError,
             foregroundArbiter: arbiter
         )
+        if resolution.bindsV1 { boundV1Session = session }
+        return session
     }
 
     /// Create a new room. Returns the room URL and ID. Call ``join(url:displayName:peerId:)`` or ``join(roomId:displayName:peerId:)`` to start the call.
@@ -299,7 +318,43 @@ public final class SerenadaCore {
         return host
     }
 
-    private func createSignalingProvider(for sessionConfig: SerenadaConfig) -> SignalingProvider {
+    /// Resolution of which signaling channel a new session should use, plus how the
+    /// session should start.
+    private struct SessionProviderResolution {
+        /// The channel the session installs as its `signalingProvider`.
+        let provider: SignalingProvider
+        /// Non-nil when the session must fail immediately (v1 single-session
+        /// conflict) instead of joining — the session surfaces it as an error
+        /// ``CallState`` (registry maps it to a failed join).
+        let startupError: CallError?
+        /// True when this resolution bound the configured v1 provider to the new
+        /// session, so the caller records the session in ``boundV1Session``.
+        let bindsV1: Bool
+    }
+
+    /// Whether the configured v1 `signalingProvider` is currently held by a live
+    /// session. A session that reached a terminal phase (`.idle`/`.ending`/`.error`)
+    /// has already run its teardown (`disconnect()` + delegate unbind), so it no
+    /// longer holds the channel and a fresh join may reuse the provider.
+    private var v1ProviderIsInUse: Bool {
+        guard let bound = boundV1Session else { return false }
+        switch bound.state.phase {
+        case .idle, .ending, .error:
+            return false
+        case .awaitingPermissions, .joining, .waiting, .inCall:
+            return true
+        }
+    }
+
+    /// Pick the signaling channel for a new session bound to `roomId`.
+    ///
+    /// - Server mode: a fresh ``SerenadaServerProvider``.
+    /// - Multi-session (v2): a fresh channel from `openSession(roomId:)`.
+    /// - Single-session (v1): the configured provider, guarded — if another live
+    ///   session already holds it, resolve to an inert channel + a
+    ///   ``CallError/providerUnavailable`` startup error so the join fails cleanly
+    ///   instead of clobbering the in-use channel.
+    private func resolveSessionProvider(for sessionConfig: SerenadaConfig, roomId: String) -> SessionProviderResolution {
         let resolved: ResolvedSerenadaConfig
         do {
             resolved = try resolveSerenadaConfig(sessionConfig)
@@ -307,16 +362,50 @@ public final class SerenadaCore {
             preconditionFailure(error.localizedDescription)
         }
         if let serverHost = resolved.serverHost {
-            return SerenadaServerProvider(
+            let provider = SerenadaServerProvider(
                 serverHost: serverHost,
                 apiClient: CoreAPIClient(),
                 transports: sessionConfig.transports,
                 logger: logger
             )
+            return SessionProviderResolution(provider: provider, startupError: nil, bindsV1: false)
+        }
+        if let multiSession = resolved.multiSessionSignalingProvider {
+            // Each session gets its OWN channel — no cross-session liveness guard.
+            return SessionProviderResolution(
+                provider: multiSession.openSession(roomId: roomId),
+                startupError: nil,
+                bindsV1: false
+            )
         }
         guard let signalingProvider = resolved.signalingProvider else {
-            preconditionFailure("Provide exactly one of serverHost or signalingProvider")
+            preconditionFailure("Provide exactly one of serverHost, signalingProvider, or multiSessionSignalingProvider")
         }
-        return signalingProvider
+        if v1ProviderIsInUse {
+            return SessionProviderResolution(
+                provider: UnavailableSignalingProvider(),
+                startupError: .providerUnavailable,
+                bindsV1: false
+            )
+        }
+        return SessionProviderResolution(provider: signalingProvider, startupError: nil, bindsV1: true)
     }
+}
+
+/// Inert channel installed on a session that cannot bind the configured v1
+/// provider (single-session conflict). It never connects or emits; the session it
+/// backs fails immediately with ``CallError/providerUnavailable``. Keeping the
+/// session's `signalingProvider` non-nil lets teardown (`disconnect()`) run
+/// uniformly without touching the real, in-use v1 provider.
+private final class UnavailableSignalingProvider: SignalingProvider {
+    weak var delegate: SignalingProviderDelegate?
+
+    func connect() {}
+    func disconnect() {}
+    func joinRoom(_ roomId: String, options: JoinOptions) {}
+    func leaveRoom() {}
+    func endRoom() {}
+    func sendToPeer(_ peerId: String, type: String, payload: SignalingPayload?) {}
+    func broadcast(type: String, payload: SignalingPayload?) {}
+    func getIceServers() async throws -> [IceServerConfig] { [] }
 }

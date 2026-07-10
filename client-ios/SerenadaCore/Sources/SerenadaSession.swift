@@ -282,6 +282,11 @@ public final class SerenadaSession: ObservableObject {
     /// self-release the direct lease. Held-initial joins never take the lease at
     /// all regardless of this flag. Defaults to `false` (registry/test-managed).
     private let acquireForegroundLease: Bool
+    /// When non-nil, the join is doomed before it starts (e.g. the configured
+    /// single-session v1 provider is already in use by another live session). The
+    /// session installs an inert channel and, on `beginJoinIfNeeded`, transitions
+    /// straight to an error ``CallState`` carrying this code instead of connecting.
+    private let initialStartupError: CallError?
     /// The owner token of the in-flight or live foreground activation. Set by
     /// `activateForeground`, cleared on hold/abort. The fence for late callbacks.
     private var foregroundOwnerToken: ForegroundOwnerToken?
@@ -515,11 +520,13 @@ public final class SerenadaSession: ObservableObject {
         initialMediaRole: CallMediaRole = .foreground,
         acquireForegroundLease: Bool = false,
         isCapabilityGranted: ((MediaCapability) -> Bool)? = nil,
+        initialStartupError: CallError? = nil,
         foregroundArbiter: ForegroundMediaArbiter = .shared
     ) {
         self.recoveryStorage = recoveryStorage
         self.initialMediaRole = initialMediaRole
         self.acquireForegroundLease = acquireForegroundLease
+        self.initialStartupError = initialStartupError
         self.isCapabilityGranted = isCapabilityGranted ?? SerenadaSession.liveCapabilityGranted
         self.foregroundArbiter = foregroundArbiter
         self.roomId = roomId
@@ -1334,6 +1341,14 @@ public final class SerenadaSession: ObservableObject {
     private func beginJoinIfNeeded() async {
         guard !hasBegunJoin else { return }
         hasBegunJoin = true
+        // A join that was doomed at construction (e.g. the single-session v1
+        // provider is already in use) fails immediately with the recorded code
+        // instead of connecting the inert channel. The registry maps the resulting
+        // error phase to a failed join; a direct join surfaces it on `state.error`.
+        if let initialStartupError {
+            handleError(initialStartupError)
+            return
+        }
         joinAttemptSerial += 1
         currentError = nil
         currentRequiredPermissions = nil
@@ -2727,6 +2742,12 @@ public final class SerenadaSession: ObservableObject {
         audioLevelPoller?.stop()
         peerNegotiationEngine?.resetAll()
         signalingProvider.disconnect()
+        // Unbind from the channel at teardown so a late/queued provider event
+        // delivered after close is not processed by this now-terminal session.
+        // `resetResources` is terminal-only (leave/end/error/cancel) — reconnect
+        // reuses the still-bound delegate and never routes through here — so
+        // clearing it here cannot strand a live session.
+        signalingProvider.delegate = nil
         peerSlots.values.forEach { $0.closePeerConnection() }
         peerSlots.removeAll()
         webRtcEngine.release()

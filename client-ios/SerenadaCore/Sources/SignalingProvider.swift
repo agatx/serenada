@@ -355,3 +355,43 @@ public extension SignalingProvider {
 
     func forceReconnectIfStale(timeoutMs: Int) {}
 }
+
+/// Multi-session signaling contract (version 2). Where ``SignalingProvider`` is a
+/// SINGLE-session surface (one `delegate` slot, room-less ops), a
+/// `MultiSessionSignalingProvider` is an app-global service that VENDS one
+/// ``SignalingProvider`` channel per session join. Each vended channel is
+/// permanently bound to one canonical room; events are delivered only to that
+/// channel, and `leave`/`end`/`disconnect`/TURN refresh/reconnect state are
+/// channel-local. This is what lets the ``SerenadaCallRegistry`` run several
+/// concurrent sessions (hold + switch) over one custom signaling service without
+/// the cross-wired CIDs / overwritten delegates a shared v1 provider would suffer.
+///
+/// Provide EXACTLY ONE of `serverHost`, `signalingProvider` (v1, single-call), or
+/// `multiSessionSignalingProvider` (v2, multi-call) on ``SerenadaConfig``.
+///
+/// Implementor obligations (the SDK cannot enforce another process's transport):
+/// - Vend a fresh channel from ``openSession(roomId:)`` on every join; never
+///   share one channel across two live sessions.
+/// - Own the physical transport in the service and ref-count it across channels:
+///   closing (via the channel's `disconnect()`) channel A must NOT disconnect
+///   channel B; tear the transport down only after the last channel closes.
+/// - Tag queued events with a per-channel generation and DROP them after that
+///   channel closes, so a late event never lands on a reused transport.
+public protocol MultiSessionSignalingProvider: AnyObject {
+    /// Wire/contract version. Defaults to `2` via protocol extension.
+    var version: Int { get }
+    /// Default capabilities for vended channels (a channel may still report its
+    /// own). Defaults to `ProviderCapabilities()` via protocol extension.
+    var capabilities: ProviderCapabilities { get }
+    /// Vend a channel permanently bound to `roomId`. Called once per session join;
+    /// the SDK calls the returned channel's `disconnect()` exactly once at session
+    /// teardown.
+    func openSession(roomId: String) -> SignalingProvider
+    /// ICE servers without a call, for diagnostics.
+    func getIceServers() async throws -> [IceServerConfig]
+}
+
+public extension MultiSessionSignalingProvider {
+    var version: Int { MULTI_SESSION_SIGNALING_PROVIDER_VERSION }
+    var capabilities: ProviderCapabilities { ProviderCapabilities() }
+}

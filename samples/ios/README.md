@@ -96,6 +96,8 @@ let unsubscribe = session.onPeerMessage { message in
 }
 ```
 
+A `SignalingProvider` is **single-session** (v1): one call may use it at a time. A second concurrent join on the same provider (direct, or a second `SerenadaCallRegistry` call) fails with `CallError.providerUnavailable` rather than clobbering the live session. For multi-call over a custom service (registry hold + switch), implement `MultiSessionSignalingProvider` (v2) and pass it as `multiSessionSignalingProvider`. It vends one `SignalingProvider` channel per session (`openSession(roomId:)`), each permanently bound to one room, so concurrent sessions never cross-wire CIDs or events. Provide exactly one of `serverHost`, `signalingProvider`, or `multiSessionSignalingProvider`.
+
 The sample also includes `SampleAudioCoordinator`, which implements `SerenadaAudioCoordinator` and is passed through `SerenadaConfig.audioCoordinator`. Real host apps can use the same protocol to own `AVAudioSession`, route selection, and external-audio coexistence policy. Omit `audioCoordinator` to use the SDK's internal default coordinator.
 
 ## Multiple calls
