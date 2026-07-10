@@ -87,15 +87,6 @@ public final class SerenadaCore {
     /// app-group-scoped store before opening any session.
     public let recoveryStorage: RecoveryStorage
 
-    /// The live session that currently holds the configured single-session (v1)
-    /// `signalingProvider`, if any. A v1 provider has one `delegate` slot and
-    /// room-less ops, so it can back only ONE live session at a time; a second
-    /// concurrent join fails with ``CallError/providerUnavailable`` rather than
-    /// silently clobbering the first session's channel. Weak so a dropped session
-    /// frees the binding, and a session that reached a terminal phase is treated as
-    /// released (see ``v1ProviderIsInUse``), so sequential reuse works.
-    private weak var boundV1Session: SerenadaSession?
-
     public init(config: SerenadaConfig, recoveryStorage: RecoveryStorage = RecoveryStorage()) {
         self.config = config
         self.recoveryStorage = recoveryStorage
@@ -171,7 +162,7 @@ public final class SerenadaCore {
             acquireForegroundLease: true,
             initialStartupError: resolution.startupError
         )
-        if resolution.bindsV1 { boundV1Session = session }
+        if resolution.bindsV1 { V1ProviderRegistry.bind(resolution.provider, to: session) }
         return session
     }
 
@@ -199,7 +190,7 @@ public final class SerenadaCore {
             acquireForegroundLease: true,
             initialStartupError: resolution.startupError
         )
-        if resolution.bindsV1 { boundV1Session = session }
+        if resolution.bindsV1 { V1ProviderRegistry.bind(resolution.provider, to: session) }
         return session
     }
 
@@ -267,7 +258,7 @@ public final class SerenadaCore {
             initialStartupError: resolution.startupError,
             foregroundArbiter: arbiter
         )
-        if resolution.bindsV1 { boundV1Session = session }
+        if resolution.bindsV1 { V1ProviderRegistry.bind(resolution.provider, to: session) }
         return session
     }
 
@@ -328,22 +319,8 @@ public final class SerenadaCore {
         /// ``CallState`` (registry maps it to a failed join).
         let startupError: CallError?
         /// True when this resolution bound the configured v1 provider to the new
-        /// session, so the caller records the session in ``boundV1Session``.
+        /// session, so the caller records the binding in ``V1ProviderRegistry``.
         let bindsV1: Bool
-    }
-
-    /// Whether the configured v1 `signalingProvider` is currently held by a live
-    /// session. A session that reached a terminal phase (`.idle`/`.ending`/`.error`)
-    /// has already run its teardown (`disconnect()` + delegate unbind), so it no
-    /// longer holds the channel and a fresh join may reuse the provider.
-    private var v1ProviderIsInUse: Bool {
-        guard let bound = boundV1Session else { return false }
-        switch bound.state.phase {
-        case .idle, .ending, .error:
-            return false
-        case .awaitingPermissions, .joining, .waiting, .inCall:
-            return true
-        }
     }
 
     /// Pick the signaling channel for a new session bound to `roomId`.
@@ -381,7 +358,7 @@ public final class SerenadaCore {
         guard let signalingProvider = resolved.signalingProvider else {
             preconditionFailure("Provide exactly one of serverHost, signalingProvider, or multiSessionSignalingProvider")
         }
-        if v1ProviderIsInUse {
+        if V1ProviderRegistry.isInUse(signalingProvider) {
             return SessionProviderResolution(
                 provider: UnavailableSignalingProvider(),
                 startupError: .providerUnavailable,
@@ -408,4 +385,48 @@ private final class UnavailableSignalingProvider: SignalingProvider {
     func sendToPeer(_ peerId: String, type: String, payload: SignalingPayload?) {}
     func broadcast(type: String, payload: SignalingPayload?) {}
     func getIceServers() async throws -> [IceServerConfig] { [] }
+}
+
+/// Process-wide binding of single-session (v1) `signalingProvider` OBJECTS to the
+/// live session that currently holds each one. The v1 contract is per provider
+/// object (one `delegate` slot, room-less ops), so the guard must be keyed by
+/// provider identity across ALL ``SerenadaCore`` instances — two cores sharing the
+/// same v1 provider object must not both bind it and clobber each other's channel.
+///
+/// Entries are weak and pruned when the bound session reaches a terminal phase
+/// (`.idle`/`.ending`/`.error`) — that session has already run its teardown
+/// (`disconnect()` + delegate unbind), so it no longer holds the channel. This lets
+/// sequential reuse work and never retains providers or sessions. `@MainActor`
+/// isolation (every ``SerenadaCore`` join path is main-actor) is the sole
+/// synchronization discipline.
+@MainActor
+private enum V1ProviderRegistry {
+    private final class WeakSessionBox {
+        weak var session: SerenadaSession?
+        init(_ session: SerenadaSession) { self.session = session }
+    }
+
+    private static var bindings: [ObjectIdentifier: WeakSessionBox] = [:]
+
+    /// Whether `provider` is currently held by a live (non-terminal) session.
+    /// Prunes the entry when the bound session is gone or terminal.
+    static func isInUse(_ provider: SignalingProvider) -> Bool {
+        let key = ObjectIdentifier(provider)
+        guard let bound = bindings[key]?.session else {
+            bindings[key] = nil
+            return false
+        }
+        switch bound.state.phase {
+        case .idle, .ending, .error:
+            bindings[key] = nil
+            return false
+        case .awaitingPermissions, .joining, .waiting, .inCall:
+            return true
+        }
+    }
+
+    /// Record `session` as the holder of `provider`.
+    static func bind(_ provider: SignalingProvider, to session: SerenadaSession) {
+        bindings[ObjectIdentifier(provider)] = WeakSessionBox(session)
+    }
 }

@@ -104,6 +104,46 @@ final class SerenadaCoreProviderModeTests: XCTestCase {
         second.leave()
     }
 
+    func testConcurrentJoinAcrossCoresSharingOneV1ProviderFailsWithProviderUnavailable() async {
+        // The v1 liveness guard is keyed by provider OBJECT identity process-wide,
+        // so two independent cores sharing the same provider object cannot both bind
+        // it (which would cross-talk the single `delegate` slot).
+        let provider = FakeSignalingProvider()
+        let coreA = SerenadaCore(config: SerenadaConfig(signalingProvider: provider))
+        let coreB = SerenadaCore(config: SerenadaConfig(signalingProvider: provider))
+
+        let first = coreA.join(roomId: "room-1")
+        let second = coreB.join(roomId: "room-2")
+
+        // The doomed join reports its error on the next main-actor turn.
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertNil(first.state.error, "the first (live) session is unaffected")
+        XCTAssertEqual(second.state.error, .providerUnavailable,
+                       "a second core sharing the same v1 provider object fails typed")
+        XCTAssertEqual(second.state.phase, .error)
+
+        first.leave()
+        second.leave()
+    }
+
+    func testSecondCoreReusesV1ProviderOnceFirstSessionIsTerminal() {
+        let provider = FakeSignalingProvider()
+        let coreA = SerenadaCore(config: SerenadaConfig(signalingProvider: provider))
+        let coreB = SerenadaCore(config: SerenadaConfig(signalingProvider: provider))
+
+        let first = coreA.join(roomId: "room-1")
+        XCTAssertNil(first.state.error, "the first core binds the shared v1 provider")
+        first.leave()
+
+        // Once the first session is terminal the binding is released, so a different
+        // core may bind the same provider object.
+        let second = coreB.join(roomId: "room-2")
+        XCTAssertNil(second.state.error, "a second core reuses the freed v1 provider")
+        second.leave()
+    }
+
     func testProviderModeSessionExposesNilServerHostAndRoomUrl() {
         let core = SerenadaCore(config: SerenadaConfig(signalingProvider: FakeSignalingProvider()))
         let session = core.join(roomId: "room-123")
