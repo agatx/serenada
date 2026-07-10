@@ -199,7 +199,7 @@ type Participant struct {
 	PeerID           string                   `json:"peerId,omitempty"` // host-supplied stable identity, distinct from CID; opaque to server
 	AudioEnabled     *bool                    `json:"audioEnabled,omitempty"`
 	VideoEnabled     *bool                    `json:"videoEnabled,omitempty"`
-	Held             *bool                    `json:"held,omitempty"` // multi-call "on hold" flag; additive, omitted when never advertised
+	Held             *bool                    `json:"held,omitempty"`             // multi-call "on hold" flag; additive, omitted when never advertised
 	ConnectionStatus string                   `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
 	ContentState     *ParticipantContentState `json:"contentState,omitempty"`
 	// Capabilities and MediaPolicy are the allowlisted values advertised at join,

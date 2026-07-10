@@ -839,7 +839,7 @@ Clients should broadcast this message after joining, when a new peer joins, and 
 **Fields in payload**
 - `audioEnabled` *(boolean, optional)*: whether the sender's audio is enabled.
 - `videoEnabled` *(boolean, optional)*: whether the sender's video is enabled.
-- `held` *(boolean, optional)*: whether the sender has put this call **on hold** (the multi-call session model — see [docs/multi-call-session.md](multi-call-session.md)). A held participant has released local capture and owns no audible playout, so it always also sends `audioEnabled:false` and `videoEnabled:false`. Absent or `false` means not held. This field is **additive**: it was introduced after the first `participant_media_state` clients shipped, so older clients never send it and never read it.
+- `held` *(boolean, optional)*: whether the sender has put this call **on hold** (the multi-call session model — see [docs/multi-call-session.md](multi-call-session.md)). A held participant has released local capture and owns no audible playout, so it always also sends `audioEnabled:false` and `videoEnabled:false`. The meaning of an absent `held` is context-specific: absent on the **first snapshot/observation** of a participant means unknown, which renders as not held; absent in an **incremental relay** leaves the previously tracked value unchanged (see Client behavior below). Explicit `false` means resumed / not held. This field is **additive**: it was introduced after the first `participant_media_state` clients shipped, so older clients never send it and never read it.
 
 **Server behavior**
 - Stores the audio/video/held state in the room per-CID so late joiners receive the latest values via the participant list in `joined`/`room_state`.
@@ -847,8 +847,8 @@ Clients should broadcast this message after joining, when a new peer joins, and 
 - The relay is **not a verbatim pass-through**: the server allowlists media-state fields and re-emits the message from the parsed `audioEnabled`/`videoEnabled`/`held` values (plus the `from` field). `held` is one of those explicitly carried fields — it is parsed, stored on the participant record, and re-emitted on the relay and in the `joined`/`room_state` snapshot. Adding `held` required a small additive server change for this reason; fields the server does not parse are dropped, not forwarded.
 
 **Client behavior**
-- On receiving a relayed `participant_media_state`, update the cached audio/video state for the sender. Only fields present in the payload should be updated; missing fields leave the previous value intact (this includes `held`: an absent `held` leaves the previously tracked value).
-- The participant list in `joined`/`room_state` carries `audioEnabled`/`videoEnabled` for late joiners; relayed peer messages take priority over those values for already-known participants.
+- On receiving a relayed `participant_media_state`, update the cached audio/video/held state for the sender. Only fields present in the payload should be updated; missing fields leave the previous value intact (this includes `held`: an absent `held` in an incremental relay leaves the previously tracked value).
+- The participant list in `joined`/`room_state` carries `audioEnabled`/`videoEnabled`/`held` for late joiners. Between snapshots, relayed peer messages are the freshest source and take priority over the last snapshot's values for already-known participants. This is **not** a permanent precedence: a fresh `joined` snapshot (initial join or post-reconnect rejoin) is authoritative and resets the cached relay state, so a peer whose hold/mute state changed while this client was detached is rendered from the snapshot, not from a stale pre-reconnect relay. A `room_state` update does not reset the cache; the later-received value wins per source, with `joined` clearing the cache and live relays otherwise overriding.
 - Unknown fields and unknown message types are silently ignored, ensuring backward compatibility.
 
 **`held` ordering, replay, and backward compatibility**
@@ -860,6 +860,7 @@ Clients should broadcast this message after joining, when a new peer joins, and 
 - **Send ordering on resume.** A sender resuming foreground attaches its tracks to the existing senders **first**, then broadcasts `held:false` with `audioEnabled`/`videoEnabled` derived from its desired intent and route/camera availability. Same caveat: the ordering is local; the remote peer converges when the message arrives.
 - **Re-broadcast on peer-joined.** A sender re-broadcasts its current `participant_media_state` (including `held`) when a new peer joins, so a newly joined peer sees the sender's hold state, the same way it sees mute state.
 - **Re-broadcast after reconnect.** After a signaling reconnect, the sender re-broadcasts its current `participant_media_state` (including `held`) as part of the post-reconnect state resync, so peers that missed the original message converge.
+- **Snapshot precedence on rejoin (receive side).** A `joined` snapshot is authoritative: the receiver drops its cached live-relay media state (including `held`) when the snapshot arrives, so a peer that changed its hold state while the receiver was detached is rendered from the snapshot rather than from a stale pre-reconnect relay. Relays therefore do not permanently outrank later snapshots. `room_state` updates do not clear the cache; between `joined` snapshots, live relays remain the freshest source for already-known participants.
 
 ---
 
