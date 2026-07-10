@@ -423,6 +423,21 @@ export class MediaEngine {
     }
     private _lastLocalMediaError: { name: string; message: string } | null = null;
 
+    // Session-level "capture succeeded at least once" latches, set when a
+    // `getUserMedia` for that kind has resolved (regardless of whether the track
+    // was later kept). The permission was granted by the user at that point.
+    // Used by the session's foreground preflight as a grant signal when the
+    // Permissions API is unavailable/unusable (e.g. Safari, or a policy that
+    // throws): a prior successful capture proves the grant, so a host-driven
+    // prompt+retry can actually foreground instead of looping forever.
+    private _audioCaptureGranted = false;
+    private _videoCaptureGranted = false;
+
+    /** True once a microphone `getUserMedia` has succeeded this session. */
+    get audioCaptureEverSucceeded(): boolean { return this._audioCaptureGranted; }
+    /** True once a camera `getUserMedia` has succeeded this session. */
+    get videoCaptureEverSucceeded(): boolean { return this._videoCaptureGranted; }
+
     /**
      * True when a capture continuation that snapshotted `gen` (via
      * {@link mediaRequestId}) before an await is now stale and must not publish:
@@ -479,6 +494,12 @@ export class MediaEngine {
                     stream = await this.acquireInitialMedia(true, preferredDeviceId);
                 }
             }
+
+            // Latch the per-kind permission grant from what actually landed: the
+            // initial acquire requests audio (always) and video (when enabled), so
+            // the resolved tracks tell us which grants the user gave.
+            if (stream.getAudioTracks().length > 0) this._audioCaptureGranted = true;
+            if (stream.getVideoTracks().length > 0) this._videoCaptureGranted = true;
 
             // Capture-generation fence (also catches a hold latching mid-acquire:
             // `suspendLocalMediaForHold` bumps `mediaRequestId` and sets
@@ -620,6 +641,9 @@ export class MediaEngine {
         const gen = this.mediaRequestId;
         try {
             const track = await this.acquireCameraTrack(this.facingMode, true);
+            // Camera getUserMedia resolved: the grant is proven even if a hold
+            // fence drops the track below.
+            this._videoCaptureGranted = true;
             // Post-acquire fence: a held call must never publish a live camera
             // track to peers (Core Invariant 2 / privacy), so drop the freshly
             // captured track instead of attaching it. (`localStream` may
@@ -856,6 +880,9 @@ export class MediaEngine {
             const devices = await this.enumerateMediaDevices();
             const preferredInput = this.selectPreferredAudioInput(devices, null);
             const track = await this.acquireAudioTrack(true, preferredInput.device?.deviceId);
+            // Mic getUserMedia resolved: the grant is proven even if a hold fence
+            // drops the track below.
+            this._audioCaptureGranted = true;
             // Post-acquire fence: a held call must never publish live mic to peers
             // (Core Invariant 2 / privacy), so drop the freshly captured track
             // instead of attaching it.

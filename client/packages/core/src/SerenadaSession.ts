@@ -536,6 +536,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
             () => this.media.arePeerPathsAllDirect().then((direct) => !direct),
         );
 
+        // Durable recovery is foreground-only (design §5): only the foreground
+        // call writes the single cross-launch recovery record. A held call keeps
+        // its in-memory + in-tab reconnect identity (so it can reconnect on
+        // transport drops) but must not own the durable record. The provider's
+        // `joined`/token-refresh writes consult this gate; on resume-to-foreground
+        // the session force-persists via `persistDurableRecoveryNow`.
+        signaling.setDurableRecoveryGate?.(() => this.mediaRole === 'foreground');
+
         if (heldInitial) {
             // Held-initial join (Core Invariant 3 / contract §5): connect signaling
             // and let negotiation create stable audio+video senders with a null
@@ -1376,12 +1384,18 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.rebuildState();
             return;
         }
+        // Foreground role. `localStream` may be null when a call was joined held
+        // and then activated with both audio and video off (held-initial never
+        // ran startLocalMedia). We do NOT early-return on a null stream: unmuting
+        // must still ACQUIRE capture. Fall through to the no-track branches below
+        // (audio → reacquireLocalAudioCapture, video → reacquireVideoTrack), which
+        // the engine primitives handle by creating a fresh stream. `newEnabled`
+        // derives from `desired*` when there is no track to read.
         const stream = this.media.localStream;
-        if (!stream) return;
         if (kind === 'video') {
             if (this.availableCameraModes.length === 0) return;
-            const videoTrack = stream.getVideoTracks()[0];
-            const newEnabled = enabled ?? !(videoTrack?.enabled ?? this.userPreferredVideoEnabled);
+            const videoTrack = stream?.getVideoTracks()[0];
+            const newEnabled = enabled ?? !(videoTrack ? videoTrack.enabled : this.desiredVideoMode !== 'off');
             this.userPreferredVideoEnabled = newEnabled;
             // Update desired intent so a later hold/resume restores it correctly.
             this.desiredVideoMode = newEnabled ? this.cameraFacingAsVideoMode() : 'off';
@@ -1412,8 +1426,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
             });
             this.rebuildState();
         } else {
-            const track = stream.getAudioTracks()[0];
-            const newEnabled = enabled ?? !(track?.enabled ?? this.desiredAudioEnabled);
+            const track = stream?.getAudioTracks()[0];
+            const newEnabled = enabled ?? !(track ? track.enabled : this.desiredAudioEnabled);
             this.desiredAudioEnabled = newEnabled;
             if (track) {
                 // Track already live (normally-joined call, incl. a muted single
@@ -1598,6 +1612,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.mediaActivationState = 'active';
             this.actualAudioPublished = !!audioTrack && audioTrack.enabled;
             this.actualVideoPublished = !!videoTrack && videoTrack.enabled;
+            // Now foreground: immediately (re)write the durable recovery record
+            // from in-memory credentials so it describes THIS call with no gap
+            // (writes were gated off while held). Design §5: foreground-only.
+            this.signaling.persistDurableRecoveryNow?.();
             // Broadcast AFTER tracks are attached (attach-then-broadcast).
             this.broadcastLocalMediaState();
             this.rebuildState();
@@ -1663,10 +1681,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const needsCamera = this.desiredVideoMode !== 'off' && this.availableCameraModes.length > 0;
         // Desired media needs no device permission -> always ok (no prompt).
         if (!needsMic && !needsCamera) return 'ok';
-        // No Permissions API to consult: treat as ungranted (web prompt/unknown
-        // policy) so the host runs its own prompt before retrying.
+        // No Permissions API to consult (e.g. Safari): fall back to the
+        // session-level "capture already succeeded once" latch. Without it a
+        // grant is invisible and switching to a call that wants mic/camera would
+        // be permanently impossible even after a host-driven getUserMedia grant
+        // (the documented prompt-then-retry protocol would loop forever).
         const permissions = (typeof navigator !== 'undefined' ? navigator.permissions : undefined);
-        if (!permissions?.query) return 'needsPermission';
+        if (!permissions?.query) return this.preflightFromCaptureLatch(needsMic, needsCamera);
         try {
             const [cameraResult, micResult] = await Promise.all([
                 needsCamera
@@ -1682,8 +1703,21 @@ export class SerenadaSession implements SerenadaSessionHandle {
             if (needsCamera && cameraResult?.state !== 'granted') return 'needsPermission';
             return 'ok';
         } catch {
-            return 'needsPermission';
+            // Query threw (unusable Permissions API): same latch fallback.
+            return this.preflightFromCaptureLatch(needsMic, needsCamera);
         }
+    }
+
+    /**
+     * Grant fallback when the Permissions API is unavailable/unusable: a prior
+     * successful `getUserMedia` for a kind proves the grant. Capture stays
+     * authoritative — without any prior successful capture this stays
+     * conservative and returns `'needsPermission'` so the host still prompts.
+     */
+    private preflightFromCaptureLatch(needsMic: boolean, needsCamera: boolean): 'ok' | 'needsPermission' {
+        const micOk = !needsMic || this.media.audioCaptureEverSucceeded;
+        const cameraOk = !needsCamera || this.media.videoCaptureEverSucceeded;
+        return micOk && cameraOk ? 'ok' : 'needsPermission';
     }
 
     /**
@@ -2004,10 +2038,20 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const audioTrack = stream?.getAudioTracks()[0];
         const videoTrack = stream?.getVideoTracks()[0];
 
+        // A held call owns NO capture and broadcasts audio/video disabled +
+        // held:true to peers. Report the SAME false/false locally so the local
+        // participant snapshot never contradicts the wire (a held-initial call
+        // has a null stream and otherwise falls back to desired preferences,
+        // which default true). The desired-preference fallback below is kept
+        // ONLY for the pre-media-start joining phase of a FOREGROUND call.
+        const isHeld = this.mediaRole === 'held';
         // Mirror broadcast: derive from real track presence/state so the
         // local UI matches what peers see. Pre-media-start (no stream),
         // fall back to the user's preference.
-        const localVideoEnabled = stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled;
+        const localVideoEnabled = isHeld
+            ? false
+            : (stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled);
+        const localAudioEnabled = isHeld ? false : this.publishedAudioEnabled(stream, audioTrack);
         const independentMode = this.config.enableIndependentContentVideo === true;
         // Independent mode: `localStream` carries audio + camera only (content is
         // a separate track), so the camera track presence is the precise camera
@@ -2022,7 +2066,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             displayName: this.displayName,
             peerId: this.appPeerId,
             // Mirror the broadcast so the local UI matches what peers see.
-            audioEnabled: this.publishedAudioEnabled(stream, audioTrack),
+            audioEnabled: localAudioEnabled,
             // `cameraEnabled` is camera-specific and `videoEnabled` mirrors it.
             // Both equal `localVideoEnabled` here because, in both independent and
             // legacy modes, the camera track presence/state IS the local video

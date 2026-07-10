@@ -92,6 +92,13 @@ export class FakeMediaEngine {
      */
     lastLocalMediaError: { name: string; message: string } | null = null;
 
+    // Mirrors MediaEngine's per-kind "capture succeeded once" latches. Set true
+    // when the fake models a successful capture of that kind (reacquire/resume/
+    // startLocalMedia). Read by SerenadaSession.preflightForeground as the grant
+    // signal when the Permissions API is unavailable. Tests may set directly.
+    audioCaptureEverSucceeded = false;
+    videoCaptureEverSucceeded = false;
+
     setOnChange(cb: () => void): void {
         this.onChange = cb;
     }
@@ -159,8 +166,15 @@ export class FakeMediaEngine {
 
     async reacquireVideoTrack(): Promise<void> {
         this.reacquireVideoTrackCalls += 1;
-        const stream = this.localStream as unknown as FakeMediaStream | null;
-        if (!stream || stream.getVideoTracks().length > 0) return;
+        // Held-initial resume path: create the stream if absent (parity with
+        // MediaEngine.reacquireVideoTrack, where swapLocalVideoTrack creates it).
+        let stream = this.localStream as unknown as FakeMediaStream | null;
+        if (!stream) {
+            stream = new FakeMediaStream([]);
+            this.localStream = stream as unknown as MediaStream;
+        }
+        this.videoCaptureEverSucceeded = true;
+        if (stream.getVideoTracks().length > 0) return;
         stream.addTrack(new FakeMediaStreamTrack('video'));
     }
 
@@ -170,8 +184,15 @@ export class FakeMediaEngine {
 
     async reacquireLocalAudioCapture(): Promise<void> {
         this.reacquireLocalAudioCaptureCalls += 1;
-        const stream = this.localStream as unknown as FakeMediaStream | null;
-        if (!stream || stream.getAudioTracks().length > 0) return;
+        // Held-initial resume path: create the stream if absent (parity with
+        // MediaEngine.reacquireLocalAudioCapture, which creates an empty stream).
+        let stream = this.localStream as unknown as FakeMediaStream | null;
+        if (!stream) {
+            stream = new FakeMediaStream([]);
+            this.localStream = stream as unknown as MediaStream;
+        }
+        this.audioCaptureEverSucceeded = true;
+        if (stream.getAudioTracks().length > 0) return;
         stream.addTrack(new FakeMediaStreamTrack('audio'));
     }
 
@@ -222,7 +243,13 @@ export class FakeMediaEngine {
         // Clear the held latch BEFORE reacquiring so resume's own capture is not
         // blocked (parity with MediaEngine.resumeLocalMediaFromHold).
         this.heldNoCapture = false;
-        const stream = this.localStream as unknown as FakeMediaStream | null;
+        let stream = this.localStream as unknown as FakeMediaStream | null;
+        // A held-initial call has a null stream; resume creates it lazily when a
+        // desired kind needs capture (parity with MediaEngine reacquire sinks).
+        if (!stream && (desiredAudio || desiredVideoMode !== 'off')) {
+            stream = new FakeMediaStream([]);
+            this.localStream = stream as unknown as MediaStream;
+        }
         if (stream) {
             if (desiredAudio && stream.getAudioTracks().length === 0) {
                 stream.addTrack(new FakeMediaStreamTrack('audio'));
@@ -231,6 +258,8 @@ export class FakeMediaEngine {
                 stream.addTrack(new FakeMediaStreamTrack('video'));
             }
         }
+        if (desiredAudio) this.audioCaptureEverSucceeded = true;
+        if (desiredVideoMode !== 'off') this.videoCaptureEverSucceeded = true;
         this.setRemotePlaybackEnabled(true);
     }
 

@@ -310,6 +310,159 @@ describe('SerenadaCore.join routes through the arbiter (Phase 2)', () => {
     });
 });
 
+describe('SerenadaSession held-initial toggles + snapshot (D-web-3 / D-web-5)', () => {
+    let harness: TestSessionHarness;
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => {
+        harness?.destroy();
+        vi.useRealTimers();
+        __resetForegroundArbiterForTests();
+    });
+
+    async function joinHeld(config: Record<string, unknown> = {}): Promise<void> {
+        harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }, { cid: 'peer-1' }] });
+        await vi.advanceTimersByTimeAsync(0);
+        void config;
+    }
+
+    it('held-initial local participant snapshot reports audio/video/camera false (matches the wire)', async () => {
+        harness = new TestSessionHarness({
+            config: { defaultAudioEnabled: true, defaultVideoEnabled: true },
+            initialMediaRole: 'held',
+        });
+        await joinHeld();
+
+        const lp = harness.session.state.localParticipant;
+        expect(lp).not.toBeNull();
+        expect(lp?.audioEnabled).toBe(false);
+        expect(lp?.videoEnabled).toBe(false);
+        expect(lp?.cameraEnabled).toBe(false);
+        // Matches the held broadcast on the wire.
+        expect(lastMediaStateBroadcast(harness)).toEqual({
+            audioEnabled: false,
+            videoEnabled: false,
+            held: true,
+        });
+    });
+
+    it('a fully-muted held-initial call can unmute (acquire) after activation, both directions', async () => {
+        harness = new TestSessionHarness({
+            config: { defaultAudioEnabled: false, defaultVideoEnabled: false },
+            initialMediaRole: 'held',
+        });
+        await joinHeld();
+
+        // Activate: resume reacquires nothing (both off) -> localStream stays null.
+        const token = foregroundArbiter.acquireForeground('test-room-id', 'direct', {});
+        const gen = foregroundArbiter.nextOperationGeneration();
+        await harness.session.activateForeground(token, gen);
+        expect(harness.session.currentMediaRole).toBe('foreground');
+        expect(harness.media.localStream).toBeNull();
+
+        // Unmute audio: acquires the mic and publishes audioEnabled:true.
+        harness.session.toggleAudio();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(harness.media.reacquireLocalAudioCaptureCalls).toBeGreaterThanOrEqual(1);
+        expect(lastMediaStateBroadcast(harness)?.audioEnabled).toBe(true);
+
+        // Enable video: acquires the camera and publishes videoEnabled:true.
+        harness.session.toggleVideo();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(harness.media.reacquireVideoTrackCalls).toBeGreaterThanOrEqual(1);
+        expect(lastMediaStateBroadcast(harness)?.videoEnabled).toBe(true);
+
+        // Disable direction still works.
+        harness.session.toggleAudio();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(lastMediaStateBroadcast(harness)?.audioEnabled).toBe(false);
+        harness.session.toggleVideo();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(lastMediaStateBroadcast(harness)?.videoEnabled).toBe(false);
+    });
+});
+
+describe('SerenadaSession.preflightForeground capture-latch fallback (D-web-2)', () => {
+    let harness: TestSessionHarness;
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => {
+        harness?.destroy();
+        vi.useRealTimers();
+        __resetForegroundArbiterForTests();
+        delete (globalThis as Record<string, unknown>).navigator;
+        (globalThis as Record<string, unknown>).navigator = {};
+    });
+
+    it('no Permissions API: needsPermission until a capture succeeds, then ok', async () => {
+        (globalThis as Record<string, unknown>).navigator = {}; // no `permissions`
+        harness = new TestSessionHarness({
+            config: { defaultAudioEnabled: true, defaultVideoEnabled: false },
+            initialMediaRole: 'held',
+        });
+        // No prior successful capture -> conservative.
+        await expect(harness.session.preflightForeground()).resolves.toBe('needsPermission');
+        // A host-driven getUserMedia grant landed (latch set).
+        harness.media.audioCaptureEverSucceeded = true;
+        await expect(harness.session.preflightForeground()).resolves.toBe('ok');
+    });
+
+    it('Permissions API query throws: same capture-latch fallback', async () => {
+        // A synchronous throw from `query` (unusable Permissions API) escapes the
+        // per-query `.catch` and hits the preflight's outer catch -> latch fallback.
+        (globalThis as Record<string, unknown>).navigator = {
+            permissions: { query: () => { throw new Error('policy'); } },
+        };
+        harness = new TestSessionHarness({
+            config: { defaultAudioEnabled: true, defaultVideoEnabled: false },
+            initialMediaRole: 'held',
+        });
+        await expect(harness.session.preflightForeground()).resolves.toBe('needsPermission');
+        harness.media.audioCaptureEverSucceeded = true;
+        await expect(harness.session.preflightForeground()).resolves.toBe('ok');
+    });
+});
+
+describe('SerenadaSession durable recovery is foreground-only (Candidate A, design §5)', () => {
+    let harness: TestSessionHarness;
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => {
+        harness?.destroy();
+        vi.useRealTimers();
+        __resetForegroundArbiterForTests();
+    });
+
+    async function joinHeldSettled(): Promise<void> {
+        harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }, { cid: 'peer-1' }] });
+        await vi.advanceTimersByTimeAsync(0);
+        harness.media.installLocalStream({ audio: true, video: true });
+    }
+
+    it('installs a gate that is false while held and true once foreground', async () => {
+        harness = new TestSessionHarness({ initialMediaRole: 'held' });
+        await joinHeldSettled();
+
+        expect(harness.signaling.durableRecoveryGate).toBeTypeOf('function');
+        expect(harness.signaling.durableRecoveryGate!()).toBe(false);
+
+        const token = foregroundArbiter.acquireForeground('test-room-id', 'direct', {});
+        const gen = foregroundArbiter.nextOperationGeneration();
+        await harness.session.activateForeground(token, gen);
+
+        expect(harness.signaling.durableRecoveryGate!()).toBe(true);
+    });
+
+    it('force-persists the durable record on resume-to-foreground', async () => {
+        harness = new TestSessionHarness({ initialMediaRole: 'held' });
+        await joinHeldSettled();
+        expect(harness.signaling.persistDurableRecoveryNowCalls).toBe(0);
+
+        const token = foregroundArbiter.acquireForeground('test-room-id', 'direct', {});
+        const gen = foregroundArbiter.nextOperationGeneration();
+        await harness.session.activateForeground(token, gen);
+
+        expect(harness.signaling.persistDurableRecoveryNowCalls).toBe(1);
+    });
+});
+
 interface FakePc {
     getSenders(): { track: unknown }[];
     getTransceivers(): unknown[];
