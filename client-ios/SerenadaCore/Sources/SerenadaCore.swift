@@ -162,7 +162,6 @@ public final class SerenadaCore {
             acquireForegroundLease: true,
             initialStartupError: resolution.startupError
         )
-        if resolution.bindsV1 { V1ProviderRegistry.bind(resolution.provider, to: session) }
         return session
     }
 
@@ -190,7 +189,6 @@ public final class SerenadaCore {
             acquireForegroundLease: true,
             initialStartupError: resolution.startupError
         )
-        if resolution.bindsV1 { V1ProviderRegistry.bind(resolution.provider, to: session) }
         return session
     }
 
@@ -258,7 +256,6 @@ public final class SerenadaCore {
             initialStartupError: resolution.startupError,
             foregroundArbiter: arbiter
         )
-        if resolution.bindsV1 { V1ProviderRegistry.bind(resolution.provider, to: session) }
         return session
     }
 
@@ -312,15 +309,16 @@ public final class SerenadaCore {
     /// Resolution of which signaling channel a new session should use, plus how the
     /// session should start.
     private struct SessionProviderResolution {
-        /// The channel the session installs as its `signalingProvider`.
+        /// The channel the session installs as its `signalingProvider`. For a v1
+        /// single-session provider this is a ``V1LivenessChannel`` wrapping the
+        /// shared object (already recorded in ``V1ProviderRegistry`` by
+        /// ``resolveSessionProvider(for:roomId:)``); server/v2 channels are fresh,
+        /// exclusively-owned objects that are never registry-bound.
         let provider: SignalingProvider
         /// Non-nil when the session must fail immediately (v1 single-session
         /// conflict) instead of joining — the session surfaces it as an error
         /// ``CallState`` (registry maps it to a failed join).
         let startupError: CallError?
-        /// True when this resolution bound the configured v1 provider to the new
-        /// session, so the caller records the binding in ``V1ProviderRegistry``.
-        let bindsV1: Bool
     }
 
     /// Pick the signaling channel for a new session bound to `roomId`.
@@ -345,14 +343,13 @@ public final class SerenadaCore {
                 transports: sessionConfig.transports,
                 logger: logger
             )
-            return SessionProviderResolution(provider: provider, startupError: nil, bindsV1: false)
+            return SessionProviderResolution(provider: provider, startupError: nil)
         }
         if let multiSession = resolved.multiSessionSignalingProvider {
             // Each session gets its OWN channel — no cross-session liveness guard.
             return SessionProviderResolution(
                 provider: multiSession.openSession(roomId: roomId),
-                startupError: nil,
-                bindsV1: false
+                startupError: nil
             )
         }
         guard let signalingProvider = resolved.signalingProvider else {
@@ -361,11 +358,18 @@ public final class SerenadaCore {
         if V1ProviderRegistry.isInUse(signalingProvider) {
             return SessionProviderResolution(
                 provider: UnavailableSignalingProvider(),
-                startupError: .providerUnavailable,
-                bindsV1: false
+                startupError: .providerUnavailable
             )
         }
-        return SessionProviderResolution(provider: signalingProvider, startupError: nil, bindsV1: true)
+        // Hand the session a per-session liveness channel wrapping the shared v1
+        // provider, and bind that channel process-wide by the UNDERLYING provider's
+        // object identity. The channel holds the bind until the session tears it
+        // down (`disconnect()` retires it, releasing the bind) and suppresses every
+        // forwarded op afterwards, so a session that went terminal can neither
+        // disconnect nor mutate a provider a newer session has since rebound.
+        let channel = V1LivenessChannel(underlying: signalingProvider)
+        V1ProviderRegistry.bind(signalingProvider, to: channel)
+        return SessionProviderResolution(provider: channel, startupError: nil)
     }
 }
 
@@ -387,75 +391,133 @@ private final class UnavailableSignalingProvider: SignalingProvider {
     func getIceServers() async throws -> [IceServerConfig] { [] }
 }
 
-/// Process-wide binding of single-session (v1) `signalingProvider` OBJECTS to the
-/// live session that currently holds each one. The v1 contract is per provider
-/// object (one `delegate` slot, room-less ops), so the guard must be keyed by
-/// provider identity across ALL ``SerenadaCore`` instances — two cores sharing the
-/// same v1 provider object must not both bind it and clobber each other's channel.
+/// Per-session forwarding wrapper around a shared single-session (v1)
+/// `SignalingProvider`, mirroring the web/Android v1 liveness-channel design. The
+/// session drives the SAME underlying provider through this thin delegate; the
+/// wrapper's job is to FENCE every op to the session's ownership window so a
+/// session that went terminal cannot touch a provider a newer session has since
+/// rebound.
 ///
-/// Entries are weak and reclaimed by `compact()` (run on every bind/check) once
-/// the bound session is gone or reaches a terminal phase (`.idle`/`.ending`/
-/// `.error`). This lets sequential reuse work, never retains providers or
-/// sessions, and keeps the map from accumulating dead boxes for hosts that spin
-/// up a fresh provider + core per call. `@MainActor` isolation (every
+/// The channel is one-shot. `disconnect()` — which the session calls on EVERY
+/// terminal path (`resetResources`, reached from leave/end/error/cancel) — retires
+/// it: the bind is released back to ``V1ProviderRegistry`` and the underlying
+/// delegate is detached. Because the bind is held until this retire runs, a host
+/// reacting to the owner's `.ending` phase (published BEFORE `resetResources`)
+/// still sees the provider in use and cannot rebind mid-teardown. After retire,
+/// every forwarded op is suppressed:
+///  - a late `disconnect()` no longer closes the (now newer owner's) transport;
+///  - `connect`/`joinRoom`/`leaveRoom`/`endRoom`/`sendToPeer`/`broadcast`/
+///    `forceReconnectIfStale` and delegate installs are no-ops, so a stale handle
+///    (e.g. `end()` or `resumeJoin()` on a terminal session) cannot mutate or emit
+///    on a provider it no longer owns.
+/// Server-mode and v2 channels are exclusively owned and are NEVER wrapped.
+///
+/// `@MainActor`-confined by the SDK contract (every provider op is invoked on the
+/// main actor); the registry release hops through `assumeIsolated` accordingly.
+final class V1LivenessChannel: SignalingProvider {
+    private let underlying: SignalingProvider
+    private var retired = false
+
+    init(underlying: SignalingProvider) {
+        self.underlying = underlying
+    }
+
+    var version: Int { underlying.version }
+    var capabilities: ProviderCapabilities { underlying.capabilities }
+
+    var delegate: SignalingProviderDelegate? {
+        get { underlying.delegate }
+        set { if !retired { underlying.delegate = newValue } }
+    }
+
+    /// Release the bind and detach the delegate exactly once. Ownership-scoped:
+    /// the registry only clears the entry while THIS channel still owns it.
+    private func retire() {
+        guard !retired else { return }
+        retired = true
+        underlying.delegate = nil
+        MainActor.assumeIsolated {
+            V1ProviderRegistry.release(underlying, channel: self)
+        }
+    }
+
+    func connect() { if !retired { underlying.connect() } }
+
+    func disconnect() {
+        // Only close the underlying transport while THIS channel still owns it.
+        // A late disconnect() after retire (e.g. a second terminal reset once a
+        // newer session rebound the provider) must NOT tear down the new owner.
+        let owned = !retired
+        retire()
+        if owned { underlying.disconnect() }
+    }
+
+    func joinRoom(_ roomId: String, options: JoinOptions) { if !retired { underlying.joinRoom(roomId, options: options) } }
+    func leaveRoom() { if !retired { underlying.leaveRoom() } }
+    func endRoom() { if !retired { underlying.endRoom() } }
+    func sendToPeer(_ peerId: String, type: String, payload: SignalingPayload?) { if !retired { underlying.sendToPeer(peerId, type: type, payload: payload) } }
+    func broadcast(type: String, payload: SignalingPayload?) { if !retired { underlying.broadcast(type: type, payload: payload) } }
+    func getIceServers() async throws -> [IceServerConfig] { try await underlying.getIceServers() }
+    func forceReconnectIfStale(timeoutMs: Int) { if !retired { underlying.forceReconnectIfStale(timeoutMs: timeoutMs) } }
+}
+
+/// Process-wide binding of single-session (v1) `signalingProvider` OBJECTS to the
+/// live ``V1LivenessChannel`` that currently holds each one. The v1 contract is
+/// per provider object (one `delegate` slot, room-less ops), so the guard must be
+/// keyed by the UNDERLYING provider's identity across ALL ``SerenadaCore``
+/// instances — two cores sharing the same v1 provider object must not both bind it
+/// and clobber each other's channel.
+///
+/// The bind is held until its owning channel EXPLICITLY releases it (the channel's
+/// `disconnect()`/retire at the end of the session's provider teardown) or the
+/// channel is deallocated — never inferred from session phase. That is what keeps
+/// a session that just published `.ending` (but has not yet torn down) holding the
+/// provider, so a host reacting to that phase cannot rebind mid-teardown. Entries
+/// are weak (the value is the owning channel), so `compact()` — run on every
+/// bind/check — reclaims any channel that was dropped without an explicit release,
+/// and the map never retains providers or channels. `@MainActor` isolation (every
 /// ``SerenadaCore`` join path is main-actor) is the sole synchronization
 /// discipline.
 @MainActor
 enum V1ProviderRegistry {
-    private final class WeakSessionBox {
-        weak var session: SerenadaSession?
-        init(_ session: SerenadaSession) { self.session = session }
+    private final class WeakChannelBox {
+        weak var channel: V1LivenessChannel?
+        init(_ channel: V1LivenessChannel) { self.channel = channel }
     }
 
-    private static var bindings: [ObjectIdentifier: WeakSessionBox] = [:]
+    private static var bindings: [ObjectIdentifier: WeakChannelBox] = [:]
 
-    private static func isTerminal(_ phase: SerenadaCallPhase) -> Bool {
-        switch phase {
-        case .idle, .ending, .error:
-            return true
-        case .awaitingPermissions, .joining, .waiting, .inCall:
-            return false
-        }
-    }
-
-    /// Drop every box whose session is gone or terminal. Run on each bind/check
-    /// so the map tracks only live sessions and never grows for the process
-    /// lifetime as hosts cycle through providers.
+    /// Drop every entry whose owning channel was deallocated without an explicit
+    /// release (a session dropped without teardown). A retired channel already
+    /// removed its own entry via `release`, so this only sweeps implicit deaths.
     private static func compact() {
-        bindings = bindings.filter { _, box in
-            guard let session = box.session else { return false }
-            return !isTerminal(session.state.phase)
-        }
+        bindings = bindings.filter { $0.value.channel != nil }
     }
 
-    /// Whether `provider` is currently held by a live (non-terminal) session.
+    /// Whether `provider` is currently held by a live, not-yet-released channel.
     static func isInUse(_ provider: SignalingProvider) -> Bool {
         compact()
-        return bindings[ObjectIdentifier(provider)]?.session != nil
+        return bindings[ObjectIdentifier(provider)]?.channel != nil
     }
 
-    /// Record `session` as the holder of `provider`.
-    static func bind(_ provider: SignalingProvider, to session: SerenadaSession) {
+    /// Record `channel` as the holder of the underlying `provider`.
+    static func bind(_ provider: SignalingProvider, to channel: V1LivenessChannel) {
         compact()
-        bindings[ObjectIdentifier(provider)] = WeakSessionBox(session)
+        bindings[ObjectIdentifier(provider)] = WeakChannelBox(channel)
     }
 
-    /// Whether `session` may run v1 teardown (`disconnect()` + delegate unbind)
-    /// on `provider`. True when `provider` was never registry-bound (server/v2
-    /// channels are owned solely by their session) OR `session` still owns the
-    /// v1 bind. False only when a NEWER session rebound this shared v1 provider
-    /// after `session` went terminal — the stale handle must not disconnect the
-    /// channel or clear the delegate the newer session installed. Pure read;
-    /// dead/terminal keys are reclaimed by `compact()` on the next bind/check.
-    static func isTeardownOwner(_ provider: SignalingProvider, session: SerenadaSession) -> Bool {
-        guard let box = bindings[ObjectIdentifier(provider)] else { return true }
-        return box.session === session
+    /// Release the bind for `provider`, ownership-scoped: clear the entry only
+    /// while `channel` is still the recorded owner, never a bind a NEWER channel
+    /// took after sequential reuse.
+    static func release(_ provider: SignalingProvider, channel: V1LivenessChannel) {
+        let key = ObjectIdentifier(provider)
+        if bindings[key]?.channel === channel { bindings[key] = nil }
     }
 
     #if DEBUG
     /// Test-only: raw number of tracked bindings WITHOUT compacting, so tests can
-    /// observe the map grow with live sessions and shrink once a bind/check sweeps
-    /// terminal entries.
+    /// observe the map grow with live sessions and shrink once each channel
+    /// releases (or a check sweeps an implicitly-dropped channel).
     static func rawBindingCountForTesting() -> Int {
         bindings.count
     }
