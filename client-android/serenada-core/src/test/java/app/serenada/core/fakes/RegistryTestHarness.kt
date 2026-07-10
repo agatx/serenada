@@ -84,9 +84,23 @@ internal class RegistryTestHarness(
         }
     }
 
+    /**
+     * When set, the NEXT session-factory call THROWS this (and clears itself) instead
+     * of building a session. Models a session construction failure (e.g. an
+     * unconfigured core) so a registry test can drive the mode-claim-leak guard in
+     * `registerOrDedup` (D-native-3).
+     */
+    var throwOnNextSessionCreate: Throwable? = null
+
     val registry: SerenadaCallRegistry = SerenadaCallRegistry(
         core = null,
-        sessionFactory = { room, role -> buildSession(room, role) },
+        sessionFactory = { room, role ->
+            throwOnNextSessionCreate?.let {
+                throwOnNextSessionCreate = null
+                throw it
+            }
+            buildSession(room, role)
+        },
     )
 
     // Same Robolectric main looper the registry/session scopes use.
@@ -209,6 +223,25 @@ internal class RegistryTestHarness(
 
     /** Drain [deferred] to completion (advancing virtual time past timeouts if needed). */
     fun <T> await(deferred: Deferred<T>): T = drain(deferred)
+
+    /**
+     * Idle the main looper (advancing virtual time past timeouts if needed) until
+     * [deferred] completes, WITHOUT unwrapping its result. Unlike [drain]/[await]
+     * this tolerates a CANCELLED deferred (whose [getCompleted] would rethrow), so
+     * a test can cancel an in-flight op and then let its non-cancellable cleanup run.
+     */
+    fun idleUntilComplete(deferred: Deferred<*>) {
+        var guard = 0
+        while (!deferred.isCompleted && guard < 200) {
+            ShadowLooper.idleMainLooper()
+            if (!deferred.isCompleted) {
+                Shadows.shadowOf(android.os.Looper.getMainLooper())
+                    .idleFor(java.time.Duration.ofMillis(13_000L))
+            }
+            guard++
+        }
+        check(deferred.isCompleted) { "registry op did not complete" }
+    }
 
     private fun newlyCreated(before: Set<String>): FakeManagedSession? {
         val newKey = created.keys.firstOrNull { it !in before } ?: return null

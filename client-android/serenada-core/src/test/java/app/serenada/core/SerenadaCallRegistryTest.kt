@@ -3,6 +3,7 @@ package app.serenada.core
 import app.serenada.core.call.CallMediaRole
 import app.serenada.core.call.MediaActivationState
 import app.serenada.core.fakes.RegistryTestHarness
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -805,5 +806,215 @@ class SerenadaCallRegistryTest {
         ForegroundMediaArbiter.releaseLease(token)
         // The ended call lingers until dismissed.
         assertTrue(h.registry.state.value.calls.any { it.callId == a })
+    }
+
+    // --- F4: external coroutine cancellation must never wedge the arbiter ---
+
+    @Test
+    fun `cancelling an in-flight joinHeld tears the created call down and releases registry mode`() {
+        val h = harness()
+        val deferred = h.launchOp { h.registry.joinHeld(room("a")) }
+        ShadowLooper.idleMainLooper()
+        // Part A ran: the call is created + REGISTRY mode claimed; part B (the held
+        // room join) is suspended (never settled here).
+        assertEquals(ForegroundArbiterMode.REGISTRY, ForegroundMediaArbiter.currentMode)
+        assertEquals(1, h.registry.state.value.calls.size)
+        val created = h.created["a"]!!
+
+        // External cancellation of the suspended held-join wait.
+        deferred.cancel()
+        h.idleUntilComplete(deferred)
+        assertTrue(deferred.isCancelled)
+
+        // The created call was torn down non-cancellably: the session left the room
+        // (channel torn down), no call remains foreground/active, and REGISTRY mode
+        // was released. The call lingers ENDED (held) like any failed join.
+        assertTrue("session left the room on teardown", created.fakeProvider.leaveCalls >= 1)
+        assertNull(h.registry.state.value.activeCallId)
+        assertTrue(h.registry.state.value.calls.all { it.held })
+        assertNull("registry mode released after the cancelled create was torn down", ForegroundMediaArbiter.currentMode)
+
+        // A subsequent DIRECT join succeeds: the process is not wedged.
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "direct",
+            mode = ForegroundArbiterMode.DIRECT,
+            modeOwnerRef = Any(),
+        )
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    @Test
+    fun `cancelling a deduplicated second waiter leaves the shared call intact for the first`() {
+        val h = harness()
+        // First joinHeld: its held join stays PENDING (not settled).
+        val p1 = h.launchOp { h.registry.joinHeld(room("a")) }
+        ShadowLooper.idleMainLooper()
+        assertEquals(1, h.registry.state.value.calls.size)
+        val shared = h.created["a"]!!
+
+        // Second joinHeld dedups onto the same still-joining call (Existing) and awaits.
+        val p2 = h.launchOp { h.registry.joinHeld(room("a")) }
+        ShadowLooper.idleMainLooper()
+        assertEquals("second join deduped onto the same call", 1, h.registry.state.value.calls.size)
+
+        // Cancel the SECOND waiter: a dedup cancel rethrows WITHOUT tearing the shared
+        // call down (that call belongs to the first waiter).
+        p2.cancel()
+        ShadowLooper.idleMainLooper()
+        assertTrue(p2.isCancelled)
+        assertEquals(1, h.registry.state.value.calls.size)
+        assertEquals("shared call was NOT left/torn down", 0, shared.fakeProvider.leaveCalls)
+        assertEquals(ForegroundArbiterMode.REGISTRY, ForegroundMediaArbiter.currentMode)
+
+        // Settle the join: the FIRST waiter completes normally, unaffected by p2's cancel.
+        shared.settle()
+        val r1 = h.await(p1)
+        assertTrue(r1 is JoinResult.Joined)
+        assertEquals(1, h.registry.state.value.calls.size)
+    }
+
+    @Test
+    fun `cancelling a switch during the old-call drain does not strand releasePending`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        val b = (h.joinHeld(room("b")) as JoinResult.Joined).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Gate a's release (suspend mid-drain) and b's activation (so a cancel that
+        // slips past the drain is observed there, not silently committing b).
+        val releaseGate = CompletableDeferred<Unit>()
+        val activateGate = CompletableDeferred<Unit>()
+        h.created["a"]!!.session.releaseForegroundGateForTest = releaseGate
+        h.created["b"]!!.session.activateForegroundGateForTest = activateGate
+
+        val deferred = h.launchOp { h.registry.switchToCall(b) }
+        ShadowLooper.idleMainLooper()
+        // Now draining a (suspended at the gate); release pending was marked.
+
+        // Cancel the switch WHILE the drain is in flight, then let the drain finish:
+        // NonCancellable keeps the release atomic so releaseLease still runs and clears
+        // releasePending. Without the fix the cancel strands it, wedging all acquires.
+        deferred.cancel()
+        releaseGate.complete(Unit)
+        h.idleUntilComplete(deferred)
+        assertTrue(deferred.isCancelled)
+
+        // a drained to HELD and released its lease; b never committed; no active call.
+        assertEquals(CallMediaRole.HELD, h.created["a"]!!.session.mediaRoleForTest())
+        assertEquals(CallMediaRole.HELD, h.created["b"]!!.session.mediaRoleForTest())
+        assertNull(h.registry.state.value.activeCallId)
+
+        // releasePending was cleared: a fresh acquire succeeds (would throw if stranded).
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "probe",
+            mode = ForegroundArbiterMode.REGISTRY,
+            modeOwnerRef = Any(),
+        )
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    @Test
+    fun `cancelling a switch during activation releases the acquired token and a retry succeeds`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        val b = (h.joinHeld(room("b")) as JoinResult.Joined).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Gate b's activation so the switch suspends AFTER acquiring b's lease token.
+        val gate = CompletableDeferred<Unit>()
+        h.created["b"]!!.session.activateForegroundGateForTest = gate
+
+        val deferred = h.launchOp { h.registry.switchToCall(b) }
+        ShadowLooper.idleMainLooper()
+        // a was drained + released (step 1 done); b's token is acquired; activation is
+        // suspended at the gate.
+
+        deferred.cancel()
+        h.idleUntilComplete(deferred)
+        assertTrue(deferred.isCancelled)
+
+        // No leaked token: b's activation was aborted + its lease released under
+        // NonCancellable; nothing is active; the arbiter is free.
+        assertNull(h.created["b"]!!.session.foregroundOwnerTokenForTest())
+        assertNull(h.registry.state.value.activeCallId)
+        assertEquals(CallMediaRole.HELD, h.created["b"]!!.session.mediaRoleForTest())
+        assertEquals(CallMediaRole.HELD, h.created["a"]!!.session.mediaRoleForTest())
+
+        // A retry switch to b now succeeds (nothing stranded).
+        val retry = h.switchToCall(b)
+        ShadowLooper.idleMainLooper()
+        assertEquals(SwitchResult.Active, retry)
+        assertEquals(b, h.registry.state.value.activeCallId)
+        assertEquals(CallMediaRole.FOREGROUND, h.created["b"]!!.session.mediaRoleForTest())
+    }
+
+    @Test
+    fun `cancelling close still fully closes the registry`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        assertTrue(h.joinHeld(room("b")) is JoinResult.Joined)
+        ShadowLooper.idleMainLooper()
+        assertEquals(2, h.registry.state.value.calls.size)
+
+        // Gate a's release so close() suspends inside its NonCancellable drain loop.
+        val gate = CompletableDeferred<Unit>()
+        h.created["a"]!!.session.releaseForegroundGateForTest = gate
+
+        val deferred = h.launchOp { h.registry.close() }
+        ShadowLooper.idleMainLooper()
+
+        // Cancel close mid-teardown, then release the gate: NonCancellable keeps the
+        // whole teardown (drain loop + mode release) running to completion.
+        deferred.cancel()
+        gate.complete(Unit)
+        h.idleUntilComplete(deferred)
+
+        // Fully closed despite the cancellation: every call torn down, REGISTRY mode
+        // released, so a fresh DIRECT join succeeds.
+        assertTrue(h.registry.state.value.calls.isEmpty())
+        assertNull(h.registry.state.value.activeCallId)
+        assertNull(ForegroundMediaArbiter.currentMode)
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "direct",
+            mode = ForegroundArbiterMode.DIRECT,
+            modeOwnerRef = Any(),
+        )
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    // --- D-native-3: session construction throw must not leak the mode claim ---
+
+    @Test
+    fun `a session construction failure releases registry mode so a direct join succeeds`() {
+        val h = harness()
+        h.throwOnNextSessionCreate = IllegalStateException("factory boom")
+
+        val result = h.joinHeld(room("a"))
+        ShadowLooper.idleMainLooper()
+
+        // The join fails (surfaced as JoinFailed, not propagated raw) and no session
+        // was created / registered.
+        assertTrue(result is JoinResult.Failed)
+        assertTrue((result as JoinResult.Failed).error is CallRegistryError.JoinFailed)
+        assertFalse(h.created.containsKey("a"))
+        assertTrue(h.registry.state.value.calls.isEmpty())
+
+        // The REGISTRY mode claim did NOT leak: it was released because the failed
+        // claim left no live call, so a DIRECT join succeeds (without the guard this
+        // wedges every later DIRECT join with ForegroundLeaseUnavailable).
+        assertNull(ForegroundMediaArbiter.currentMode)
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "direct",
+            mode = ForegroundArbiterMode.DIRECT,
+            modeOwnerRef = Any(),
+        )
+        assertEquals(ForegroundArbiterMode.DIRECT, ForegroundMediaArbiter.currentMode)
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
     }
 }

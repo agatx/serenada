@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -174,7 +176,9 @@ class SerenadaCallRegistry internal constructor(
             is RegisterOutcome.Failed -> return JoinResult.Failed(null, created.error)
             is RegisterOutcome.Created -> {
                 // Part B (OUTSIDE the lock): held room join, bounded + cancellable.
-                val joinError = awaitHeldJoin(created.call)
+                // On external cancellation the created call is torn down
+                // non-cancellably before rethrow (see [awaitCreatedHeldJoin]).
+                val joinError = awaitCreatedHeldJoin(created.call)
                 if (joinError != null) {
                     withOp { failHeldJoin(created.call, joinError) }
                     return JoinResult.Failed(created.call.callId, joinError)
@@ -214,7 +218,10 @@ class SerenadaCallRegistry internal constructor(
             is RegisterOutcome.Failed -> return JoinAndSwitchResult.Failed(null, created.error)
             is RegisterOutcome.Created -> {
                 // Part B (OUTSIDE the lock): held room join, bounded + cancellable.
-                val joinError = awaitHeldJoin(created.call)
+                // On external cancellation the created call is torn down
+                // non-cancellably before rethrow (see [awaitCreatedHeldJoin]); the
+                // old active call is untouched either way.
+                val joinError = awaitCreatedHeldJoin(created.call)
                 if (joinError != null) {
                     // Old active call untouched; clean up the failed new call.
                     withOp { failHeldJoin(created.call, joinError) }
@@ -345,25 +352,31 @@ class SerenadaCallRegistry internal constructor(
         // Set BEFORE taking the op mutex so an in-flight joinHeld/joinAndSwitch
         // suspended at the lock re-checks it in registerOrDedup and no-ops.
         closed = true
-        managedCalls.values.toList().forEach { call ->
-            withOp {
-                val live = managedCalls[call.callId]?.takeIf { !it.ended } ?: return@withOp
-                // Same lease-token keying + unconditional release on the going-away
-                // path as [leaveCall] (FIX B / FIX E).
-                if (live.foregroundToken != null) {
-                    drainAndReleaseForegroundForTeardown(live)
+        // The whole teardown (per-call drain loop + final mode release) runs
+        // NonCancellable so external cancellation of close() cannot leave the
+        // registry half-torn-down (calls still live, REGISTRY mode still claimed).
+        // Each drain is internally bounded by its withTimeout.
+        withContext(NonCancellable) {
+            managedCalls.values.toList().forEach { call ->
+                withOp {
+                    val live = managedCalls[call.callId]?.takeIf { !it.ended } ?: return@withOp
+                    // Same lease-token keying + unconditional release on the going-away
+                    // path as [leaveCall] (FIX B / FIX E).
+                    if (live.foregroundToken != null) {
+                        drainAndReleaseForegroundForTeardown(live)
+                    }
+                    runCatching { live.session.leave() }
+                    teardownCall(live)
                 }
-                runCatching { live.session.leave() }
-                teardownCall(live)
             }
-        }
-        withOp {
-            managedCalls.clear()
-            // teardownCall released the mode once no live call remained; this is a
-            // backstop for a registry closed with only ended calls in the map.
-            if (modeClaimed) {
-                runCatching { ForegroundMediaArbiter.releaseMode(modeRef) }
-                modeClaimed = false
+            withOp {
+                managedCalls.clear()
+                // teardownCall released the mode once no live call remained; this is a
+                // backstop for a registry closed with only ended calls in the map.
+                if (modeClaimed) {
+                    runCatching { ForegroundMediaArbiter.releaseMode(modeRef) }
+                    modeClaimed = false
+                }
             }
         }
         scope.coroutineContext[Job]?.cancel()
@@ -410,7 +423,19 @@ class SerenadaCallRegistry internal constructor(
         }
 
         val callId = UUID.randomUUID().toString()
-        val session = createHeldSession(room)
+        // Construct the HELD session under a guard: it can throw (an unconfigured
+        // core; joinInternal failing). A raw throw here would leave REGISTRY mode
+        // claimed with zero managed calls, wedging later DIRECT joins with
+        // ForegroundLeaseUnavailable. Release the mode if this claim left no live
+        // call and surface a failed join (mirrors the web guard's releaseModeIfIdle).
+        val session = try {
+            createHeldSession(room)
+        } catch (e: Exception) {
+            releaseModeIfIdle()
+            return RegisterOutcome.Failed(
+                CallRegistryError.JoinFailed(e.message ?: "Failed to create held session"),
+            )
+        }
         val call = ManagedCall(callId = callId, canonicalRoomId = canonical, session = session)
         managedCalls[callId] = call
         call.stateJob = scope.launch {
@@ -485,16 +510,30 @@ class SerenadaCallRegistry internal constructor(
         // 1. Drain the OLD call with its token, bounded by the release timeout.
         if (old != null) {
             val oldToken = old.foregroundToken
-            // Mark a release pending so the arbiter grants no new lease while the
-            // old one may still be owned (contract §2 rule 2 / Invariant 1).
-            ForegroundMediaArbiter.markReleasePending()
-            val released = try {
-                withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
-                    if (oldToken != null) old.session.releaseForeground(oldToken)
+            // The whole release sequence runs NonCancellable so external cancellation
+            // of the switch cannot strand releasePending (which would then make the
+            // arbiter refuse ALL new leases, wedging even a DIRECT join). The internal
+            // withTimeout still fires inside NonCancellable (deadline-based), so the
+            // release bound is preserved; on timeout the old call keeps its lease per
+            // Invariant 1.
+            val released = withContext(NonCancellable) {
+                // Mark a release pending so the arbiter grants no new lease while the
+                // old one may still be owned (contract §2 rule 2 / Invariant 1).
+                ForegroundMediaArbiter.markReleasePending()
+                val ok = try {
+                    withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
+                        if (oldToken != null) old.session.releaseForeground(oldToken)
+                    }
+                    true
+                } catch (e: TimeoutCancellationException) {
+                    false
                 }
-                true
-            } catch (e: TimeoutCancellationException) {
-                false
+                if (ok) {
+                    // Release confirmed fully-held: now the registry frees the lease.
+                    if (oldToken != null) runCatching { ForegroundMediaArbiter.releaseLease(oldToken) }
+                    clearForeground(old)
+                }
+                ok
             }
             if (!released) {
                 // Timeout: the old call KEEPS its lease (release pending stays set so
@@ -508,9 +547,6 @@ class SerenadaCallRegistry internal constructor(
                 publish()
                 return SwitchResult.Failed(old.activationError!!)
             }
-            // Release confirmed fully-held: now the registry frees the lease.
-            if (oldToken != null) runCatching { ForegroundMediaArbiter.releaseLease(oldToken) }
-            clearForeground(old)
         }
 
         // 2. Acquire a FRESH token for next and activate, bounded.
@@ -586,6 +622,19 @@ class SerenadaCallRegistry internal constructor(
         } catch (e: TimeoutCancellationException) {
             CallRegistryError.ActivationFailed("Activating ${call.callId} timed out")
         } catch (e: CancellationException) {
+            // External cancellation AFTER the lease was acquired / setForeground ran:
+            // the caller's post-return cleanup never runs on a thrown cancellation, so
+            // mirror the timeout-path cleanup (abort + release lease + clear the active
+            // slot) non-cancellably here before rethrowing. Covers both the primary
+            // activation and the rollback call (same hole). A null token (cancelled
+            // before acquire) makes the let/clearForeground a safe no-op.
+            withContext(NonCancellable) {
+                call.foregroundToken?.let { token ->
+                    runCatching { call.session.abortForegroundActivation(token) }
+                    runCatching { ForegroundMediaArbiter.releaseLease(token) }
+                }
+                clearForeground(call)
+            }
             throw e
         } catch (e: Exception) {
             CallRegistryError.ActivationFailed(e.message ?: "Activation of ${call.callId} failed")
@@ -608,16 +657,28 @@ class SerenadaCallRegistry internal constructor(
      */
     private suspend fun holdAndReleaseForeground(call: ManagedCall) {
         val token = call.foregroundToken ?: return
-        // Mark a release pending so the arbiter grants no new lease while the old
-        // one may still be owned (contract §2 rule 2 / Invariant 1).
-        ForegroundMediaArbiter.markReleasePending()
-        val released = try {
-            withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
-                call.session.releaseForeground(token)
+        // The drain + lease release run NonCancellable so external cancellation of
+        // the hold op cannot strand releasePending (bounded internally by the
+        // withTimeout, whose deadline still fires inside NonCancellable).
+        val released = withContext(NonCancellable) {
+            // Mark a release pending so the arbiter grants no new lease while the old
+            // one may still be owned (contract §2 rule 2 / Invariant 1).
+            ForegroundMediaArbiter.markReleasePending()
+            val ok = try {
+                withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
+                    call.session.releaseForeground(token)
+                }
+                true
+            } catch (e: TimeoutCancellationException) {
+                false
             }
-            true
-        } catch (e: TimeoutCancellationException) {
-            false
+            if (ok) {
+                // Drained fully-held: free the lease (clears the pending flag) and drop
+                // out of the active slot. No auto-promote (Core Invariant 5).
+                runCatching { ForegroundMediaArbiter.releaseLease(token) }
+                clearForeground(call)
+            }
+            ok
         }
         if (!released) {
             // Timeout: KEEP the lease + activeCallId (the user keeps this call).
@@ -631,10 +692,6 @@ class SerenadaCallRegistry internal constructor(
             publish()
             return
         }
-        // Drained fully-held: now free the lease (clears the pending flag) and drop
-        // out of the active slot. No auto-promote (Core Invariant 5).
-        runCatching { ForegroundMediaArbiter.releaseLease(token) }
-        clearForeground(call)
         publish()
     }
 
@@ -646,18 +703,23 @@ class SerenadaCallRegistry internal constructor(
      */
     private suspend fun drainAndReleaseForegroundForTeardown(call: ManagedCall) {
         val token = call.foregroundToken ?: return
-        ForegroundMediaArbiter.markReleasePending()
-        try {
-            withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
-                call.session.releaseForeground(token)
+        // Drain + unconditional release run NonCancellable so external cancellation
+        // of the leave/end/close op cannot strand releasePending or skip the lease
+        // release (bounded internally by the withTimeout deadline).
+        withContext(NonCancellable) {
+            ForegroundMediaArbiter.markReleasePending()
+            try {
+                withTimeout(WebRtcResilienceConstants.FOREGROUND_RELEASE_TIMEOUT_MS) {
+                    call.session.releaseForeground(token)
+                }
+            } catch (e: TimeoutCancellationException) {
+                // releaseForeground is idempotent/no-throw; a timeout still drops the
+                // going-away call out of foreground. Free the lease so the process is
+                // not wedged — unlike hold, no live call wants to keep this one.
             }
-        } catch (e: TimeoutCancellationException) {
-            // releaseForeground is idempotent/no-throw; a timeout still drops the
-            // going-away call out of foreground. Free the lease so the process is
-            // not wedged — unlike hold, no live call wants to keep this one.
+            runCatching { ForegroundMediaArbiter.releaseLease(token) }
+            clearForeground(call)
         }
-        runCatching { ForegroundMediaArbiter.releaseLease(token) }
-        clearForeground(call)
         publish()
     }
 
@@ -691,6 +753,26 @@ class SerenadaCallRegistry internal constructor(
         }
     }
 
+    /**
+     * [awaitHeldJoin] for a call THIS op just CREATED. On external cancellation of
+     * the suspended held-join wait, tear the new call down non-cancellably (release
+     * any lease + drop the REGISTRY mode via [failHeldJoin]) before rethrowing, so a
+     * cancelled [joinHeld]/[joinAndSwitch] never leaks a managed call or wedges the
+     * process in REGISTRY mode. Deduplicated ([RegisterOutcome.Existing]) callers
+     * must NOT use this: cancelling a second waiter rethrows WITHOUT tearing the
+     * shared call down (that call belongs to the first waiter).
+     */
+    private suspend fun awaitCreatedHeldJoin(call: ManagedCall): CallRegistryError? {
+        return try {
+            awaitHeldJoin(call)
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                withOp { failHeldJoin(call, CallRegistryError.JoinFailed("Held room join cancelled")) }
+            }
+            throw e
+        }
+    }
+
     // --- Helpers ---
 
     private fun createHeldSession(room: RoomRef): SerenadaSession {
@@ -701,6 +783,20 @@ class SerenadaCallRegistry internal constructor(
 
     private fun markCallFailed(call: ManagedCall, error: CallRegistryError) {
         call.activationError = error
+    }
+
+    /**
+     * Drop the REGISTRY mode claim if it is held and no live (non-ended) managed
+     * call remains, so a leaked claim can never wedge later DIRECT joins (parity
+     * with web `releaseModeIfIdle`). Used when session construction throws after
+     * the mode was claimed but before any call was registered.
+     */
+    private fun releaseModeIfIdle() {
+        if (!modeClaimed) return
+        if (managedCalls.values.none { !it.ended }) {
+            runCatching { ForegroundMediaArbiter.releaseMode(modeRef) }
+            modeClaimed = false
+        }
     }
 
     /**

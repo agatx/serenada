@@ -2042,6 +2042,14 @@ class SerenadaSession internal constructor(
             mediaActivationState = MediaActivationState.FAILED
             throw IllegalStateException("test-injected activation failure")
         }
+        // Test-only injection (see [activateForegroundGateForTest]): suspend on a gate
+        // the test controls so it can cancel the registry's switch WHILE activation is
+        // in flight (after the lease was acquired), exercising the cancellation-cleanup
+        // path deterministically.
+        activateForegroundGateForTest?.let {
+            activateForegroundGateForTest = null
+            it.await()
+        }
         // Seed the lease token + generation BEFORE awaiting so the post-await
         // fences inside applyForegroundRoleInternal see them. The session keeps
         // mediaOpGeneration wired to the passed generation (the arbiter's
@@ -2072,6 +2080,24 @@ class SerenadaSession internal constructor(
     internal var hangNextForegroundReleaseForTest: Boolean = false
 
     /**
+     * Test-only: when set, [releaseForeground] suspends on this gate before draining.
+     * Unlike [hangNextForegroundReleaseForTest] (which awaits cancellation forever),
+     * completing the gate lets the release finish NORMALLY. Lets a registry test
+     * cancel the outer op mid-drain and then complete the gate to prove the drain
+     * still finishes (lease released, releasePending cleared) under NonCancellable.
+     * NOT a public API.
+     */
+    internal var releaseForegroundGateForTest: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    /**
+     * Test-only: when set, [activateForeground] suspends on this gate before applying
+     * the foreground role. Lets a registry test cancel the switch while activation is
+     * in flight (after the lease was acquired) to exercise the cancellation-cleanup
+     * path deterministically. NOT a public API.
+     */
+    internal var activateForegroundGateForTest: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    /**
      * Token-gated release (contract §3; wraps the Phase-1
      * [applyHeldRoleInternal]). Idempotent and MUST NOT throw after a partial
      * release. Uses the token ONLY to fence (it proves the caller is draining the
@@ -2084,6 +2110,12 @@ class SerenadaSession internal constructor(
         // forever so the registry's bounded drain times out (Invariant 1 path).
         if (hangNextForegroundReleaseForTest) {
             kotlinx.coroutines.awaitCancellation()
+        }
+        // Test-only gate (see [releaseForegroundGateForTest]): suspend until the test
+        // completes it, so a cancellation of the outer op can land mid-drain.
+        releaseForegroundGateForTest?.let {
+            releaseForegroundGateForTest = null
+            it.await()
         }
         // A release for a token that is not ours is a no-op (already drained / the
         // lease moved on); never throw.
