@@ -354,7 +354,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
 
             let videoCaptureSupported = !cameraController.availableCameraModes.isEmpty
             if preferVideo && videoCaptureSupported {
-                let started = cameraController.restartVideoCapturerFromAvailableModes()
+                // Prefer the controller's current mode (parity with Android's
+                // startLocalMedia); falls back to the available-modes scan on failure.
+                let started = cameraController.restartVideoCapturer(preferring: cameraController.currentMode())
                 localVideoTrack?.isEnabled = started
             } else {
                 localVideoTrack?.isEnabled = false
@@ -588,9 +590,10 @@ internal final class WebRtcEngine: SessionMediaEngine {
             localAudioTrack?.isEnabled = true
         }
 
-        // Reacquire the camera track when video is desired.
-        let wantsVideo = videoMode != nil
-        if videoMediaEnabled, wantsVideo {
+        // Reacquire the camera track when video is desired, PREFERRING the desired
+        // mode (which may have been chosen while held) so resume honors it instead
+        // of snapping to the first available mode; fall back only if it fails.
+        if videoMediaEnabled, let videoMode {
             if localVideoTrack == nil {
                 localVideoSource = factory.videoSource()
                 localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
@@ -598,7 +601,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
             }
             let videoCaptureSupported = !cameraController.availableCameraModes.isEmpty
             if videoCaptureSupported {
-                let started = cameraController.restartVideoCapturerFromAvailableModes()
+                let started = cameraController.restartVideoCapturer(preferring: videoMode)
                 localVideoTrack?.isEnabled = started
             } else {
                 localVideoTrack?.isEnabled = false
@@ -816,7 +819,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
             ensureLocalVideoTrack()
         }
         if enabled && !cameraController.hasActiveCapturer() && !isLegacyScreenSharing {
-            let started = cameraController.restartVideoCapturerFromAvailableModes()
+            // Honor the controller's current mode (parity with Android); falls back
+            // to the available-modes scan only if that source fails.
+            let started = cameraController.restartVideoCapturer(preferring: cameraController.currentMode())
             if !started {
                 localVideoTrack?.isEnabled = false
                 return false
