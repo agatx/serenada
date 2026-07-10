@@ -584,7 +584,8 @@ internal class PeerConnectionSlot(
             runCatching { contentTransceiver?.sender?.setTrack(null, false) }
             return
         }
-        // Legacy single video transceiver: drop its track and flip to recv-only,
+        // Legacy single video transceiver: drop its track only. Direction stays
+        // as-is (no recv-only flip) so this does not trigger a renegotiation,
         // matching [attachTrackToTransceiver]'s null-track handling.
         attachTrackToTransceiver(
             pc = pc,
@@ -610,13 +611,16 @@ internal class PeerConnectionSlot(
             if (sender.track() !== track) {
                 sender.setTrack(track, false)
             }
-            val targetDirection = if (track != null) {
-                RtpTransceiver.RtpTransceiverDirection.SEND_RECV
-            } else {
-                RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
-            }
-            if (transceiver.direction != targetDirection) {
-                transceiver.direction = targetDirection
+            // Only ensure SEND_RECV when ATTACHING a track. Detaching (track == null,
+            // e.g. hold or legacy clearLocalVideoTracks) must leave the direction
+            // untouched: flipping to RECV_ONLY fires OnRenegotiationNeeded and would
+            // force a renegotiation per hold + per resume, violating the multi-call
+            // "no renegotiation" contract (§5 / Core Invariant 3). Matches the web
+            // baseline (MediaEngine.ts replaceTrack(null) without a direction flip).
+            if (track != null &&
+                transceiver.direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+            ) {
+                transceiver.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
             }
             onAttached(sender)
         } else if (track != null) {

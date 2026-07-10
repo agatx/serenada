@@ -2,6 +2,7 @@ package app.serenada.core.call
 
 import android.os.Handler
 import android.os.Looper
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -153,6 +154,132 @@ class PeerConnectionSlotHoldTest {
         slot.clearLocalVideoTracks()
 
         assertNull("legacy video sender track must be null after hold", videoTransceiver.sender.track())
+    }
+
+    // --- Candidate B: hold/resume must not flip transceiver direction ----------
+
+    @Test
+    fun `hold then resume keep the audio sender stable and never flip direction`() {
+        val audioTransceiver = FakeRtpTransceiver(
+            midValue = CAMERA_MID,
+            mediaTypeValue = MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+        )
+        val fakePc = FakePeerConnection(mutableListOf<RtpTransceiver>(audioTransceiver))
+        val factory = FakePeerConnectionFactory(fakePc)
+
+        val slot = PeerConnectionSlot(
+            remoteCid = "remote",
+            factory = factory,
+            iceServers = emptyList(),
+            localAudioTrack = null,
+            localVideoTrack = null,
+            videoReceiveEnabled = true,
+            onLocalIceCandidate = { _, _ -> },
+            onRemoteVideoTrack = { _, _ -> },
+            onConnectionStateChange = { _, _ -> },
+            onIceConnectionStateChange = { _, _ -> },
+            onSignalingStateChange = { _, _ -> },
+            onRenegotiationNeeded = { },
+            applyAudioSenderParameters = { },
+            currentVideoSenderPolicy = { WebRtcEngine.VideoSenderPolicy(null, null, null, null) },
+            isRemoteBlackFrameAnalysisEnabled = { false },
+            peerConnectionDisposeQueue = disposeQueue(),
+            supportsIndependentContentVideo = false,
+            isOfferOwner = { false },
+        )
+        check(slot.ensurePeerConnection())
+
+        // Attach the initial audio track.
+        val audioTrack = FakeAudioTrack(tag = "audio-1")
+        slot.setAudioTrack(audioTrack)
+        val senderAfterAttach = audioTransceiver.sender
+        assertTrue("audio sender should carry the track after attach", senderAfterAttach.track() === audioTrack)
+        // Reset the history: we only care about direction writes across hold/resume,
+        // and the initial SEND_RECV transceiver needs none anyway.
+        audioTransceiver.setDirectionCalls.clear()
+
+        // Hold: detach the audio track. No direction flip, sender unchanged.
+        slot.setAudioTrack(null)
+        assertNull("audio sender track must be null after hold", audioTransceiver.sender.track())
+        assertTrue("audio sender identity must be stable across hold", audioTransceiver.sender === senderAfterAttach)
+        assertEquals(
+            "audio transceiver must stay SEND_RECV across hold",
+            RtpTransceiver.RtpTransceiverDirection.SEND_RECV,
+            audioTransceiver.direction,
+        )
+
+        // Resume: re-attach a track. Still no direction flip, sender unchanged.
+        val resumedTrack = FakeAudioTrack(tag = "audio-2")
+        slot.setAudioTrack(resumedTrack)
+        assertTrue("audio sender should carry the resumed track", audioTransceiver.sender.track() === resumedTrack)
+        assertTrue("audio sender identity must be stable across resume", audioTransceiver.sender === senderAfterAttach)
+        assertEquals(
+            "audio transceiver must stay SEND_RECV across resume",
+            RtpTransceiver.RtpTransceiverDirection.SEND_RECV,
+            audioTransceiver.direction,
+        )
+
+        assertTrue(
+            "hold/resume must trigger zero direction changes (no renegotiation)",
+            audioTransceiver.setDirectionCalls.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `clearLocalVideoTracks never flips the legacy video transceiver direction`() {
+        val videoTransceiver = FakeRtpTransceiver(
+            midValue = CAMERA_MID,
+            mediaTypeValue = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+        )
+        val fakePc = FakePeerConnection(mutableListOf<RtpTransceiver>(videoTransceiver))
+        val factory = FakePeerConnectionFactory(fakePc)
+        val cameraTrack: VideoTrack = FakeVideoTrack(tag = "camera")
+
+        val slot = PeerConnectionSlot(
+            remoteCid = "remote",
+            factory = factory,
+            iceServers = emptyList(),
+            localAudioTrack = null,
+            localVideoTrack = null,
+            videoReceiveEnabled = true,
+            onLocalIceCandidate = { _, _ -> },
+            onRemoteVideoTrack = { _, _ -> },
+            onConnectionStateChange = { _, _ -> },
+            onIceConnectionStateChange = { _, _ -> },
+            onSignalingStateChange = { _, _ -> },
+            onRenegotiationNeeded = { },
+            applyAudioSenderParameters = { },
+            currentVideoSenderPolicy = { WebRtcEngine.VideoSenderPolicy(null, null, null, null) },
+            isRemoteBlackFrameAnalysisEnabled = { false },
+            peerConnectionDisposeQueue = disposeQueue(),
+            supportsIndependentContentVideo = false,
+            isOfferOwner = { false },
+        )
+        check(slot.ensurePeerConnection())
+
+        slot.attachLocalTracks(
+            audioTrack = null,
+            cameraTrack = cameraTrack,
+            contentTrack = null,
+            supportsIndependentContentVideo = false,
+        )
+        val sender = videoTransceiver.sender
+        assertTrue("legacy video sender should carry the camera track", sender.track() === cameraTrack)
+        videoTransceiver.setDirectionCalls.clear()
+
+        slot.clearLocalVideoTracks()
+
+        assertNull("legacy video sender track must be null after hold", videoTransceiver.sender.track())
+        assertTrue("legacy video sender identity must be stable across hold", videoTransceiver.sender === sender)
+        assertEquals(
+            "legacy video transceiver must stay SEND_RECV across hold",
+            RtpTransceiver.RtpTransceiverDirection.SEND_RECV,
+            videoTransceiver.direction,
+        )
+        assertTrue(
+            "hold must trigger zero direction changes (no renegotiation)",
+            videoTransceiver.setDirectionCalls.isEmpty(),
+        )
     }
 
     // --- FIX A3: sticky remote deafen ------------------------------------------

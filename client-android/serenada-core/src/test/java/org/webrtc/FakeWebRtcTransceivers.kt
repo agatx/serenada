@@ -94,6 +94,11 @@ internal class FakeRtpTransceiver(
     private val fakeSender = FakeRtpSender()
     private var directionValue: RtpTransceiverDirection = RtpTransceiverDirection.SEND_RECV
 
+    // Every direction the slot writes via `transceiver.direction = ...`. On a real
+    // peer connection each such write fires OnRenegotiationNeeded, so an empty
+    // history across a hold/resume is the proxy for "no renegotiation".
+    val setDirectionCalls = mutableListOf<RtpTransceiverDirection>()
+
     override fun getMid(): String? = midValue
     override fun getMediaType(): MediaStreamTrack.MediaType = mediaTypeValue
     override fun getReceiver(): RtpReceiver = fakeReceiver
@@ -102,6 +107,7 @@ internal class FakeRtpTransceiver(
     override fun getCurrentDirection(): RtpTransceiverDirection? = currentDirectionValue
     override fun getDirection(): RtpTransceiverDirection = directionValue
     override fun setDirection(direction: RtpTransceiverDirection): Boolean {
+        setDirectionCalls += direction
         directionValue = direction
         return true
     }
