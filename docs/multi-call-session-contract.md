@@ -479,3 +479,48 @@ simplify → codex review → reconcile cross-platform → build + unit tests gr
 Test matrix (minimum) is enumerated in the design doc's Web/iOS/Android "Tests" sections plus
 the unknown-field decode test on all three decoders and the constants-parity check. Honor all
 of them.
+
+---
+
+## 13. Session-scoped signaling provider channels (Phase 3)
+
+The app-configurable `SignalingProvider` (version 1) is a **single-session** surface: one
+listener/delegate slot, room-less ops (`leaveRoom`/`endRoom`/`disconnect`/TURN/reconnect), no
+room identity on events. Handing the same v1 object to two concurrent sessions cross-wires
+their CIDs and overwrites the listener. The contract:
+
+1. **v1 stays single-session and supported.** One live session may bind a given v1 provider
+   object at a time — direct `join()` or exactly one registry call. Built-in server mode is
+   unchanged (it already builds a fresh internal provider per session; do NOT wrap it in v2).
+2. **Second concurrent bind → typed failure, never silent reuse.** Core owns a liveness guard
+   (identity-based, on the single join path). A second concurrent bind attempt fails with a
+   distinct documented error: web error `CallState`/registry `failed` carrying `CallErrorCode`
+   `providerUnavailable` (exports `ProviderUnavailableError`); iOS `CallError.providerUnavailable`;
+   Android `SingleSessionProviderInUseException` (carrying `CallError.ProviderUnavailable`),
+   registry `JoinResult.Failed`. Sequential reuse (close A, then join B on the same v1 object)
+   MUST still work — the guard is concurrency-only.
+3. **Multi-call requires v2 `MultiSessionSignalingProvider`.** An app-global service that vends
+   one channel per session via `openSession(roomId)`; each vended channel satisfies the v1
+   per-session surface, so `SerenadaSession` is unchanged. The seam is core's
+   `createSignalingProvider` (web `SerenadaCore.ts`; Android `SerenadaCore.kt`; iOS
+   `SerenadaCore.swift`): version 2 → `openSession(roomId)`; version 1 → liveness guard then
+   return the configured object. Config: web `signalingProvider: AnySignalingProvider` (accepts
+   v1 or v2); Android/iOS add a separate `multiSessionSignalingProvider` field. Setting both a
+   v1 and a v2 provider is a configuration error.
+
+### Channel lifecycle rules (SDK obligations + implementor obligations)
+
+SDK-side: vend one channel per session, never share a channel, call the channel's
+`close()`/`disconnect()` exactly once at session teardown, and unbind handlers before close so
+a session never processes provider events after its channel is closed. The rest are
+**implementor obligations** (the SDK cannot enforce another process's transport) and MUST be
+documented in the integration guide (see `docs/multi-call-session.md` "Custom signaling
+provider"):
+
+- Each channel is permanently bound to one canonical room; events are delivered only to that
+  channel.
+- `leave`/`end`/`disconnect`/TURN refresh/reconnect state are channel-local.
+- The service owns the single physical transport and ref-counts it: closing channel A must NOT
+  disconnect channel B; physical teardown only after the last channel closes.
+- Queued events carry a per-channel generation and are dropped after their channel closes.
+- `close()`/`disconnect()` is terminal and idempotent (a second close is tolerated).

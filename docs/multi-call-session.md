@@ -178,6 +178,57 @@ All registry operations are serialized so foreground-lease and call-map mutation
 
 The registry keeps **one live call per canonical room**. A second live join for a room that already has a non-ended managed call returns the existing `CallId` (idempotent join by room). Room URLs and ids are canonicalized to the `/call/<token>` token before comparison, host-agnostic, so `serenada.app` and `serenada-app.ru` URLs for the same room collapse to one. The `CallId` is registry-generated and stable for the managed call's life; it is not the room id and not a host correlation key.
 
+## Custom signaling provider (multi-call)
+
+If your app injects its own signaling instead of using built-in server mode, the provider surface is **session-scoped**. There are two versions; pick by how many concurrent calls the provider must back.
+
+**A `SignalingProvider` (version 1) is single-session.** It has one listener/delegate slot and room-less ops (`leaveRoom`/`endRoom`/`disconnect`/TURN refresh/reconnect), so exactly one session can bind a given v1 provider object at a time. That covers single-call `join()` and **one** live registry call. A **second concurrent** join that would bind the same v1 object fails fast with a typed error rather than silently sharing it (which would cross-wire the two sessions' CIDs and events):
+
+- **Web** — a direct `core.join()` returns a session whose state is an error `CallState` with `error.code === 'providerUnavailable'` (a `CallErrorCode`; the SDK also exports `ProviderUnavailableError`); a registry join returns `{ kind: 'failed' }` carrying that code.
+- **iOS** — `CallError.providerUnavailable`, surfaced on a direct join as an error `CallState` and on a registry join as a failed `JoinResult`.
+- **Android** — a direct `SerenadaCore.join(...)` throws `SingleSessionProviderInUseException` (carrying `CallError.ProviderUnavailable`); a registry join returns `JoinResult.Failed` with the same `CallError`.
+
+Sequential reuse is fine: fully tear down one session, then join again against the same v1 provider. The guard is concurrency-only. Built-in server mode is unaffected (it already constructs a fresh internal provider per session).
+
+**Multi-call over an app-owned provider requires a `MultiSessionSignalingProvider` (version 2).** This is an app-global service that owns the physical transport once and vends one signaling channel per session via `openSession(roomId)`. Each vended channel satisfies the existing v1 per-session surface, so `SerenadaSession` consumes it unchanged; concurrent sessions never share a listener or cross-wire rooms.
+
+Configure it per platform:
+
+- **Web** — pass it as `signalingProvider` (the config field is `AnySignalingProvider`); the SDK detects `version === 2` and calls `openSession` once per join.
+- **iOS** — pass it as the `multiSessionSignalingProvider` init parameter on `SerenadaConfig`.
+- **Android** — set `multiSessionSignalingProvider` on `SerenadaConfig`.
+
+Provide exactly one signaling source (`serverHost`, the v1 provider field, or the v2 provider field); setting both provider fields is a configuration error.
+
+### Migration sketch (v1 → v2)
+
+Wrap your existing transport in a service whose `openSession(roomId)` returns a room-bound channel object that implements the existing provider surface you already have. The old v1 provider effectively becomes the per-room channel; the new service is the thin factory around it.
+
+```typescript
+// Web
+class DemoService implements MultiSessionSignalingProvider {
+    readonly version = 2 as const;
+    openSession(roomId: string): SignalingProvider {
+        // Return a v1 SignalingProvider bound to roomId (your existing provider,
+        // now scoped to one room and fed only that room's events).
+        return new DemoChannel(roomId, this.sharedTransport);
+    }
+    getIceServers() { return this.sharedTransport.iceServers(); }
+}
+```
+
+The Kotlin and Swift shapes mirror this (`openSession(roomId): SignalingProvider`, `suspend`/`async getIceServers()`, `version` and `capabilities` defaulted). See the per-platform provider examples in [docs/sdk/sdk-integration-web.md](sdk/sdk-integration-web.md), [docs/sdk/sdk-integration-android.md](sdk/sdk-integration-android.md), and [samples/ios/README.md](../samples/ios/README.md).
+
+### Channel lifecycle obligations (implementor)
+
+The SDK vends one channel per session, never shares a channel, and calls the channel's `close()`/`disconnect()` exactly once at session teardown. Everything below is on the **implementor** of the service (the SDK cannot enforce another process's transport):
+
+- **Room binding.** Each channel is permanently bound to the one canonical room passed to `openSession`; deliver that channel's events **only** to that channel's listener/delegate.
+- **Channel-local state.** `leave`/`end`/`disconnect`, TURN refresh, and reconnect state are all scoped to the channel that triggered them, never global.
+- **Transport ownership and ref-counting.** The service owns the single physical transport. Closing one channel must **not** disconnect any other channel; tear the physical transport down only **after the last** channel closes.
+- **Queued events.** Tag queued events with a per-channel generation and **drop** them once that channel has closed, so a late event never lands on a reused transport or a closed channel.
+- **Terminal close.** `close()`/`disconnect()` on a channel is terminal and idempotent: a second close is tolerated and does nothing.
+
 ## v1 limitation: foreground-only recovery
 
 Recovery across app restart is **foreground-only** in v1.
