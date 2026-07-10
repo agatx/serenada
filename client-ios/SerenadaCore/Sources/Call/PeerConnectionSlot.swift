@@ -616,9 +616,14 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             if transceiver.sender.track !== track {
                 transceiver.sender.track = track
             }
-            let targetDirection: RTCRtpTransceiverDirection = (track != nil) ? .sendRecv : .recvOnly
-            if transceiver.direction != targetDirection {
-                transceiver.setDirection(targetDirection, error: nil)
+            // Only flip direction when ATTACHING a track (ensure .sendRecv). On a
+            // nil track (detach, e.g. hold), clear the sender track but leave the
+            // direction untouched: flipping to .recvOnly fires
+            // peerConnectionShouldNegotiate and forces a renegotiation per hold and
+            // per resume, violating the no-renegotiation hold contract. Mirrors the
+            // web MediaEngine gating (replaceTrack(null) without a direction flip).
+            if track != nil, transceiver.direction != .sendRecv {
+                transceiver.setDirection(.sendRecv, error: nil)
             }
         } else if let track {
             _ = peerConnection.add(track, streamIds: ["serenada"])
@@ -1731,6 +1736,10 @@ extension PeerConnectionSlot {
 
     /// The remote CONTENT (screen share) track currently bound by the classifier.
     var _test_remoteContentTrack: RTCVideoTrack? { remoteContentTrack }
+
+    /// The live peer connection, so a test can inspect transceiver direction /
+    /// sender identity after attach/detach (the hold-direction regression).
+    var _test_peerConnection: RTCPeerConnection? { peerConnection }
 }
 #endif
 #endif
