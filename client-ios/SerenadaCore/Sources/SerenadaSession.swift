@@ -244,6 +244,18 @@ public final class SerenadaSession: ObservableObject {
     /// Camera state actually published to peers right now (false while held).
     private(set) var actualVideoPublished = false
 
+    /// Sticky suppression of ALL remote camera + content renderer *attachments*
+    /// while held. `detachRemoteRenderersForHold()` sets it (after detaching the
+    /// currently attached set); the resume replay clears it. It is not a one-time
+    /// detach but a held-state gate: while set, every attach path — the host-facing
+    /// `attachRemote(Content)Renderer` APIs and the slot-replay path fired by
+    /// `setSlot` when a peer slot is created/replaced — records the registration
+    /// but defers the physical attach. Without it a held call resumes remote frames
+    /// early, either when a slot is replaced (setSlot -> replayRendererRegistrations)
+    /// or when the host registers a renderer mid-hold. Resume clears the flag then
+    /// replays exactly the registered set (dedup keeps the replay idempotent).
+    private var remoteRenderingSuppressedForHold = false
+
     /// Registry-facing read of the user-intended mic enablement (preserved across
     /// hold). `desiredAudioEnabled` itself is private; the registry needs it only
     /// to assemble the published `ManagedCallState`, never to mutate intent.
@@ -1206,7 +1218,7 @@ public final class SerenadaSession: ObservableObject {
     public func attachRemoteRenderer(_ renderer: AnyObject) {
         rememberRenderer(renderer, in: &defaultRemoteRendererRegistrations)
         compactRendererRegistrations()
-        guard let cid = preferredRemoteRendererCid() else { return }
+        guard !remoteRenderingSuppressedForHold, let cid = preferredRemoteRendererCid() else { return }
         peerSlots[cid]?.attachRemoteRenderer(renderer)
     }
 
@@ -1218,6 +1230,7 @@ public final class SerenadaSession: ObservableObject {
 
     public func attachRemoteRenderer(_ renderer: AnyObject, forParticipant cid: String) {
         rememberRenderer(renderer, for: cid, in: &remoteRendererRegistrations)
+        guard !remoteRenderingSuppressedForHold else { return }
         peerSlots[cid]?.attachRemoteRenderer(renderer)
     }
 
@@ -1233,6 +1246,7 @@ public final class SerenadaSession: ObservableObject {
     /// Attach a renderer to a specific peer's remote CONTENT (screen share) track.
     public func attachRemoteContentRenderer(_ renderer: AnyObject, forParticipant cid: String) {
         rememberRenderer(renderer, for: cid, in: &remoteContentRendererRegistrations)
+        guard !remoteRenderingSuppressedForHold else { return }
         peerSlots[cid]?.attachRemoteContentRenderer(renderer)
     }
 
@@ -1255,6 +1269,10 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func replayRendererRegistrations(to slot: any PeerConnectionSlotProtocol, cid: String) {
+        // While held, remote rendering is suppressed: a slot created/replaced now
+        // (setSlot fires this) keeps its registrations but must not physically
+        // attach — the resume replay clears the gate and re-runs this per slot.
+        guard !remoteRenderingSuppressedForHold else { return }
         compactRendererRegistrations()
         var attachedCameraRenderers = Set<ObjectIdentifier>()
 
@@ -1967,6 +1985,9 @@ public final class SerenadaSession: ObservableObject {
     /// after a resume, reusing the existing per-slot replay path. Local renderers
     /// re-bind inside the engine via `resumeLocalMediaFromHold`.
     private func replayAllRendererRegistrations() {
+        // Resume clears the held gate FIRST so the per-slot replay actually
+        // attaches the registered set (exactly once, thanks to slot dedup).
+        remoteRenderingSuppressedForHold = false
         for (cid, slot) in peerSlots {
             replayRendererRegistrations(to: slot, cid: cid)
         }
@@ -1978,6 +1999,10 @@ public final class SerenadaSession: ObservableObject {
     /// The engine's `detachRenderersForHold` only covers the LOCAL preview it
     /// owns; this covers the session-owned REMOTE renderers.
     private func detachRemoteRenderersForHold() {
+        // Sticky for the whole hold: not just this one-time detach. Set BEFORE the
+        // detach loop so any concurrent attach/setSlot also defers (see the gates
+        // in the attach paths and `replayRendererRegistrations`).
+        remoteRenderingSuppressedForHold = true
         compactRendererRegistrations()
         for (cid, slot) in peerSlots {
             // Default (no-cid) camera renderers may be attached to whichever slot

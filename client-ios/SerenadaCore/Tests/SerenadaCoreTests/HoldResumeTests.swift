@@ -1044,6 +1044,101 @@ final class HoldResumeTests: XCTestCase {
         }
         harness.tearDown()
     }
+
+    /// Suppression must be a STICKY held-state gate, not a one-time detach: a peer
+    /// slot created (or replaced) while held goes through `setSlot ->
+    /// replayRendererRegistrations`, which would otherwise re-attach the remembered
+    /// remote renderers to the new slot and resume remote frames before foreground
+    /// activation. While held the new slot must receive ZERO attachments; resume
+    /// must then attach the registered set exactly once.
+    func testSlotReplacedWhileHeldGetsNoAttachmentsUntilResume() async {
+        let harness = await makeInCallHarness()
+
+        // Host registers renderers for a peer that has not joined yet, so the
+        // registrations are remembered but nothing is attached (no slot exists).
+        let cameraRenderer = NSObject()
+        let contentRenderer = NSObject()
+        harness.session.attachRemoteRenderer(cameraRenderer, forParticipant: "remote2")
+        harness.session.attachRemoteContentRenderer(contentRenderer, forParticipant: "remote2")
+        await yieldToMainActor()
+        XCTAssertNil(harness.fakeMedia.fakeSlots["remote2"],
+                     "no slot for remote2 exists before it joins")
+
+        // Hold the call, then remote2 joins: the negotiation engine creates a fresh
+        // slot -> setSlot -> replayRendererRegistrations. The gate must defer.
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+
+        harness.simulateRoomState(
+            participants: [
+                (cid: "local", joinedAt: 1),
+                (cid: "remote", joinedAt: 2),
+                (cid: "remote2", joinedAt: 3)
+            ],
+            hostCid: "local"
+        )
+        await yieldToMainActor()
+        await waitUntil { harness.fakeMedia.fakeSlots["remote2"] != nil }
+
+        guard let lateSlot = harness.fakeMedia.fakeSlots["remote2"] else {
+            XCTFail("a peer joining while held must get a slot")
+            harness.tearDown()
+            return
+        }
+        XCTAssertEqual(lateSlot.attachRemoteRendererCalls.filter { $0 === cameraRenderer }.count, 0,
+                       "a slot created while held must not receive remote camera attachments")
+        XCTAssertEqual(lateSlot.attachRemoteContentRendererCalls.filter { $0 === contentRenderer }.count, 0,
+                       "a slot created while held must not receive remote content attachments")
+
+        // Resume clears the gate and replays exactly once onto the new slot.
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+        await yieldToMainActor()
+
+        XCTAssertEqual(lateSlot.attachRemoteRendererCalls.filter { $0 === cameraRenderer }.count, 1,
+                       "resume must attach the remote camera renderer to the new slot exactly once")
+        XCTAssertEqual(lateSlot.attachRemoteContentRendererCalls.filter { $0 === contentRenderer }.count, 1,
+                       "resume must attach the remote content renderer to the new slot exactly once")
+        harness.tearDown()
+    }
+
+    /// A renderer the HOST registers WHILE held must go through the same gate: the
+    /// registration is remembered but the physical attach is deferred until resume.
+    /// Otherwise the normal attach path bypasses the hold detach and resumes remote
+    /// frames early.
+    func testHostRegisteringRendererWhileHeldDefersAttachUntilResume() async {
+        let harness = await makeInCallHarness()
+        guard let slot = harness.fakeMedia.fakeSlots["remote"] else {
+            XCTFail("expected a peer slot for the remote participant")
+            harness.tearDown()
+            return
+        }
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+
+        // Host attaches new renderers mid-hold (e.g. a SwiftUI view appears).
+        let cameraRenderer = NSObject()
+        let contentRenderer = NSObject()
+        harness.session.attachRemoteRenderer(cameraRenderer, forParticipant: "remote")
+        harness.session.attachRemoteContentRenderer(contentRenderer, forParticipant: "remote")
+        await yieldToMainActor()
+
+        XCTAssertEqual(slot.attachRemoteRendererCalls.filter { $0 === cameraRenderer }.count, 0,
+                       "a renderer registered while held must not attach")
+        XCTAssertEqual(slot.attachRemoteContentRendererCalls.filter { $0 === contentRenderer }.count, 0,
+                       "a content renderer registered while held must not attach")
+
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+        await yieldToMainActor()
+
+        XCTAssertEqual(slot.attachRemoteRendererCalls.filter { $0 === cameraRenderer }.count, 1,
+                       "resume must attach the held-registered camera renderer exactly once")
+        XCTAssertEqual(slot.attachRemoteContentRendererCalls.filter { $0 === contentRenderer }.count, 1,
+                       "resume must attach the held-registered content renderer exactly once")
+        harness.tearDown()
+    }
 }
 
 /// Test audio coordinator whose `activateCallSession` can be PAUSED so a test can
