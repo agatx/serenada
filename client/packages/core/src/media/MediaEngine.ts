@@ -958,35 +958,60 @@ export class MediaEngine {
     }
 
     /**
+     * Consume the armed resume handoff, but only if `intent` is STILL the armed
+     * one. A {@link disarmResumeHandoff} that withdrew both kinds during a
+     * reacquire await already nulled `pendingResumeHandoff`, and a fresh resume
+     * could have re-armed a DIFFERENT intent while this handoff awaited; neither
+     * must be clobbered by this handoff nulling blindly.
+     */
+    private consumeResumeHandoff(intent: { audio: boolean; videoMode: VideoMode }): void {
+        if (this.pendingResumeHandoff === intent) this.pendingResumeHandoff = null;
+    }
+
+    /**
      * Replay a resumed call's desired capture that a concurrent in-flight
      * initial-media start blocked (see {@link pendingResumeHandoff}). Called from
      * the stale bail-outs of {@link startLocalMediaInternal} AFTER that op has
      * cleared `requestingMedia`, so the reacquire sinks (which early-return while
-     * `requestingMedia` is set) now proceed. Consumes the armed intent (runs once
-     * per stale exit) and reacquires each still-missing kind via the SAME sinks
-     * resume uses. No-op when nothing was armed, when the call is held again, or
-     * when the engine was destroyed; the reacquire paths carry their own no-op
-     * guards, so this cannot loop.
+     * `requestingMedia` is set) now proceed. Reacquires each still-missing kind
+     * via the SAME sinks resume uses. No-op when nothing was armed, when the call
+     * is held again, or when the engine was destroyed; the reacquire paths carry
+     * their own no-op guards, so this cannot loop.
      */
     private async handOffToResumedCapture(): Promise<void> {
+        // Only the continuation that released the ACTIVE latch runs the handoff.
+        // If `requestingMedia` is still set, ANOTHER start owns the latch (a
+        // `stopLocalMedia` + newer start superseded this parked op) and this op's
+        // stale exit does NOT own it. Consuming the intent here would strand it:
+        // the reacquire sinks early-return on the `requestingMedia` guard, and the
+        // owning start's later exit would find nothing to replay. Return WITHOUT
+        // consuming so the intent survives for that owning start's exit.
+        if (this.requestingMedia) return;
         const intent = this.pendingResumeHandoff;
-        this.pendingResumeHandoff = null;
         if (!intent) return;
+        // Do NOT null `pendingResumeHandoff` up front: keep it referencing this
+        // in-flight `intent` so a `disarmResumeHandoff(kind)` during the audio
+        // reacquire await below still mutates the SAME object the video branch
+        // reads, and the withdrawn kind is not reacquired. Consumed only at the
+        // exits (via {@link consumeResumeHandoff}, which no-ops if a disarm or a
+        // fresh resume already replaced it).
+        //
         // Re-check held/destroyed BEFORE EACH kind, not once up front: the audio
         // reacquire below awaits getUserMedia, and a hold can start during that
         // await. Without a fresh check the video branch would then start camera
         // capture on a newly-held call (the generation fence would only stop it
         // AFTER acquisition — a needless privacy window). `reacquireVideoTrack`
         // also carries its own cheap held entry guard as a backstop.
-        if (this.destroyed || this.heldNoCapture) return;
+        if (this.destroyed || this.heldNoCapture) { this.consumeResumeHandoff(intent); return; }
         if (intent.audio && !this.localStream?.getAudioTracks()[0]) {
             await this.reacquireLocalAudioCapture();
         }
-        if (this.destroyed || this.heldNoCapture) return;
+        if (this.destroyed || this.heldNoCapture) { this.consumeResumeHandoff(intent); return; }
         if (intent.videoMode !== 'off' && !this.localStream?.getVideoTracks()[0]) {
             this.facingMode = intent.videoMode === 'selfie' ? 'user' : 'environment';
             await this.reacquireVideoTrack();
         }
+        this.consumeResumeHandoff(intent);
     }
 
     /**
