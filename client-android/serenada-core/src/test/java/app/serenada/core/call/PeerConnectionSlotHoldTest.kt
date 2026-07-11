@@ -504,6 +504,89 @@ class PeerConnectionSlotHoldTest {
         )
     }
 
+    /**
+     * Participant churn while held: the engine ([WebRtcEngine.createSlot]) seeds
+     * [PeerConnectionSlot.detachRemoteRenderersForHold] on a brand-new slot BEFORE
+     * wiring the peer connection, exactly the way it seeds the sticky deafen. This
+     * models that ordering directly against the real slot: suppress first, THEN
+     * materialize the peer connection, attach the visible sinks, and deliver remote
+     * tracks. Nothing must reach the sinks until resume lifts the suppression.
+     */
+    @Test
+    fun `slot seeded suppressed before wiring delivers no frames to a new peer until resume`() {
+        val camera = FakeRtpTransceiver(midValue = CAMERA_MID)
+        val content = FakeRtpTransceiver(midValue = CONTENT_MID)
+        val fakePc = FakePeerConnection(mutableListOf<RtpTransceiver>(camera, content))
+        val factory = FakePeerConnectionFactory(fakePc)
+        val slot = PeerConnectionSlot(
+            remoteCid = "remote",
+            factory = factory,
+            iceServers = emptyList(),
+            localAudioTrack = null,
+            localVideoTrack = null,
+            videoReceiveEnabled = true,
+            onLocalIceCandidate = { _, _ -> },
+            onRemoteVideoTrack = { _, _ -> },
+            onConnectionStateChange = { _, _ -> },
+            onIceConnectionStateChange = { _, _ -> },
+            onSignalingStateChange = { _, _ -> },
+            onRenegotiationNeeded = { },
+            applyAudioSenderParameters = { },
+            currentVideoSenderPolicy = { WebRtcEngine.VideoSenderPolicy(null, null, null, null) },
+            isRemoteBlackFrameAnalysisEnabled = { false },
+            peerConnectionDisposeQueue = disposeQueue(),
+            supportsIndependentContentVideo = true,
+            isOfferOwner = { false },
+        )
+
+        // Engine createSlot ordering: seed suppression BEFORE ensurePeerConnection.
+        slot.detachRemoteRenderersForHold()
+        check(slot.ensurePeerConnection())
+        val observer = checkNotNull(factory.capturedObserver)
+
+        val cameraSink = VideoSink { }
+        val contentSink = VideoSink { }
+        slot.attachRemoteSink(cameraSink)
+        slot.attachRemoteContentSink(contentSink)
+
+        // A remote camera + content track arrive on the freshly created (held) slot.
+        val cameraTrack = FakeVideoTrack(tag = "churn-camera")
+        val contentTrack = FakeVideoTrack(tag = "churn-content")
+        observer.onTrack(FakeRtpTransceiver(
+            midValue = CAMERA_MID,
+            mediaTypeValue = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+            receiverTrack = cameraTrack,
+        ))
+        observer.onTrack(FakeRtpTransceiver(
+            midValue = CONTENT_MID,
+            mediaTypeValue = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+            receiverTrack = contentTrack,
+        ))
+
+        assertFalse(
+            "a slot created while held must not deliver camera frames to the visible sink",
+            cameraTrack.addedSinks.contains(cameraSink),
+        )
+        assertFalse(
+            "a slot created while held must not deliver content frames to the visible sink",
+            contentTrack.addedSinks.contains(contentSink),
+        )
+
+        // Resume lifts suppression: the visible sinks attach and frames flow.
+        slot.reattachRemoteRenderersAfterResume()
+
+        assertEquals(
+            "resume must attach exactly one camera sink to the churned-in track",
+            1,
+            cameraTrack.addedSinks.count { it === cameraSink },
+        )
+        assertEquals(
+            "resume must attach exactly one content sink to the churned-in track",
+            1,
+            contentTrack.addedSinks.count { it === contentSink },
+        )
+    }
+
     @Test
     fun `remote camera track arriving while held stays free of visible sinks until resume`() {
         val h = RemoteSinkHarness()

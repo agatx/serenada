@@ -88,6 +88,13 @@ internal class WebRtcEngine(
     // false so a peer that joins/renegotiates during hold inherits the deafen at
     // slot creation (FIX A3). Resume sets it back to true.
     private var remotePlaybackEnabled = true
+    // Sticky remote-rendering suppression shared across slots (multi-call hold).
+    // True while held so a slot created for a peer that joins/renegotiates during
+    // hold (participant churn) inherits the suppression at slot creation — mirrors
+    // the deafen above. Without this a brand-new slot starts with rendering
+    // suppression off and would deliver visible frames while the session is held.
+    // Resume sets it back to false.
+    private var remoteRenderingSuppressed = false
     // Multi-call hold: when true, slots create SEND_RECV (send-capable) audio +
     // legacy-video transceivers even though no local capture track exists, so a
     // session joined `held` has stable senders ready for a renegotiation-free
@@ -492,6 +499,10 @@ internal class WebRtcEngine(
         //    receiving decoded frames unless we detach them here. Each slot detaches
         //    its own remote sinks and stays sticky so a track renegotiated in while
         //    held does not silently re-attach.
+        // Mark suppression sticky at the engine level too, so a slot created for a
+        // peer that joins/renegotiates while held (participant churn) inherits it in
+        // [createSlot] — otherwise the new slot would render visible frames.
+        remoteRenderingSuppressed = true
         peerSlots.forEach { slot -> slot.detachRemoteRenderersForHold() }
     }
 
@@ -514,6 +525,9 @@ internal class WebRtcEngine(
                 track.addSink(sink)
             }
         }
+        // Lift engine-level suppression so slots created after resume render
+        // normally, then re-attach the visible sinks on every existing slot.
+        remoteRenderingSuppressed = false
         peerSlots.forEach { slot -> slot.reattachRemoteRenderersAfterResume() }
     }
 
@@ -804,6 +818,14 @@ internal class WebRtcEngine(
         // ensurePeerConnection so the slot's onTrack applies the current state.
         if (!remotePlaybackEnabled) {
             slot.setRemotePlaybackEnabled(false)
+        }
+        // Sticky rendering suppression (participant churn while held): a slot
+        // created while the session is held must start suppressed so a renderer
+        // attached to it or a remote track delivered to its onTrack does not
+        // deliver visible frames. Seed BEFORE ensurePeerConnection, alongside the
+        // deafen above, so the slot's onTrack/attach paths apply the current state.
+        if (remoteRenderingSuppressed) {
+            slot.detachRemoteRenderersForHold()
         }
         if (!iceServers.isNullOrEmpty()) {
             slot.ensurePeerConnection()
