@@ -1533,6 +1533,75 @@ describe('MediaEngine', () => {
             expect(flippedStop).toHaveBeenCalled();
             expect(peer?.senders.some(sender => sender.track === flippedTrack)).toBe(false);
         });
+
+        it('initial-media route-refresh window: a hold+resume during device detection does not stop or detach the resumed tracks', async () => {
+            // Finding part 2: after assigning `this.localStream`, startLocalMedia awaits
+            // device detection / route refresh, then RE-READS `this.localStream`. A
+            // hold+resume during that window installs newer-generation (resumed) tracks;
+            // the stale initial op must clean up its OWN captured tracks and re-check the
+            // generation BEFORE re-reading, so it never stops/detaches the resumed call's
+            // tracks. Interpose the race by overriding the private route-refresh await
+            // (mirrors the swapLocalVideoTrack interpose pattern above); at that point
+            // `requestingMedia` is already false, so resume's reacquire can run.
+            const micA = createMediaTrack('audio');
+            const camA = createMediaTrack('video');
+            const micAStop = vi.spyOn(micA, 'stop');
+            const camAStop = vi.spyOn(camA, 'stop');
+            const getUserMedia = vi.fn()
+                .mockResolvedValueOnce(new FakeMediaStream([micA, camA]) as unknown as MediaStream)
+                .mockImplementation(async (constraints: MediaStreamConstraints) => {
+                    const tracks: MediaStreamTrack[] = [createMediaTrack('audio')];
+                    if (constraints.video) tracks.push(createMediaTrack('video'));
+                    return new FakeMediaStream(tracks) as unknown as MediaStream;
+                });
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    mediaDevices: {
+                        getUserMedia,
+                        enumerateDevices: vi.fn().mockResolvedValue([]),
+                        addEventListener() {},
+                        removeEventListener() {},
+                    },
+                },
+                configurable: true,
+            });
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            // Interpose a hold+resume inside the route-refresh await of the in-flight
+            // initial start (gen 1). Resume installs fresh (gen 2) mic/camera.
+            const internals = engine as unknown as {
+                refreshLocalAudioTrack: (reason: string, devices?: unknown) => Promise<boolean>;
+            };
+            internals.refreshLocalAudioTrack = async () => {
+                await engine.suspendLocalMediaForHold();               // gen -> 2, stop micA/camA
+                await engine.resumeLocalMediaFromHold(true, 'selfie'); // install resumed mic/camera
+                return false;
+            };
+
+            const result = await engine.startLocalMedia();
+
+            expect(result).toBeNull();                                 // stale initial op publishes nothing
+            // Its OWN captured tracks are stopped.
+            expect(micAStop).toHaveBeenCalled();
+            expect(camAStop).toHaveBeenCalled();
+            // The RESUMED tracks survive on their senders (the pre-fix stale cleanup,
+            // reading the re-read stream, would stop + detach them instead).
+            const resumedMic = engine.localStream?.getAudioTracks()[0];
+            const resumedCam = engine.localStream?.getVideoTracks()[0];
+            expect(resumedMic).toBeTruthy();
+            expect(resumedCam).toBeTruthy();
+            expect(resumedMic).not.toBe(micA);
+            expect(resumedCam).not.toBe(camA);
+            expect(peer?.senders.some(sender => sender.track === resumedMic)).toBe(true);
+            expect(peer?.senders.some(sender => sender.track === resumedCam)).toBe(true);
+            expect(peer?.senders.some(sender => sender.track === micA || sender.track === camA)).toBe(false);
+        });
     });
 
     it('does not let the non-offerer create fallback offers', async () => {

@@ -574,19 +574,34 @@ export class MediaEngine {
 
             this.applySpeechTrackHints(stream);
             this.localStream = stream;
+            // Stable snapshot of the tracks THIS start acquired, taken NOW — before
+            // the device-detection / route-refresh awaits below. A concurrent
+            // hold/resume during those awaits swaps `this.localStream`'s contents for
+            // newer-generation (resumed) tracks; the stale-cleanup below must operate
+            // on THIS operation's OWN captured tracks, never on a re-read of the
+            // mutable current stream (which would stop the resumed call's tracks).
+            const acquiredTracks = stream.getTracks();
             const postStartDevices = await this.enumerateMediaDevices();
             await this.detectCameras(postStartDevices);
             this.requestingMedia = false;
             if (this.roomState && this.clientId) {
                 await this.refreshLocalAudioTrack('initial-route-check', postStartDevices);
             }
+            // Re-check the generation AFTER the device-detection / route-refresh
+            // awaits and BEFORE re-reading or attaching `this.localStream`: a
+            // hold/resume during those awaits installs newer-generation tracks into
+            // `this.localStream`. A stale initial op that proceeded would attach and
+            // then (at the post-attach fence) STOP those resumed tracks as if they
+            // were its own. Undo only THIS op's own captured tracks and publish nothing.
+            if (this.isCaptureStale(requestId)) {
+                for (const track of acquiredTracks) {
+                    await this.detachStaleTrackFromSenders(track);
+                    try { track.stop(); } catch { /* ignore */ }
+                }
+                return null;
+            }
             const activeStream = this.localStream;
             if (!activeStream) return null;
-            // Stable snapshot of the tracks THIS start attaches: a concurrent hold
-            // mutates `activeStream` (removes tracks as it releases capture), so the
-            // post-attachment fence below must iterate the list captured now, not a
-            // re-read of the (possibly emptied) stream.
-            const acquiredTracks = activeStream.getTracks();
 
             for (const [remoteCid, peer] of this.peers) {
                 if (peer.supportsIndependentContentVideo) {
@@ -2176,19 +2191,31 @@ export class MediaEngine {
      * Mirrors the camera path's `sender.track !== track` idempotence guard.
      */
     private async attachPendingLocalTracks(peer: PeerState): Promise<void> {
+        // Snapshot the capture generation before the `replaceTrack` awaits so a hold
+        // (or another start/stop) latching DURING an attach — even one already
+        // resumed past (ABA) — is caught below. This fences every launcher
+        // automatically (assignRemoteVideoRoles' role-binding attach,
+        // ensureOwnerVideoTransceivers, handleAnswerFrom's post-answer attach, and
+        // the missing-role camera attach in replaceVideoTrackOnAllPeers), none of
+        // which re-snapshot the generation themselves.
+        const gen = this.mediaRequestId;
         const attaches: Promise<unknown>[] = [];
         const cameraTrack = this.localCameraTrack;
+        let attachedCamera = false;
         if (peer.mediaRoles.camera && cameraTrack && cameraTrack.readyState === 'live' &&
             peer.mediaRoles.camera.sender.track !== cameraTrack) {
             attaches.push(this.replaceRoleTrack(peer, 'camera', cameraTrack));
+            attachedCamera = true;
         }
         const contentTrack = this.localContentTrack;
         const wantsContent = peer.pendingContentAttach ||
             (this.isScreenSharing && contentTrack !== null && contentTrack.readyState === 'live');
+        let attachedContent = false;
         if (peer.mediaRoles.content && wantsContent && contentTrack &&
             peer.mediaRoles.content.sender.track !== contentTrack) {
             peer.pendingContentAttach = false;
             attaches.push(this.replaceRoleTrack(peer, 'content', contentTrack));
+            attachedContent = true;
         } else if (peer.mediaRoles.content && contentTrack &&
             peer.mediaRoles.content.sender.track === contentTrack) {
             // Already attached (e.g. re-bind after a successful replaceTrack):
@@ -2198,6 +2225,17 @@ export class MediaEngine {
         // Return the settled attachments so a fenced caller can await them
         // (fire-and-forget callers `void` the result).
         await Promise.all(attaches);
+        // Post-attachment fence: a hold latching during any `replaceTrack` above
+        // detached these role senders and stopped the pre-hold camera/content; if a
+        // stale replacement won that race the sender is left carrying a stopped
+        // track. Undo ONLY the tracks THIS call attached — restore the
+        // current-generation track (or null) per detachStaleTrackFromSenders
+        // ownership semantics, so a resumed track a newer generation installed is
+        // never clobbered.
+        if (this.isCaptureStale(gen)) {
+            if (attachedCamera && cameraTrack) await this.detachStaleTrackFromSenders(cameraTrack);
+            if (attachedContent && contentTrack) await this.detachStaleTrackFromSenders(contentTrack);
+        }
     }
 
     /**
@@ -2264,6 +2302,13 @@ export class MediaEngine {
      * {@link attachLocalTracksToIndependentPeer}).
      */
     private async attachAudioTrackToIndependentPeer(peer: PeerState): Promise<void> {
+        // Snapshot the capture generation before the `replaceTrack` await so a hold
+        // (or another start/stop) that latches DURING the attach — even one already
+        // resumed past (ABA) — is caught below. This is the negotiation-time
+        // counterpart to the initial-media post-attach fence: the fire-and-forget
+        // callers (applyRemoteOffer's audio attach, attachLocalTracksToIndependentPeer)
+        // are covered automatically because the continuation fences itself.
+        const gen = this.mediaRequestId;
         const audioTrack = this.localStream?.getAudioTracks()[0] ?? null;
         if (!audioTrack || audioTrack.readyState !== 'live') return;
         const audioTransceiver = peer.mediaRoles.audio
@@ -2274,6 +2319,16 @@ export class MediaEngine {
             if (audioTransceiver.sender.track !== audioTrack) {
                 try {
                     await audioTransceiver.sender.replaceTrack(audioTrack);
+                    // Post-attachment fence: a hold latching during the `replaceTrack`
+                    // await detached this audio sender and stopped the pre-hold mic; if
+                    // this stale replacement won the race the sender is left carrying a
+                    // stopped track. Restore the current-generation track (or null) per
+                    // detachStaleTrackFromSenders ownership semantics — idempotent with
+                    // the initial-media caller's own fence.
+                    if (this.isCaptureStale(gen)) {
+                        await this.detachStaleTrackFromSenders(audioTrack);
+                        return;
+                    }
                 } catch (err) {
                     this.logger?.log('warning', 'WebRTC', `Failed to attach audio to capable peer: ${formatError(err)}`);
                 }
