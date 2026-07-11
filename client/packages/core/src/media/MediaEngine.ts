@@ -264,11 +264,20 @@ export class MediaEngine {
     private foregroundAudioIntent = false;
     private foregroundVideoIntent = false;
     // One-pending-reschedule latch for {@link rescheduleResumeHandoff}. Set when a
-    // fresh {@link handOffToResumedCapture} pass is queued on a microtask (because a
-    // user enable raced the bound-side safe release in {@link reconcileHandoffCapture})
-    // and cleared when that microtask fires. A burst of bound-side releases can thus
-    // queue only ONE reconcile pass at a time — the reschedule cannot stack.
+    // fresh {@link handOffToResumedCapture} pass is requested (because a user enable
+    // raced the bound-side safe release in {@link reconcileHandoffCapture}) and
+    // cleared when the follow-up pass STARTS (at the loop top in
+    // {@link handOffToResumedCapture}). A burst of bound-side releases can thus queue
+    // only ONE reconcile pass at a time — the reschedule cannot stack.
     private resumeHandoffRescheduled = false;
+    // Serialization gate for {@link handOffToResumedCapture}: the promise of the
+    // currently running pass loop, or null when none is running. Exactly one pass
+    // body runs at a time; a reschedule (or re-entrant call) requested WHILE a pass
+    // is in flight runs strictly AFTER it fully completes, via the loop's tail
+    // rerun — never overlapping it (an overlap lets the original pass publish a
+    // camera the follow-up already released for a disable). Cleared by the loop's
+    // own `finally`.
+    private handoffInFlight: Promise<void> | null = null;
     private localMediaStartPromise: Promise<MediaStream | null> | null = null;
     // Monotonic CAPTURE GENERATION. Bumped synchronously whenever the current
     // capture is invalidated: a media (re)start (`startLocalMediaInternal`), a
@@ -1012,7 +1021,47 @@ export class MediaEngine {
      * is held again, or when the engine was destroyed; the reacquire paths carry
      * their own no-op guards, so this cannot loop.
      */
-    private async handOffToResumedCapture(): Promise<void> {
+    private handOffToResumedCapture(): Promise<void> {
+        // Serialize passes: exactly ONE pass body runs at a time, and a reschedule
+        // requested mid-pass runs strictly AFTER the current pass fully completes
+        // (both audio AND video reconciled). Without this, the reschedule microtask
+        // could start a fresh pass while the original is still parked in its video
+        // reacquire; the original then republishes a camera the follow-up already
+        // released for a disable, leaving it transmitting after the user turned it
+        // off (the finding). A re-entrant call while a pass is in flight requests one
+        // more tail pass (so a just-armed intent — e.g. a stale-start bail-out racing
+        // an in-flight pass — is not dropped) and awaits the running loop rather than
+        // overlapping it.
+        if (this.handoffInFlight) {
+            this.resumeHandoffRescheduled = true;
+            return this.handoffInFlight;
+        }
+        const loop = (async () => {
+            do {
+                // Starting a (follow-up) pass consumes the pending-reschedule marker;
+                // a reschedule requested DURING this pass re-sets it and the loop runs
+                // one more pass AFTER this one finishes. Progress is bounded by user
+                // input (a fresh pass does real work only if the intent changed) and
+                // by the per-kind `lastActed` no-progress terminator inside
+                // {@link reconcileHandoffCapture}, so a persistent failure never loops.
+                this.resumeHandoffRescheduled = false;
+                await this.runResumedCapturePass();
+            } while (!this.destroyed && this.resumeHandoffRescheduled);
+        })();
+        this.handoffInFlight = loop;
+        void loop.finally(() => {
+            if (this.handoffInFlight === loop) this.handoffInFlight = null;
+        });
+        return loop;
+    }
+
+    /**
+     * One resume-handoff pass: reconcile audio, then video, against the armed
+     * {@link pendingResumeHandoff} intent and the engine-mirrored foreground intent.
+     * The serialization wrapper {@link handOffToResumedCapture} guarantees exactly
+     * one of these runs at a time.
+     */
+    private async runResumedCapturePass(): Promise<void> {
         // Only the continuation that released the ACTIVE latch runs the handoff.
         // If `requestingMedia` is still set, ANOTHER start owns the latch (a
         // `stopLocalMedia` + newer start superseded this parked op) and this op's
@@ -1159,9 +1208,17 @@ export class MediaEngine {
      * reaches the fixed point (or the `lastActed` no-progress terminator stops it)
      * and it reschedules nothing. At most one reschedule is pending at a time
      * ({@link resumeHandoffRescheduled}), so a burst of bound-side releases cannot
-     * stack passes. The usual entry guards (`requestingMedia`, `destroyed`,
-     * `heldNoCapture`) are re-checked by {@link handOffToResumedCapture} when the
-     * microtask fires.
+     * stack passes.
+     *
+     * Serialization: this is called from inside a RUNNING {@link reconcileHandoffCapture}
+     * (itself inside {@link handOffToResumedCapture}). Queuing a microtask to run the
+     * follow-up would overlap the still-in-flight pass — the original could then
+     * publish a camera the follow-up already released (the finding). So when a pass
+     * is in flight we only SET the marker; the running loop's tail rerun runs the
+     * follow-up strictly after the current pass completes. Only when NO pass is
+     * running (defensive — this call site is always mid-pass today) do we fire
+     * promptly on a microtask. The usual entry guards (`requestingMedia`,
+     * `destroyed`, `heldNoCapture`) are re-checked by the pass body when it runs.
      */
     private rescheduleResumeHandoff(): void {
         if (this.resumeHandoffRescheduled) return; // one pending reschedule at a time
@@ -1170,6 +1227,11 @@ export class MediaEngine {
         // which survive a full disarm nulling `pendingResumeHandoff`) so the fresh
         // pass reacquires exactly the kinds the user now wants. Recover the camera
         // facing from the engine's `facingMode`, already applied by the prior pass.
+        // A NEW object is armed (never a mutation of the running pass's captured
+        // intent), so a `disarmResumeHandoff` landing during the running pass mutates
+        // only this follow-up intent — the running pass keeps its own — and the
+        // identity-guarded {@link consumeResumeHandoff} leaves this armed for the
+        // follow-up.
         this.pendingResumeHandoff = {
             audio: this.foregroundAudioIntent,
             videoMode: this.foregroundVideoIntent
@@ -1177,10 +1239,11 @@ export class MediaEngine {
                 : 'off',
         };
         this.resumeHandoffRescheduled = true;
-        queueMicrotask(() => {
-            this.resumeHandoffRescheduled = false;
-            void this.handOffToResumedCapture();
-        });
+        // In flight: the loop's tail rerun runs the follow-up after this pass ends.
+        // Not in flight: fire promptly (the marker is cleared at the loop top).
+        if (!this.handoffInFlight) {
+            queueMicrotask(() => { void this.handOffToResumedCapture(); });
+        }
     }
 
     /**

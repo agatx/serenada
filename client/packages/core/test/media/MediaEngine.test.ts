@@ -2174,6 +2174,143 @@ describe('MediaEngine', () => {
             expect(entries).toBe(1);
         });
 
+        it('serializes a mid-pass reschedule so the original pass cannot strand a disabled camera', async () => {
+            // The finding: an audio-bound reschedule fires while the ORIGINAL handoff
+            // is still parked in its video reacquire. If the reschedule starts a fresh
+            // pass concurrently, the original pass — still holding its stale intent —
+            // publishes the camera even though the user disabled it mid-reacquire, and
+            // if the fresh pass then blocks on its own reacquire the camera stays
+            // transmitting. With passes serialized, the follow-up runs strictly AFTER
+            // the original completes and observes the disable, so the camera ends
+            // released. Leaf sinks are stubbed; the handoff/reconcile/reschedule
+            // serialization under test is real.
+            const engine = new MediaEngine({}, () => {});
+            const internals = engine as unknown as {
+                handOffToResumedCapture: () => Promise<void>;
+                rescheduleResumeHandoff: () => void;
+                pendingResumeHandoff: { audio: boolean; videoMode: string } | null;
+                foregroundVideoIntent: boolean;
+                foregroundAudioIntent: boolean;
+                localStream: FakeMediaStream | null;
+                reacquireVideoTrack: () => Promise<void>;
+                releaseVideoTrack: () => Promise<void>;
+                reacquireLocalAudioCapture: () => Promise<void>;
+                releaseLocalAudioCapture: () => Promise<void>;
+            };
+
+            // A live mic is already present (as after the audio-bound pass that
+            // triggers the reschedule), so the audio reconcile is an instant no-op and
+            // the armed intent keeps a wanted kind (audio) — a video-only disarm must
+            // NOT null the whole intent, or the follow-up would have nothing to run.
+            const stream = new FakeMediaStream([createMediaTrack('audio')]);
+            internals.localStream = stream;
+            let senderHasCamera = false; // models the camera attached to a peer video sender
+            const parkedReacquires: Array<() => void> = [];
+            internals.reacquireVideoTrack = () => new Promise<void>((resolve) => {
+                parkedReacquires.push(() => {
+                    stream.addTrack(createMediaTrack('video'));
+                    senderHasCamera = true;
+                    resolve();
+                });
+            });
+            internals.releaseVideoTrack = async () => {
+                const track = stream.getVideoTracks()[0];
+                if (track) stream.removeTrack(track);
+                senderHasCamera = false;
+            };
+            // Audio stays satisfied (live mic present), so these are never exercised.
+            internals.reacquireLocalAudioCapture = async () => {};
+            internals.releaseLocalAudioCapture = async () => {};
+
+            // Arm the ORIGINAL pass: camera wanted (selfie), mic wanted (already live).
+            internals.foregroundVideoIntent = true;
+            internals.foregroundAudioIntent = true;
+            internals.pendingResumeHandoff = { audio: true, videoMode: 'selfie' };
+
+            // Start the original pass; it reaches the video reacquire and parks.
+            void internals.handOffToResumedCapture();
+            await vi.waitFor(() => expect(parkedReacquires.length).toBe(1));
+
+            // A reschedule is requested mid-pass (models the audio-bound safe-release
+            // path re-arming a fresh pass). Let any (buggy) overlapping pass start and
+            // park its own reacquire before we disable.
+            internals.rescheduleResumeHandoff();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+
+            // User DISABLES the camera while the original's reacquire is still parked.
+            internals.foregroundVideoIntent = false;
+            engine.disarmResumeHandoff('video');
+
+            // Resolve ONLY the original pass's reacquire: it publishes the camera. A
+            // buggy overlapping pass is left parked on its own reacquire and never
+            // releases; the serialized follow-up releases instead.
+            parkedReacquires[0]();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+
+            // No camera remains published or attached.
+            expect(stream.getVideoTracks()).toHaveLength(0);
+            expect(senderHasCamera).toBe(false);
+        });
+
+        it('runs a reschedule promptly when no handoff pass is in flight', async () => {
+            // The prompt (microtask) path must survive: a reschedule requested while
+            // NO pass is running still fires on the next microtask, not deferred to a
+            // (nonexistent) running loop's tail.
+            const engine = new MediaEngine({}, () => {});
+            const internals = engine as unknown as {
+                foregroundAudioIntent: boolean;
+                handoffInFlight: Promise<void> | null;
+                rescheduleResumeHandoff: () => void;
+                handOffToResumedCapture: () => Promise<void>;
+            };
+            internals.foregroundAudioIntent = true; // so the re-arm has a kind to want
+            let entries = 0;
+            internals.handOffToResumedCapture = () => { entries += 1; return Promise.resolve(); };
+
+            expect(internals.handoffInFlight).toBeNull();
+            internals.rescheduleResumeHandoff();
+            expect(entries).toBe(0);          // queued, not synchronous
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(entries).toBe(1);          // fired promptly on the microtask
+        });
+
+        it('runs overlapping handoff requests strictly sequentially (no concurrent passes)', async () => {
+            // Two overlap-triggering requests must run their pass bodies one at a time:
+            // the second defers until the first fully completes (entry/exit ordering
+            // never interleaves).
+            const engine = new MediaEngine({}, () => {});
+            const internals = engine as unknown as {
+                handOffToResumedCapture: () => Promise<void>;
+                runResumedCapturePass: () => Promise<void>;
+            };
+            const events: string[] = [];
+            const parks: Array<() => void> = [];
+            let n = 0;
+            internals.runResumedCapturePass = () => {
+                const id = ++n;
+                events.push(`enter${id}`);
+                return new Promise<void>((resolve) => {
+                    parks.push(() => { events.push(`exit${id}`); resolve(); });
+                });
+            };
+
+            const first = internals.handOffToResumedCapture();
+            await vi.waitFor(() => expect(events).toEqual(['enter1']));
+            // A second request arrives WHILE the first pass is in flight: it must not
+            // start a concurrent pass — it defers to a tail rerun.
+            void internals.handOffToResumedCapture();
+            await Promise.resolve();
+            expect(events).toEqual(['enter1']); // no 'enter2' while pass 1 runs
+
+            // Finish pass 1 -> the deferred follow-up (pass 2) runs next.
+            parks[0]();
+            await vi.waitFor(() => expect(events).toEqual(['enter1', 'exit1', 'enter2']));
+            parks[1]();
+            await first;
+            expect(events).toEqual(['enter1', 'exit1', 'enter2', 'exit2']);
+        });
+
         it('does not consume the handoff at a stale exit that no longer owns the latch (B replays it)', async () => {
             // Finding 2 (consume only with the active latch): start A parks owning the
             // latch, a stop + start B supersedes it (B now owns the latch, parked), a
