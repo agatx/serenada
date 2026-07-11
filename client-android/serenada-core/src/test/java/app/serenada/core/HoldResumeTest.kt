@@ -208,6 +208,20 @@ class HoldResumeTest {
     }
 
     @Test
+    fun `resume re-attaches the visible renderers detached on hold`() {
+        startInCall()
+        hold()
+        assertEquals(1, factory.fakeMedia.detachRenderersForHoldCalls)
+        val reattachesBefore = factory.fakeMedia.reattachRenderersAfterResumeCalls
+        resume()
+        assertEquals(
+            "resume must re-attach the renderers detached on hold",
+            reattachesBefore + 1,
+            factory.fakeMedia.reattachRenderersAfterResumeCalls,
+        )
+    }
+
+    @Test
     fun `resume broadcasts held false after media flows`() {
         startInCall()
         hold()

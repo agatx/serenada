@@ -23,6 +23,7 @@ import org.webrtc.ShadowPeerConnectionFactory
 import org.webrtc.ShadowRtpReceiver
 import org.webrtc.ShadowRtpSender
 import org.webrtc.ShadowRtpTransceiver
+import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 
 /**
@@ -367,5 +368,165 @@ class PeerConnectionSlotHoldTest {
         ))
 
         assertTrue("after resume a new remote audio track must be enabled", remoteAudio.enabledHistory.last())
+    }
+
+    // --- Hold renderer detach: visible remote sinks stop receiving frames -------
+
+    /**
+     * Build a capable answerer slot with camera (mid "0") + content (mid "1")
+     * transceivers already in the m-line list, materialize the peer connection,
+     * and return the captured observer so a test can deliver remote tracks.
+     */
+    private class RemoteSinkHarness {
+        val camera = FakeRtpTransceiver(midValue = CAMERA_MID)
+        val content = FakeRtpTransceiver(midValue = CONTENT_MID)
+        val fakePc = FakePeerConnection(mutableListOf<RtpTransceiver>(camera, content))
+        val factory = FakePeerConnectionFactory(fakePc)
+        val slot = PeerConnectionSlot(
+            remoteCid = "remote",
+            factory = factory,
+            iceServers = emptyList(),
+            localAudioTrack = null,
+            localVideoTrack = null,
+            videoReceiveEnabled = true,
+            onLocalIceCandidate = { _, _ -> },
+            onRemoteVideoTrack = { _, _ -> },
+            onConnectionStateChange = { _, _ -> },
+            onIceConnectionStateChange = { _, _ -> },
+            onSignalingStateChange = { _, _ -> },
+            onRenegotiationNeeded = { },
+            applyAudioSenderParameters = { },
+            currentVideoSenderPolicy = { WebRtcEngine.VideoSenderPolicy(null, null, null, null) },
+            isRemoteBlackFrameAnalysisEnabled = { false },
+            peerConnectionDisposeQueue = PeerConnectionDisposeQueue(Handler(Looper.getMainLooper())),
+            supportsIndependentContentVideo = true,
+            isOfferOwner = { false },
+        )
+        val observer: PeerConnection.Observer
+
+        init {
+            check(slot.ensurePeerConnection())
+            observer = checkNotNull(factory.capturedObserver)
+        }
+
+        fun deliverRemoteVideo(mid: String, track: VideoTrack) {
+            observer.onTrack(
+                FakeRtpTransceiver(
+                    midValue = mid,
+                    mediaTypeValue = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                    receiverTrack = track,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `hold detaches the visible remote camera and content sinks`() {
+        val h = RemoteSinkHarness()
+        val cameraSink = VideoSink { }
+        val contentSink = VideoSink { }
+        h.slot.attachRemoteSink(cameraSink)
+        h.slot.attachRemoteContentSink(contentSink)
+
+        val cameraTrack = FakeVideoTrack(tag = "remote-camera")
+        val contentTrack = FakeVideoTrack(tag = "remote-content")
+        h.deliverRemoteVideo(CAMERA_MID, cameraTrack)
+        h.deliverRemoteVideo(CONTENT_MID, contentTrack)
+
+        assertTrue("camera sink must be attached before hold", cameraTrack.addedSinks.contains(cameraSink))
+        assertTrue("content sink must be attached before hold", contentTrack.addedSinks.contains(contentSink))
+
+        h.slot.detachRemoteRenderersForHold()
+
+        assertFalse(
+            "held call must detach the visible camera sink so no frames are delivered",
+            cameraTrack.addedSinks.contains(cameraSink),
+        )
+        assertFalse(
+            "held call must detach the visible content sink so no frames are delivered",
+            contentTrack.addedSinks.contains(contentSink),
+        )
+    }
+
+    @Test
+    fun `resume re-attaches exactly one camera and one content sink`() {
+        val h = RemoteSinkHarness()
+        val cameraSink = VideoSink { }
+        val contentSink = VideoSink { }
+        h.slot.attachRemoteSink(cameraSink)
+        h.slot.attachRemoteContentSink(contentSink)
+        val cameraTrack = FakeVideoTrack(tag = "remote-camera")
+        val contentTrack = FakeVideoTrack(tag = "remote-content")
+        h.deliverRemoteVideo(CAMERA_MID, cameraTrack)
+        h.deliverRemoteVideo(CONTENT_MID, contentTrack)
+
+        h.slot.detachRemoteRenderersForHold()
+        h.slot.reattachRemoteRenderersAfterResume()
+
+        assertEquals(
+            "resume must re-attach exactly one camera sink registration",
+            1,
+            cameraTrack.addedSinks.count { it === cameraSink },
+        )
+        assertEquals(
+            "resume must re-attach exactly one content sink registration",
+            1,
+            contentTrack.addedSinks.count { it === contentSink },
+        )
+    }
+
+    @Test
+    fun `three hold-resume cycles never accumulate duplicate remote sinks`() {
+        val h = RemoteSinkHarness()
+        val cameraSink = VideoSink { }
+        val contentSink = VideoSink { }
+        h.slot.attachRemoteSink(cameraSink)
+        h.slot.attachRemoteContentSink(contentSink)
+        val cameraTrack = FakeVideoTrack(tag = "remote-camera")
+        val contentTrack = FakeVideoTrack(tag = "remote-content")
+        h.deliverRemoteVideo(CAMERA_MID, cameraTrack)
+        h.deliverRemoteVideo(CONTENT_MID, contentTrack)
+
+        repeat(3) {
+            h.slot.detachRemoteRenderersForHold()
+            h.slot.reattachRemoteRenderersAfterResume()
+        }
+
+        assertEquals(
+            "no duplicate camera sinks after repeated hold/resume cycles",
+            1,
+            cameraTrack.addedSinks.count { it === cameraSink },
+        )
+        assertEquals(
+            "no duplicate content sinks after repeated hold/resume cycles",
+            1,
+            contentTrack.addedSinks.count { it === contentSink },
+        )
+    }
+
+    @Test
+    fun `remote camera track arriving while held stays free of visible sinks until resume`() {
+        val h = RemoteSinkHarness()
+        val cameraSink = VideoSink { }
+        h.slot.attachRemoteSink(cameraSink)
+
+        // Hold BEFORE any remote track arrives, then a peer renegotiates while held
+        // and a fresh remote camera track is delivered to onTrack.
+        h.slot.detachRemoteRenderersForHold()
+        val cameraTrack = FakeVideoTrack(tag = "remote-camera-held")
+        h.deliverRemoteVideo(CAMERA_MID, cameraTrack)
+
+        assertFalse(
+            "sticky hold: a remote track arriving while held must not get the visible sink",
+            cameraTrack.addedSinks.contains(cameraSink),
+        )
+
+        h.slot.reattachRemoteRenderersAfterResume()
+
+        assertEquals(
+            "resume must attach exactly one camera sink to the track bound while held",
+            1,
+            cameraTrack.addedSinks.count { it === cameraSink },
+        )
     }
 }

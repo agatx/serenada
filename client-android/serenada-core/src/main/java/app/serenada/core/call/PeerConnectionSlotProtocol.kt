@@ -156,6 +156,22 @@ internal interface PeerConnectionSlotProtocol {
      */
     fun setRemotePlaybackEnabled(enabled: Boolean) {}
 
+    /**
+     * Detach this peer's visible camera + content sinks from the remote tracks for
+     * a held call, so the decoder stops delivering frames to hidden renderers.
+     * The peer connection, remote tracks, and sink registrations are preserved;
+     * [reattachRemoteRenderersAfterResume] restores them. Sticky: a remote track
+     * that arrives while held also comes up with its visible sinks detached.
+     */
+    fun detachRemoteRenderersForHold() {}
+
+    /**
+     * Re-attach exactly the registered visible sinks after a resume, undoing
+     * [detachRemoteRenderersForHold]. Idempotent — repeated hold/resume cycles
+     * never accumulate duplicate sinks.
+     */
+    fun reattachRemoteRenderersAfterResume() {}
+
     // Renderer/stats
     fun attachRemoteRenderer(renderer: SurfaceViewRenderer)
     fun detachRemoteRenderer(renderer: SurfaceViewRenderer)

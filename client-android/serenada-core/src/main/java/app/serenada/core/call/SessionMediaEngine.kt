@@ -65,8 +65,21 @@ internal interface SessionMediaEngine {
      */
     fun setRemotePlaybackEnabled(enabled: Boolean) {}
 
-    /** Detach/pause visible renderers for a held call. */
+    /**
+     * Detach the visible renderers for a held call — local preview plus every
+     * peer's remote camera and content sinks — so a held call renders no frames
+     * and the decoder wastes no delivery to hidden renderers. Sink registrations
+     * are preserved so [reattachRenderersAfterResume] can replay them; no
+     * renegotiation. Undone by [reattachRenderersAfterResume].
+     */
     fun detachRenderersForHold() {}
+
+    /**
+     * Re-attach exactly the renderers detached by [detachRenderersForHold] after a
+     * resume. Idempotent: repeated hold/resume cycles never accumulate duplicate
+     * sinks on a track.
+     */
+    fun reattachRenderersAfterResume() {}
     /**
      * Engine-side camera mode, updated synchronously by [flipCamera]. The
      * session's state copy is posted asynchronously, so callers that flip in

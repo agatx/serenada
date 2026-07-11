@@ -476,18 +476,45 @@ internal class WebRtcEngine(
     }
 
     override fun detachRenderersForHold() {
-        // Intentional no-op, and safe to be one:
-        //  - LOCAL video cannot produce frames while held: [suspendLocalMediaForHold]
-        //    already disposed the camera capturer + local video tracks, so there is
-        //    no local renderer state left for the engine to pause here.
-        //  - REMOTE rendering is HOST-owned (the host attaches/detaches sinks and
-        //    re-registers them on resume); by contract, hold-time suppression of a
-        //    remote peer is AUDIO-ONLY (see docs/multi-call-session-contract.md) —
-        //    remote video is deliberately left decoding/visible while this call is
-        //    held, matching web's audio-only deafen. So there is nothing for the
-        //    engine to detach on the remote side either.
-        // Kept as an explicit seam for parity with the contract's
-        // `detachOrPauseRenderersForHold`.
+        if (released) return
+        // Contract: a fully-held call renders no frames and wastes no
+        // decode-to-sink delivery (docs/multi-call-session-contract.md
+        // `detachOrPauseRenderersForHold`). Detach the visible sinks; KEEP the
+        // registrations so [reattachRenderersAfterResume] can replay them.
+        //  - LOCAL: on the normal path [suspendLocalMediaForHold] already disposed
+        //    the camera/content tracks (which removes their sinks), but detach
+        //    explicitly so the seam is correct regardless of call order. The sink
+        //    SETS ([localSinks]/[localContentSinks]) are preserved.
+        localVideoTrack?.let { track -> localSinks.forEach { sink -> track.removeSink(sink) } }
+        localContentVideoTrack?.let { track -> localContentSinks.forEach { sink -> track.removeSink(sink) } }
+        //  - REMOTE: the peer connections and remote tracks stay alive while held
+        //    (identity preserved), so their visible camera/content sinks keep
+        //    receiving decoded frames unless we detach them here. Each slot detaches
+        //    its own remote sinks and stays sticky so a track renegotiated in while
+        //    held does not silently re-attach.
+        peerSlots.forEach { slot -> slot.detachRemoteRenderersForHold() }
+    }
+
+    override fun reattachRenderersAfterResume() {
+        if (released) return
+        // Undo [detachRenderersForHold]. Local tracks recreated by
+        // [resumeLocalMediaFromHold] already re-add their sinks via
+        // [ensureLocalVideoTrack]; remove-then-add here is idempotent and also
+        // covers a local track that survived hold. Remote sinks were only detached
+        // (tracks preserved), so the slots must re-attach them.
+        localVideoTrack?.let { track ->
+            localSinks.forEach { sink ->
+                track.removeSink(sink)
+                track.addSink(sink)
+            }
+        }
+        localContentVideoTrack?.let { track ->
+            localContentSinks.forEach { sink ->
+                track.removeSink(sink)
+                track.addSink(sink)
+            }
+        }
+        peerSlots.forEach { slot -> slot.reattachRemoteRenderersAfterResume() }
     }
 
     override fun release() {

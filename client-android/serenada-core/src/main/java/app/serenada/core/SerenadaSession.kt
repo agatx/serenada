@@ -1820,6 +1820,9 @@ class SerenadaSession internal constructor(
         runCatching { webRtcEngine.resumeLocalMediaFromHold(desiredAudioEnabled, desiredVideoMode) }
         // 3. Re-enable remote playout.
         runCatching { webRtcEngine.setRemotePlaybackEnabled(true) }
+        // 3b. Re-attach the visible renderers detached on hold (local preview +
+        //     remote camera/content sinks).
+        runCatching { webRtcEngine.reattachRenderersAfterResume() }
         // 4. Restart foreground-only pollers.
         runCatching { startRemoteVideoStatePolling() }
 

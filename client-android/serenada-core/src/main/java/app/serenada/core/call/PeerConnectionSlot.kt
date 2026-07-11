@@ -183,6 +183,16 @@ internal class PeerConnectionSlot(
     // [playbackDucked] (volume duck) — both compose; resume re-enables without
     // clobbering an active duck.
     @Volatile private var remotePlaybackEnabled = true
+    // Sticky remote-rendering suppression (multi-call hold). Held calls set this
+    // true so this peer's visible camera/content sinks are detached from the
+    // remote tracks — the decoder no longer delivers frames to a hidden renderer.
+    // Like the deafen above it is sticky: a remote video track delivered to
+    // [onTrack] AFTER hold (a peer that renegotiates while held) must NOT get the
+    // visible sinks re-attached in [attachRemoteCameraTrack]/[attachRemoteContentTrack].
+    // Resume ([reattachRemoteRenderersAfterResume]) clears it and re-attaches.
+    // The internal [remoteVideoStateSink] (connection-health analyzer, not a
+    // visible renderer) stays attached throughout.
+    @Volatile private var remoteRenderingSuppressed = false
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private val remoteSinks = LinkedHashSet<VideoSink>()
@@ -637,7 +647,11 @@ internal class PeerConnectionSlot(
         remoteVideoTrack = track
         remoteBlackFrameAnalyzer.onTrackAttached()
         track.addSink(remoteVideoStateSink)
-        remoteSinks.forEach { sink -> track.addSink(sink) }
+        // Sticky hold suppression: a track arriving while held stays free of the
+        // visible sinks until resume re-attaches them.
+        if (!remoteRenderingSuppressed) {
+            remoteSinks.forEach { sink -> track.addSink(sink) }
+        }
         onRemoteVideoTrack(remoteCid, track)
     }
 
@@ -646,12 +660,15 @@ internal class PeerConnectionSlot(
         if (track === remoteContentVideoTrack) return
         remoteContentSinks.forEach { sink -> remoteContentVideoTrack?.removeSink(sink) }
         remoteContentVideoTrack = track
-        remoteContentSinks.forEach { sink -> track.addSink(sink) }
+        if (!remoteRenderingSuppressed) {
+            remoteContentSinks.forEach { sink -> track.addSink(sink) }
+        }
     }
 
     override fun attachRemoteContentSink(sink: VideoSink) {
         if (isClosing) return
         if (!remoteContentSinks.add(sink)) return
+        if (remoteRenderingSuppressed) return
         remoteContentVideoTrack?.addSink(sink)
     }
 
@@ -890,6 +907,7 @@ internal class PeerConnectionSlot(
     override fun attachRemoteSink(sink: VideoSink) {
         if (isClosing) return
         if (!remoteSinks.add(sink)) return
+        if (remoteRenderingSuppressed) return
         remoteVideoTrack?.addSink(sink)
     }
 
@@ -1108,6 +1126,36 @@ internal class PeerConnectionSlot(
             val track = receiver.track()
             if (track is AudioTrack) {
                 track.setEnabled(enabled)
+            }
+        }
+    }
+
+    override fun detachRemoteRenderersForHold() {
+        // Detach every registered visible sink (camera + content) from the remote
+        // tracks so the decoder stops delivering frames to hidden renderers, while
+        // the peer connection, tracks, and sink REGISTRATIONS are preserved for a
+        // renegotiation-free resume. Sticky: also suppress re-attach for tracks
+        // that arrive while held ([attachRemoteCameraTrack]/[attachRemoteContentTrack]).
+        remoteRenderingSuppressed = true
+        remoteSinks.forEach { sink -> remoteVideoTrack?.removeSink(sink) }
+        remoteContentSinks.forEach { sink -> remoteContentVideoTrack?.removeSink(sink) }
+    }
+
+    override fun reattachRemoteRenderersAfterResume() {
+        // Clear suppression and re-attach exactly the registered visible sinks.
+        // remove-then-add is idempotent: repeated hold/resume cycles never
+        // accumulate duplicate sinks on a track.
+        remoteRenderingSuppressed = false
+        remoteVideoTrack?.let { track ->
+            remoteSinks.forEach { sink ->
+                track.removeSink(sink)
+                track.addSink(sink)
+            }
+        }
+        remoteContentVideoTrack?.let { track ->
+            remoteContentSinks.forEach { sink ->
+                track.removeSink(sink)
+                track.addSink(sink)
             }
         }
     }

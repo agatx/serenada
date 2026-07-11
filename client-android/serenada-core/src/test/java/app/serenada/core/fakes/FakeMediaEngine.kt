@@ -71,6 +71,8 @@ internal class FakeMediaEngine : SessionMediaEngine {
     val setRemotePlaybackEnabledCalls = mutableListOf<Boolean>()
     var detachRenderersForHoldCalls = 0
         private set
+    var reattachRenderersAfterResumeCalls = 0
+        private set
 
     // FIX A1 model: whether the engine currently holds a live mic CAPTURE track.
     // Mirrors the real WebRtcEngine: startLocalMedia creates it, suspend releases
@@ -145,6 +147,9 @@ internal class FakeMediaEngine : SessionMediaEngine {
     }
     override fun detachRenderersForHold() {
         detachRenderersForHoldCalls++
+    }
+    override fun reattachRenderersAfterResume() {
+        reattachRenderersAfterResumeCalls++
     }
     override fun toggleAudio(enabled: Boolean): Boolean {
         toggleAudioCalls.add(enabled)
