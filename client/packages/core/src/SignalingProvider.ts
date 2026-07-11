@@ -28,6 +28,13 @@ export interface SignalingProviderParticipant {
     appPeerId?: string;
     audioEnabled?: boolean;
     videoEnabled?: boolean;
+    /**
+     * Multi-call "on hold" flag from the room snapshot (`joined`/`room_state`).
+     * Lets a late joiner / reconnecting peer render a held participant that
+     * cannot re-broadcast its live `participant_media_state`. Additive; absent
+     * for older clients and never-held participants.
+     */
+    held?: boolean;
     // Wire-reported signaling transport status. Absent = active.
     connectionStatus?: ParticipantConnectionStatus;
     /** Capabilities the participant advertised at join (allowlisted server-side). */
@@ -144,6 +151,19 @@ export interface SignalingProvider {
      * loopback/test) may omit this.
      */
     setTurnRefreshGate?(gate: (() => Promise<boolean>) | null): void;
+    /**
+     * Optional hook: install a gate that returns `false` to suppress writing the
+     * durable cross-launch recovery record (multi-call session: only the
+     * foreground call owns the record). Providers without durable recovery
+     * (e.g. loopback/test) may omit this.
+     */
+    setDurableRecoveryGate?(gate: (() => boolean) | null): void;
+    /**
+     * Optional hook: force an immediate durable-recovery persist from current
+     * reconnect credentials. Called on resume-to-foreground so the record
+     * describes the newly-foregrounded call with no gap.
+     */
+    persistDurableRecoveryNow?(): void;
     on<K extends SignalingProviderEventName>(
         event: K,
         cb: (data: SignalingProviderEventMap[K]) => void,
@@ -152,6 +172,59 @@ export interface SignalingProvider {
         event: K,
         cb: (data: SignalingProviderEventMap[K]) => void,
     ): void;
+}
+
+/**
+ * App-global signaling service that vends one {@link SignalingProvider} channel
+ * per call session (multi-call session, contract §F2). Where a v1
+ * {@link SignalingProvider} is a single per-session channel (one listener slot,
+ * room-less ops), a v2 provider owns the physical transport once and hands each
+ * joining session its own channel — so two concurrent sessions never share a
+ * listener slot, a CID, or a `disconnect()`.
+ *
+ * Configure it exactly like a v1 provider (`SerenadaConfig.signalingProvider`);
+ * the SDK detects `version === 2` and calls {@link openSession} once per join.
+ * A v1 provider stays supported for single-call use — a second concurrent
+ * session against a v1 provider fails with a typed error (see
+ * {@link ProviderUnavailableError}). Multi-call requires a v2 provider.
+ *
+ * Implementor obligations (the SDK cannot enforce another process's transport):
+ * each channel is permanently bound to one canonical room and receives only that
+ * room's events; `leave`/`end`/`disconnect`/TURN-refresh/reconnect are
+ * channel-local; the service owns the physical transport and closing one channel
+ * must not disconnect another; queued events are dropped after a channel closes.
+ */
+export interface MultiSessionSignalingProvider {
+    readonly version: 2;
+    /** Default capabilities applied to each vended channel. */
+    readonly capabilities?: ProviderCapabilities;
+    /**
+     * Vend a channel permanently bound to one canonical room. Called once per
+     * session join. The returned channel is a standard v1 {@link SignalingProvider}
+     * that the session drives (connect/joinRoom/leaveRoom/...); its events must be
+     * scoped to `roomId`.
+     */
+    openSession(roomId: string): SignalingProvider;
+    /** ICE servers without a call (diagnostics). */
+    getIceServers(): Promise<RTCIceServer[]>;
+}
+
+/**
+ * Either a single-session v1 {@link SignalingProvider} or an app-global v2
+ * {@link MultiSessionSignalingProvider}. Accepted by
+ * {@link SerenadaConfig.signalingProvider}.
+ */
+export type AnySignalingProvider = SignalingProvider | MultiSessionSignalingProvider;
+
+/**
+ * Runtime discriminator for {@link AnySignalingProvider}. A v2 provider vends
+ * per-session channels via {@link MultiSessionSignalingProvider.openSession}; a
+ * v1 provider is itself a single-session channel.
+ */
+export function isMultiSessionSignalingProvider(
+    provider: AnySignalingProvider,
+): provider is MultiSessionSignalingProvider {
+    return provider.version === 2 && typeof (provider as MultiSessionSignalingProvider).openSession === 'function';
 }
 
 export class SignalingProviderEmitter implements SignalingProvider {

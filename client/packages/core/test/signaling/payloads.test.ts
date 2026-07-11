@@ -142,6 +142,19 @@ describe('parseRoomStatePayload', () => {
             { cid: 'c', joinedAt: undefined },
         ]);
     });
+
+    it('parses participant held from the snapshot (additive; non-boolean ignored)', () => {
+        const result = parseRoomStatePayload({
+            hostCid: 'h',
+            participants: [
+                { cid: 'a', held: true },
+                { cid: 'b', held: false },
+                { cid: 'c' },
+                { cid: 'd', held: 'nope' },
+            ],
+        });
+        expect(result?.participants.map((p) => p.held)).toEqual([true, false, undefined, undefined]);
+    });
 });
 
 describe('parseErrorPayload', () => {

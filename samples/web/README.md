@@ -8,6 +8,7 @@ Minimal web host app demonstrating Serenada SDK integration with React.
 - Creates a new room via `createSerenadaCore({ serverHost }).createRoom()` and joins explicitly with `join()`
 - Starts a custom-provider demo backed by an in-memory `SignalingProvider`
 - Shows provider-mode incremental `peerJoined` events plus `onPeerMessage()` delivery without Serenada transport
+- Holds several calls at once with `useSerenadaCallRegistry` (multi-call demo: join/switch/hold/resume/leave/end)
 - Runs as a standalone Vite app inside this repository
 - Resolves `@agatx/serenada-core` and `@agatx/serenada-react-ui` directly from local source in `client/packages/`
 
@@ -103,6 +104,51 @@ const providerCore = createSerenadaCore({
 const session = providerCore.join({ roomId: 'provider-demo-room' })
 session.onPeerMessage((message) => console.log(message.type))
 ```
+
+## Multi-call
+
+`useSerenadaCallRegistry` holds several calls at once with a single foreground (the
+registry owns which call holds the mic/camera lease). It never auto-promotes a held
+call: after `hold`, the host decides what comes next. See `src/MultiCallScreen.tsx`.
+
+The demo's signaling host defaults to the public server; append `?host=localhost`
+(e.g. `http://localhost:5173/?host=localhost`) to point it at a local dev server.
+
+```tsx
+import { useSerenadaCallRegistry, SerenadaCallFlow } from '@agatx/serenada-react-ui'
+
+function MultiCall() {
+  const registry = useSerenadaCallRegistry({ config: { serverHost: 'serenada.app' } })
+  const { activeCall, heldCalls, joinAndSwitch, switchTo, hold, leave, end } = registry
+
+  // Join a room and bring it to the foreground (the current call is held first).
+  // joinAndSwitch -> { kind: 'active', callId } | { kind: 'needsPermission', callId } | { kind: 'failed', callId?, error }
+  const join = (url: string) => void joinAndSwitch({ url })
+
+  return (
+    <>
+      {activeCall ? (
+        // Render the foreground call's live session.
+        <SerenadaCallFlow session={activeCall.session} />
+      ) : (
+        // No active call but held calls may remain — the host resumes one.
+        <p>{heldCalls.length ? 'Resume a held call' : 'No calls'}</p>
+      )}
+
+      {heldCalls.map((call) => (
+        <button key={call.id} onClick={() => void switchTo(call.id)}>
+          Resume {call.displayName ?? call.roomId}
+        </button>
+      ))}
+
+      {activeCall && <button onClick={() => void hold(activeCall.state.id)}>Hold</button>}
+    </>
+  )
+}
+```
+
+Use `joinHeld(room)` to join in the background without taking the foreground, `leave(callId)`
+to leave one call, and `end(callId)` to end it for all participants.
 
 ## Transport Visibility
 

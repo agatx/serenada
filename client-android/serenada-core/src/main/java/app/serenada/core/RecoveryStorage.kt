@@ -76,6 +76,18 @@ internal class RecoveryStorage(context: Context) {
         prefs.edit().remove(KEY_RECORD).apply()
     }
 
+    /**
+     * Clear the stored record ONLY if it belongs to the caller (its `roomId` + `cid`
+     * match). Multi-call safe: a stale/held call tearing down must not wipe the
+     * record a different foreground call wrote. A null [cid] (a session that never
+     * completed the join handshake) owns nothing, so it clears nothing.
+     */
+    fun clearIfOwned(roomId: String, cid: String?) {
+        if (cid == null) return
+        val record = load() ?: return
+        if (record.roomId == roomId && record.cid == cid) clear()
+    }
+
     companion object {
         private const val PREFS_NAME = "serenada_recovery"
         private const val KEY_RECORD = "record_v1"

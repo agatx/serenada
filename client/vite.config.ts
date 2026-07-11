@@ -1,5 +1,7 @@
 import { resolve as pathResolve } from 'node:path'
-import { defineConfig } from 'vite'
+// `vitest/config` re-exports Vite's defineConfig with the `test` field typed, so
+// the dev/build pipeline and the test setup share one config (multi-call session).
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import legacy from '@vitejs/plugin-legacy'
 
@@ -34,5 +36,11 @@ export default defineConfig({
       '@agatx/serenada-core': pathResolve(__dirname, 'packages/core/src/index.ts'),
       '@agatx/serenada-react-ui': pathResolve(__dirname, 'packages/react-ui/src/index.ts'),
     },
-  }
+  },
+  test: {
+    // Reset the process-singleton foreground media arbiter after every test so a
+    // lease/mode held by one test cannot fail a later one with
+    // ForegroundLeaseUnavailable (multi-call session, Phase 2).
+    setupFiles: [pathResolve(__dirname, 'test/vitest.setup.ts')],
+  },
 })

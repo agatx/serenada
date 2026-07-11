@@ -244,8 +244,19 @@ describe('SerenadaCore', () => {
 
         it('throws when the signalingProvider version is unsupported', () => {
             const provider = new FakeSignalingProvider();
-            Object.defineProperty(provider, 'version', { value: 2 });
-            expect(() => new SerenadaCore({ signalingProvider: provider })).toThrow('Unsupported signalingProvider version: 2');
+            Object.defineProperty(provider, 'version', { value: 3 });
+            expect(() => new SerenadaCore({ signalingProvider: provider })).toThrow(
+                'Unsupported signalingProvider version: 3 (supported: 1, 2)',
+            );
+        });
+
+        it('accepts a version-2 MultiSessionSignalingProvider', () => {
+            const provider = {
+                version: 2 as const,
+                openSession: () => new FakeSignalingProvider(),
+                getIceServers: async () => [],
+            };
+            expect(() => new SerenadaCore({ signalingProvider: provider })).not.toThrow();
         });
     });
 

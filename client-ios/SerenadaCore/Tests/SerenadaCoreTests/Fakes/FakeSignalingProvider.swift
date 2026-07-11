@@ -80,7 +80,9 @@ final class FakeSignalingProvider: SignalingProvider {
         peerId: String = "local-cid-1",
         participants: [SignalingProviderParticipant] = [],
         hostPeerId: String? = nil,
-        maxParticipants: Int? = nil
+        maxParticipants: Int? = nil,
+        reconnectToken: String? = nil,
+        reconnectTokenTTLMs: Int64? = nil
     ) {
         let resolvedParticipants = participants.isEmpty
             ? [SignalingProviderParticipant(peerId: peerId, joinedAt: 1)]
@@ -90,8 +92,16 @@ final class FakeSignalingProvider: SignalingProvider {
                 peerId: peerId,
                 participants: resolvedParticipants,
                 hostPeerId: hostPeerId ?? peerId,
-                maxParticipants: maxParticipants
+                maxParticipants: maxParticipants,
+                reconnectToken: reconnectToken,
+                reconnectTokenTTLMs: reconnectTokenTTLMs
             )
+        )
+    }
+
+    func simulateReconnectTokenRefreshed(reconnectToken: String, reconnectTokenTTLMs: Int64? = nil) {
+        delegate?.signalingProviderDidRefreshReconnectToken(
+            ReconnectTokenRefreshedEvent(reconnectToken: reconnectToken, reconnectTokenTTLMs: reconnectTokenTTLMs)
         )
     }
 

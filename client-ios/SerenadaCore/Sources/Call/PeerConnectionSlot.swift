@@ -18,6 +18,10 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public private(set) var offerTimeoutTask: Task<Void, Never>?
     public private(set) var iceRestartTask: Task<Void, Never>?
     private var playbackDucked = false
+    // When false, this peer's inbound audio is fully deafened (held session).
+    // Composes with `playbackDucked`: a deafened track stays silent regardless
+    // of the duck volume.
+    private var remotePlaybackEnabled = true
 
     // MARK: - Offer Lifecycle
 
@@ -143,6 +147,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private let onSignalingStateChange: (String, String) -> Void
     private let onRenegotiationNeeded: (String) -> Void
     private let videoReceiveEnabled: Bool
+    /// Held-senders mode predicate (multi-call held join, contract §5 / Core
+    /// Invariant 3). When it returns true at negotiation time the audio +
+    /// legacy-video transceivers are created `.sendRecv` (send-capable) with NIL
+    /// tracks so a later resume attaches via `replaceTrack` without renegotiation;
+    /// otherwise they default to `.recvOnly` exactly as today.
+    private let heldSendersMode: () -> Bool
     private let logger: SerenadaLogger?
     private let rendererAttachmentQueue: DispatchQueue
     /// Whether the local participant is the deterministic offer owner for this
@@ -203,6 +213,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         localVideoTrack: RTCVideoTrack?,
         videoReceiveEnabled: Bool = true,
         supportsIndependentContentVideo: Bool = false,
+        heldSendersMode: @escaping () -> Bool = { false },
         isOfferOwner: @escaping () -> Bool = { false },
         onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
         onRemoteVideoTrack: @escaping (String, RTCVideoTrack?) -> Void,
@@ -219,6 +230,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         self.localVideoTrack = localVideoTrack
         self.videoReceiveEnabled = videoReceiveEnabled
         self.supportsIndependentContentVideo = supportsIndependentContentVideo
+        self.heldSendersMode = heldSendersMode
         self.isOfferOwner = isOfferOwner
         self.onLocalIceCandidate = onLocalIceCandidate
         self.onRemoteVideoTrack = onRemoteVideoTrack
@@ -531,6 +543,20 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         }
     }
 
+    /// Promote this slot's audio + legacy-video transceivers to `.sendRecv`
+    /// without attaching a track (multi-call held join, contract §5 / Core
+    /// Invariant 3). Idempotent: an already send-capable or stopped transceiver is
+    /// left untouched. Used when the engine enters held-senders mode for a slot
+    /// whose peer connection already exists (the common held-join path creates
+    /// slots lazily already in `.sendRecv` via `ensureReceiveTransceivers`).
+    public func ensureSendCapableTransceiversForHold() {
+        guard let peerConnection else { return }
+        for transceiver in peerConnection.transceivers
+        where (transceiver.mediaType == .audio || transceiver.mediaType == .video) && !transceiver.isStopped {
+            ensureRoleSendCapable(transceiver)
+        }
+    }
+
     /// Conservative content (screen share) sender profile for the independent
     /// content transceiver: legibility of mostly-static content over motion
     /// (~1080p / ~5 fps / modest bitrate, design "Content encoding profile").
@@ -590,9 +616,14 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             if transceiver.sender.track !== track {
                 transceiver.sender.track = track
             }
-            let targetDirection: RTCRtpTransceiverDirection = (track != nil) ? .sendRecv : .recvOnly
-            if transceiver.direction != targetDirection {
-                transceiver.setDirection(targetDirection, error: nil)
+            // Only flip direction when ATTACHING a track (ensure .sendRecv). On a
+            // nil track (detach, e.g. hold), clear the sender track but leave the
+            // direction untouched: flipping to .recvOnly fires
+            // peerConnectionShouldNegotiate and forces a renegotiation per hold and
+            // per resume, violating the no-renegotiation hold contract. Mirrors the
+            // web MediaEngine gating (replaceTrack(null) without a direction flip).
+            if track != nil, transceiver.direction != .sendRecv {
+                transceiver.setDirection(.sendRecv, error: nil)
             }
         } else if let track {
             _ = peerConnection.add(track, streamIds: ["serenada"])
@@ -878,8 +909,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 
     public func attachRemoteRenderer(_ renderer: AnyObject) {
 #if canImport(WebRTC)
-        remoteRenderers.append(WeakRendererBox(value: renderer))
+        // Dedup by renderer identity: a repeated attach (e.g. a resume replay onto
+        // a slot whose registration was never detached) must not accumulate boxes.
         compactRenderers()
+        if !remoteRenderers.contains(where: { $0.value === renderer }) {
+            remoteRenderers.append(WeakRendererBox(value: renderer))
+        }
         guard let renderer = renderer as? RTCVideoRenderer else { return }
         let track = remoteVideoTrack
         rendererAttachmentQueue.async {
@@ -902,8 +937,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 
     public func attachRemoteContentRenderer(_ renderer: AnyObject) {
 #if canImport(WebRTC)
-        remoteContentRenderers.append(WeakRendererBox(value: renderer))
+        // Dedup by renderer identity (see attachRemoteRenderer): repeated attach
+        // across hold/resume must not accumulate boxes.
         compactContentRenderers()
+        if !remoteContentRenderers.contains(where: { $0.value === renderer }) {
+            remoteContentRenderers.append(WeakRendererBox(value: renderer))
+        }
         guard let renderer = renderer as? RTCVideoRenderer else { return }
         let track = remoteContentTrack
         rendererAttachmentQueue.async {
@@ -1165,26 +1204,49 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func duckPlayback(ducked: Bool) {
         playbackDucked = ducked
 #if canImport(WebRTC)
-        guard let peerConnection = peerConnection else { return }
-        for receiver in peerConnection.receivers {
-            if let audioTrack = receiver.track as? RTCAudioTrack {
-                applyPlaybackDuck(to: audioTrack)
-            }
-        }
+        applyRemoteAudioPlayback()
+#endif
+    }
+
+    public func setRemotePlaybackEnabled(_ enabled: Bool) {
+        remotePlaybackEnabled = enabled
+#if canImport(WebRTC)
+        applyRemoteAudioPlayback()
 #endif
     }
 }
 
 #if canImport(WebRTC)
 private extension PeerConnectionSlot {
+    /// Re-derive remote audio enablement + volume from the current deafen
+    /// (`remotePlaybackEnabled`) and duck (`playbackDucked`) state and apply it
+    /// to every remote audio receiver. The deafen wins: a disabled track is
+    /// silent regardless of the duck volume.
+    private func applyRemoteAudioPlayback() {
+        guard let peerConnection = peerConnection else { return }
+        for receiver in peerConnection.receivers {
+            if let audioTrack = receiver.track as? RTCAudioTrack {
+                applyPlaybackDuck(to: audioTrack)
+            }
+        }
+    }
+
     private func applyPlaybackDuck(to track: RTCAudioTrack) {
+        track.isEnabled = remotePlaybackEnabled
         track.source.volume = playbackDucked ? 0.15 : 1.0
     }
 
     private func ensureReceiveTransceivers(on peerConnection: RTCPeerConnection) {
+        // Held-senders mode (multi-call held join): create SEND-capable
+        // (`.sendRecv`) transceivers so the senders are send-capable up front for a
+        // renegotiation-free resume (contract §5 / Core Invariant 3). Otherwise
+        // create `.recvOnly` receive transceivers exactly as today (single-call
+        // path unchanged). Either way the transceiver carries NO track here — a
+        // held session owns no capture.
+        let direction: RTCRtpTransceiverDirection = heldSendersMode() ? .sendRecv : .recvOnly
         if peerConnection.transceivers.contains(where: { $0.mediaType == .audio }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
-            transceiverInit.direction = .recvOnly
+            transceiverInit.direction = direction
             _ = peerConnection.addTransceiver(of: .audio, init: transceiverInit)
         }
         // Capable peers manage their own video m-lines: the owner pre-creates the
@@ -1194,7 +1256,7 @@ private extension PeerConnectionSlot {
         if supportsIndependentContentVideo { return }
         if videoReceiveEnabled && peerConnection.transceivers.contains(where: { $0.mediaType == .video }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
-            transceiverInit.direction = .recvOnly
+            transceiverInit.direction = direction
             _ = peerConnection.addTransceiver(of: .video, init: transceiverInit)
         }
     }
@@ -1682,6 +1744,26 @@ extension PeerConnectionSlot {
 
     /// The remote CONTENT (screen share) track currently bound by the classifier.
     var _test_remoteContentTrack: RTCVideoTrack? { remoteContentTrack }
+
+    /// The live peer connection, so a test can inspect transceiver direction /
+    /// sender identity after attach/detach (the hold-direction regression).
+    var _test_peerConnection: RTCPeerConnection? { peerConnection }
+
+    /// Count of remote CAMERA renderer registrations in the slot's own
+    /// bookkeeping — the array that must not accumulate duplicate boxes across
+    /// repeated hold/resume replays.
+    var _test_remoteRendererCount: Int { remoteRenderers.count }
+
+    /// Count of remote CONTENT (screen share) renderer registrations.
+    var _test_remoteContentRendererCount: Int { remoteContentRenderers.count }
+
+    /// Bind remote camera/content tracks directly for the renderer-bookkeeping
+    /// test, bypassing the mid-based classifier (no negotiated transceivers
+    /// needed) so `attach*RemoteRenderer` exercises a real `track.add`.
+    func _test_setRemoteTracks(camera: RTCVideoTrack?, content: RTCVideoTrack?) {
+        remoteVideoTrack = camera
+        remoteContentTrack = content
+    }
 }
 #endif
 #endif

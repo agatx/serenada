@@ -62,17 +62,129 @@ internal class FakeMediaEngine : SessionMediaEngine {
     val attachLocalContentSinkCalls = mutableListOf<VideoSink>()
     val detachLocalContentSinkCalls = mutableListOf<VideoSink>()
 
+    // Hold/resume observation.
+    var suspendLocalMediaForHoldCalls = 0
+        private set
+    /** Recorded (audioEnabled, videoMode) pairs passed to resume. */
+    val resumeLocalMediaFromHoldCalls = mutableListOf<Pair<Boolean, LocalCameraMode?>>()
+    /** Recorded enabled values passed to setRemotePlaybackEnabled. */
+    val setRemotePlaybackEnabledCalls = mutableListOf<Boolean>()
+    var detachRenderersForHoldCalls = 0
+        private set
+    var reattachRenderersAfterResumeCalls = 0
+        private set
+
+    // FIX A1 model: whether the engine currently holds a live mic CAPTURE track.
+    // Mirrors the real WebRtcEngine: startLocalMedia creates it, suspend releases
+    // it, and resume recreates it ONLY when audio is desired (a muted resume must
+    // leave it released so the OS mic indicator stays off). Counts recreations so
+    // a test can assert a muted resume does NOT recreate the mic.
+    var micCaptureTrackPresent = false
+        private set
+    var micCaptureRecreateCount = 0
+        private set
+
+    // Simulates a failed mic ACQUIRE: when true, an enabling toggleAudio(true)
+    // cannot (re)create the capture track and reports the effective state as
+    // false (no live track). Mirrors the real engine returning false when the OS
+    // denies/loses the mic. Lets a test assert the broadcast/published audio
+    // state never reports live audio that isn't actually captured (FIX P5).
+    var failMicAcquire = false
+
+    // FIX P5 model: whether the engine currently holds a live camera CAPTURE
+    // track. Mirrors the real WebRtcEngine: startLocalMedia/resume(camera) create
+    // it, suspend + resume-camera-off release it. A FOREGROUND enable with no
+    // track (toggleVideo(true)) must (re)create + attach it before publishing
+    // true. Counts recreations so a test can assert the (re)create on enable.
+    var cameraCaptureTrackPresent = false
+        private set
+    var cameraCaptureRecreateCount = 0
+        private set
+
     override fun startLocalMedia(startVideoCapture: Boolean) {
         startLocalMediaCalls++
         startVideoCaptureCalls.add(startVideoCapture)
+        micCaptureTrackPresent = true
+        cameraCaptureTrackPresent = startVideoCapture
     }
+
+    // Multi-call held join: createSendersForHold creates stable senders WITHOUT
+    // capture (contract §5 / Core Invariant 3). Tracked so a held-join test can
+    // assert senders were created while NO mic/camera capture track exists.
+    var createSendersForHoldCalls = 0
+        private set
+    override fun createSendersForHold() {
+        createSendersForHoldCalls++
+        // Senders exist but carry NO capture track (the held invariant): leave
+        // micCaptureTrackPresent / cameraCaptureTrackPresent false.
+    }
+
     override fun release() { releaseCalls++ }
-    override fun toggleAudio(enabled: Boolean) { toggleAudioCalls.add(enabled) }
+
+    override fun suspendLocalMediaForHold() {
+        suspendLocalMediaForHoldCalls++
+        micCaptureTrackPresent = false
+        cameraCaptureTrackPresent = false
+    }
+    override fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {
+        resumeLocalMediaFromHoldCalls.add(audioEnabled to videoMode)
+        // Recreate the mic capture ONLY when audio is desired (FIX A1). A muted
+        // resume keeps capture released — no recreate, sender track stays null.
+        if (audioEnabled && !micCaptureTrackPresent) {
+            micCaptureTrackPresent = true
+            micCaptureRecreateCount++
+        }
+        // Recreate the camera capture ONLY when a camera mode is desired. A
+        // camera-off resume keeps it released (FIX P5: a later video-on toggle
+        // must (re)create it via toggleVideo).
+        if (videoMode != null && videoMode != LocalCameraMode.SCREEN_SHARE && !cameraCaptureTrackPresent) {
+            cameraCaptureTrackPresent = true
+            cameraCaptureRecreateCount++
+        }
+    }
+    override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        setRemotePlaybackEnabledCalls.add(enabled)
+    }
+    override fun detachRenderersForHold() {
+        detachRenderersForHoldCalls++
+    }
+    override fun reattachRenderersAfterResume() {
+        reattachRenderersAfterResumeCalls++
+    }
+    override fun toggleAudio(enabled: Boolean): Boolean {
+        toggleAudioCalls.add(enabled)
+        // Simulated acquire failure: an enable cannot obtain a live mic track, so
+        // the effective state is false (no recreate, no live track).
+        if (enabled && failMicAcquire) {
+            micCaptureTrackPresent = false
+            return false
+        }
+        // FIX P5: a FOREGROUND enable with no live mic track (re)creates + attaches
+        // it before publishing — mirrors the real engine ensuring the track exists.
+        // When the track already exists this is a plain setEnabled (no recreate),
+        // preserving single-call mute/unmute behavior. Returns the EFFECTIVE state.
+        if (enabled && !micCaptureTrackPresent) {
+            micCaptureTrackPresent = true
+            micCaptureRecreateCount++
+        }
+        return enabled && micCaptureTrackPresent
+    }
     override fun toggleVideo(enabled: Boolean): Boolean {
         toggleVideoCalls.add(enabled)
-        return enabled
+        // FIX P5: a FOREGROUND enable with no live camera track (re)creates +
+        // attaches it before returning true. When the track already exists this is
+        // a plain setEnabled (no recreate). Returns the EFFECTIVE state.
+        if (enabled && !cameraCaptureTrackPresent) {
+            cameraCaptureTrackPresent = true
+            cameraCaptureRecreateCount++
+        } else if (!enabled) {
+            cameraCaptureTrackPresent = false
+        }
+        return enabled && cameraCaptureTrackPresent
     }
-    override fun flipCamera() {}
+    var flipCameraCalls = 0
+        private set
+    override fun flipCamera() { flipCameraCalls++ }
 
     /**
      * Engine-side active camera mode. Tests set this to simulate the camera being

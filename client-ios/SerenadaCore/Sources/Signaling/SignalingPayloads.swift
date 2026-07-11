@@ -22,6 +22,7 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
         let peerId = obj["peerId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let audioEnabled = obj["audioEnabled"]?.boolValue
         let videoEnabled = obj["videoEnabled"]?.boolValue
+        let held = obj["held"]?.boolValue
         // Unknown status values fall back to .active per protocol spec.
         let signalingStatus: ParticipantSignalingStatus = (obj["connectionStatus"]?.stringValue == "suspended") ? .suspended : .active
         let contentState = parseContentState(from: obj["contentState"])
@@ -34,6 +35,7 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
             peerId: peerId,
             audioEnabled: audioEnabled,
             videoEnabled: videoEnabled,
+            held: held,
             signalingStatus: signalingStatus,
             contentState: contentState,
             capabilities: capabilities,
@@ -277,13 +279,21 @@ struct MediaStatePayload {
     let fromCid: String?
     let audioEnabled: Bool?
     let videoEnabled: Bool?
+    /// Whether the remote participant has put this call on hold (multi-call
+    /// session). Optional and read leniently: an absent `held` means "no change"
+    /// (held state unknown / older peer), and any unknown extra fields are
+    /// ignored. A held participant also sends `audioEnabled:false`/
+    /// `videoEnabled:false`, so an older peer that ignores `held` still degrades
+    /// to muted/camera-off rather than a wrong "live" state.
+    let held: Bool?
 
     init(from payload: JSONValue?) {
         guard let obj = payload?.objectValue else {
-            fromCid = nil; audioEnabled = nil; videoEnabled = nil; return
+            fromCid = nil; audioEnabled = nil; videoEnabled = nil; held = nil; return
         }
         fromCid = obj["from"]?.stringValue
         audioEnabled = obj["audioEnabled"]?.boolValue
         videoEnabled = obj["videoEnabled"]?.boolValue
+        held = obj["held"]?.boolValue
     }
 }

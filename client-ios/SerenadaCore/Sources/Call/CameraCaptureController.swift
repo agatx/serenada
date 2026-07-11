@@ -174,15 +174,41 @@ final class CameraCaptureController {
 
     @discardableResult
     func restartVideoCapturerFromAvailableModes() -> Bool {
+        return restartVideoCapturer(candidates: availableCameraModes.map { cameraSource(from: $0) })
+    }
+
+    /// Restart the capturer PREFERRING `mode`'s source, falling back to the
+    /// remaining available modes (in configured order) only when the preferred
+    /// source is unavailable/fails. Mirrors Android's `restartVideoCapturerWithFallback`
+    /// so a resume/re-enable honors the mode the user selected — including one
+    /// chosen while held — instead of always snapping to the first available mode.
+    @discardableResult
+    func restartVideoCapturer(preferring mode: LocalCameraMode) -> Bool {
+        return restartVideoCapturer(candidates: cameraSourceCandidates(preferring: mode))
+    }
+
+    /// Source attempt order for `restartVideoCapturer(preferring:)`: the preferred
+    /// mode's source first, then every available mode's source (deduped, in
+    /// configured order). Pure so the ordering is unit-testable without hardware.
+    func cameraSourceCandidates(preferring mode: LocalCameraMode) -> [LocalCameraSource] {
+        var candidates = [cameraSource(from: mode)]
+        for available in availableCameraModes {
+            let source = cameraSource(from: available)
+            if !candidates.contains(source) { candidates.append(source) }
+        }
+        return candidates
+    }
+
+    @discardableResult
+    private func restartVideoCapturer(candidates: [LocalCameraSource]) -> Bool {
         var attempted: Set<LocalCameraSource> = []
-        for mode in availableCameraModes {
-            let source = cameraSource(from: mode)
+        for source in candidates {
             if attempted.contains(source) { continue }
             attempted.insert(source)
             if restartVideoCapturer(source: source) {
                 return true
             }
-            debugTrace("webrtc failed to start camera source=\(mode.rawValue)")
+            debugTrace("webrtc failed to start camera source=\(source)")
             if source == .composite {
                 compositeDisabledAfterFailure = true
                 reportCompositeCameraUnavailable(reason: "Composite camera startup failed")

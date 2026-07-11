@@ -26,14 +26,104 @@ final class FakeMediaEngine: SessionMediaEngine {
     private var onZoomFactorChanged: ((Double) -> Void)?
     private var onFeatureDegradation: ((FeatureDegradationState) -> Void)?
 
-    func startLocalMedia(preferVideo: Bool) {
-        startLocalMediaCalls.append(preferVideo)
+    /// Faithful model of local capture-track presence, mirroring WebRtcEngine's
+    /// `localAudioTrack`/`localVideoTrack`. Hold releases them; resume reacquires
+    /// per desired intent (so a muted/camera-off resume leaves them nil); the
+    /// enabling toggles recreate them when missing (the P5 ensure-track fix).
+    private(set) var hasLocalAudioTrack = false
+    private(set) var hasLocalVideoTrack = false
+    /// Count of toggle-driven track RECREATIONS (the resume-then-enable repair),
+    /// distinct from the initial acquire / resume acquire. Lets a regression test
+    /// assert that a normal unmute with an existing track recreates NOTHING.
+    private(set) var toggleAudioTrackRecreations = 0
+    private(set) var toggleVideoTrackRecreations = 0
+
+    /// Test seam: simulate a foreground call that has lost its video track (e.g. a
+    /// camera-off resume followed by a desired-video-on toggle), so a subsequent
+    /// `toggleVideo(true)` must recreate it. Counts as no recreation itself.
+    func dropLocalVideoTrackForTesting() { hasLocalVideoTrack = false }
+
+    /// Held-senders mode, mirroring the real engine: while true, a slot created
+    /// during negotiation materializes SEND-capable transceivers (modeled on the
+    /// fake slot as `sendCapableForHold`). Cleared by `startLocalMedia`.
+    private(set) var heldSendersMode = false
+    private(set) var createSendersForHoldCalls = 0
+    func createSendersForHold() {
+        createSendersForHoldCalls += 1
+        heldSendersMode = true
+        // Promote any slots that already exist (kept idempotent, mirrors the real
+        // engine; the common held-join path creates slots lazily).
+        fakeSlots.values.forEach { $0.ensureSendCapableTransceiversForHold() }
     }
 
-    func release() { releaseCalls += 1 }
+    func startLocalMedia(preferVideo: Bool) {
+        startLocalMediaCalls.append(preferVideo)
+        // Foreground capture is starting; leave held-senders mode (mirrors the
+        // real engine) so new slots return to the normal track-driven path.
+        heldSendersMode = false
+        // Initial acquire: mic always, camera when preferVideo (mirrors the real
+        // engine's startLocalMedia).
+        hasLocalAudioTrack = true
+        hasLocalVideoTrack = preferVideo
+    }
 
-    func toggleAudio(_ enabled: Bool) {
+    func release() {
+        releaseCalls += 1
+        hasLocalAudioTrack = false
+        hasLocalVideoTrack = false
+    }
+
+    private(set) var suspendLocalMediaForHoldCalls = 0
+    private(set) var resumeLocalMediaFromHoldCalls: [(audioEnabled: Bool, videoMode: LocalCameraMode?)] = []
+    private(set) var setRemotePlaybackEnabledCalls: [Bool] = []
+    private(set) var detachRenderersForHoldCalls = 0
+
+    func suspendLocalMediaForHold() {
+        suspendLocalMediaForHoldCalls += 1
+        // Mirror the real engine: hold RELEASES the mic + camera tracks.
+        hasLocalAudioTrack = false
+        hasLocalVideoTrack = false
+        // Mirror the real engine: hold deafens remote playout. This also sets the
+        // sticky flag so slots created later inherit the deafen.
+        setRemotePlaybackEnabled(false)
+    }
+
+    func resumeLocalMediaFromHold(audioEnabled: Bool, videoMode: LocalCameraMode?) {
+        resumeLocalMediaFromHoldCalls.append((audioEnabled: audioEnabled, videoMode: videoMode))
+        // Mirror the real engine: resume reacquires per DESIRED intent only — a
+        // muted resume leaves the audio track nil; a camera-off resume leaves the
+        // video track nil. This is exactly the state the P5 toggle fix repairs.
+        if audioEnabled { hasLocalAudioTrack = true }
+        if videoMode != nil { hasLocalVideoTrack = true }
+        // Mirror the real engine: resume re-enables remote playout.
+        setRemotePlaybackEnabled(true)
+    }
+
+    /// Sticky deafen state, mirroring the real engine: held sessions set this
+    /// `false` and a slot created AFTER hold must inherit it. Defaults enabled.
+    private(set) var remotePlaybackEnabled = true
+    func setRemotePlaybackEnabled(_ enabled: Bool) {
+        remotePlaybackEnabled = enabled
+        setRemotePlaybackEnabledCalls.append(enabled)
+        fakeSlots.values.forEach { $0.setRemotePlaybackEnabled(enabled) }
+    }
+
+    func detachRenderersForHold() {
+        detachRenderersForHoldCalls += 1
+    }
+
+    @discardableResult
+    func toggleAudio(_ enabled: Bool) -> Bool {
         toggleAudioCalls.append(enabled)
+        // P5 ensure-track: enabling with no audio track recreates it (resume-then-
+        // unmute repair). When a track already exists this recreates NOTHING — the
+        // single-call mute/unmute regression case. Returns the effective,
+        // track-backed state.
+        if enabled, !hasLocalAudioTrack {
+            hasLocalAudioTrack = true
+            toggleAudioTrackRecreations += 1
+        }
+        return enabled && hasLocalAudioTrack
     }
 
     func restartAudioUnit() {
@@ -43,7 +133,13 @@ final class FakeMediaEngine: SessionMediaEngine {
     @discardableResult
     func toggleVideo(_ enabled: Bool) -> Bool {
         toggleVideoCalls.append(enabled)
-        return enabled
+        // P5 ensure-track: enabling with no video track recreates it (resume-then-
+        // video-on repair). When a track already exists this recreates NOTHING.
+        if enabled, !hasLocalVideoTrack {
+            hasLocalVideoTrack = true
+            toggleVideoTrackRecreations += 1
+        }
+        return enabled && hasLocalVideoTrack
     }
 
     func flipCamera() {}
@@ -129,6 +225,17 @@ final class FakeMediaEngine: SessionMediaEngine {
             failNextCreatedSlotRemoteOffer = false
         }
         fakeSlots[remoteCid] = slot
+        // Held-senders mode: a slot created while the session is held materializes
+        // SEND-capable transceivers (mirrors WebRtcEngine threading heldSendersMode
+        // into the slot's `ensureReceiveTransceivers`).
+        if heldSendersMode {
+            slot.markCreatedInHeldSendersMode()
+        }
+        // Sticky deafen: a slot created while the session is held inherits the
+        // disabled remote playback (mirrors WebRtcEngine.createSlot).
+        if !remotePlaybackEnabled {
+            slot.setRemotePlaybackEnabled(false)
+        }
         if let iceServers = _iceServers {
             slot.setIceServers(iceServers)
         }

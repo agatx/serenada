@@ -9,8 +9,8 @@ Minimal Android host app demonstrating Serenada SDK integration using `serenada-
 - Starts a provider-mode demo backed by a local in-memory `SignalingProvider`
 - Shows incremental `peerJoined` events and peer-message delivery without Serenada server transport
 - Demonstrates injecting a custom `SerenadaAudioCoordinator` for host-owned audio policy
+- Keeps several calls joined at once with `SerenadaCallRegistry` and switches the foreground media owner between them (multi-call)
 - Disables screen sharing and invite controls (these require app-specific service and push wiring)
-- Total integration: ~80 lines of Kotlin
 
 ## Build & run
 
@@ -38,7 +38,9 @@ samples/android/
 │       ├── AndroidManifest.xml
 │       ├── res/values/themes.xml
 │       └── java/app/serenada/sample/
-│           └── MainActivity.kt
+│           ├── MainActivity.kt
+│           ├── MultiCallScreen.kt        # SerenadaCallRegistry multi-call demo
+│           └── SampleAudioCoordinator.kt
 └── README.md
 ```
 
@@ -98,6 +100,36 @@ session.onPeerMessage { message ->
 ```
 
 The sample also includes `SampleAudioCoordinator`, which implements `SerenadaAudioCoordinator` and is passed through `SerenadaConfig.audioCoordinator`. Real host apps can use the same protocol to own audio focus, route selection, and external-audio coexistence policy. Omit `audioCoordinator` to use the SDK's internal default coordinator.
+
+Multi-call (see `MultiCallScreen.kt`) uses one `SerenadaCallRegistry` over a `SerenadaCore`. The registry keeps every call signaled and connected, but only one call at a time owns local capture and process-wide audio (the foreground/active call); the rest sit held. The registry owns the foreground lease, so a host integrates through the registry OR direct `SerenadaCore.join`, not both.
+
+```kotlin
+val registry = SerenadaCallRegistry(serenada)
+
+// Join held, then take foreground (the common new-call flow).
+when (val r = registry.joinAndSwitch(RoomRef.Url(callUrl))) {
+    is JoinAndSwitchResult.Active -> { /* r.callId is now the active call */ }
+    is JoinAndSwitchResult.NeedsPermission -> { /* prompt, then registry.switchToCall(r.callId) */ }
+    is JoinAndSwitchResult.Failed -> { /* inspect r.error.message */ }
+}
+
+// Join another room in the background without taking foreground.
+registry.joinHeld(RoomRef.Id("ROOM2"))
+
+// Render the active call's session with the prebuilt UI (the session is exposed, not hidden).
+registry.activeSession?.let { session -> SerenadaCallFlow(session = session, /* ... */) }
+
+// Move the foreground lease to a held call; hold/leave/end an existing call.
+registry.switchToCall(callId)
+registry.holdCall(callId)   // keep joined, drop foreground (no auto-promote of held calls)
+registry.leaveCall(callId)  // graceful leave (other participant stays)
+registry.endCall(callId)    // end for everyone
+
+// Observe aggregate state (active call id, per-call role/phase/errors).
+registry.state.collect { state -> /* state.activeCallId, state.calls, state.lastError */ }
+```
+
+After holding or leaving the active call the registry does NOT auto-promote a held call: `activeCallId` becomes null while held calls remain, and the host decides which (if any) to `switchToCall`. The demo screen renders that "no active call but held calls remain" state.
 
 ## Sample limitations
 

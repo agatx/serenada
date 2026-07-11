@@ -209,6 +209,67 @@ class SignalingPayloadsTest {
     }
 
     // ---------------------------------------------------------------
+    // toMediaStatePayload
+    // ---------------------------------------------------------------
+
+    @Test
+    fun toMediaStatePayload_parsesAudioVideoAndHeld() {
+        val json = JSONObject().apply {
+            put("from", "C-peer")
+            put("audioEnabled", false)
+            put("videoEnabled", true)
+            put("held", true)
+        }
+        val payload = json.toMediaStatePayload()
+        assertNotNull(payload)
+        assertEquals("C-peer", payload!!.fromCid)
+        assertEquals(false, payload.audioEnabled)
+        assertEquals(true, payload.videoEnabled)
+        assertEquals(true, payload.held)
+    }
+
+    @Test
+    fun toMediaStatePayload_missingHeldIsNull() {
+        val json = JSONObject().apply {
+            put("from", "C-peer")
+            put("audioEnabled", true)
+            put("videoEnabled", false)
+        }
+        val payload = json.toMediaStatePayload()
+        assertNull(payload!!.held)
+    }
+
+    @Test
+    fun toMediaStatePayload_nonBooleanHeldIsUnknown() {
+        // Parity with web (`typeof === 'boolean'`) / iOS (`boolValue`): a present-
+        // but-non-boolean `held` stays unknown (null), not coerced to false the way
+        // optBoolean would.
+        val json = JSONObject().apply {
+            put("from", "C-peer")
+            put("held", "true") // string, not a JSON boolean
+        }
+        assertNull(json.toMediaStatePayload()!!.held)
+    }
+
+    @Test
+    fun toMediaStatePayload_ignoresUnknownFields() {
+        // Mirrors the trickleIce unknown-field tolerance test: an inbound
+        // participant_media_state carrying held alongside an unknown key must
+        // decode without error (the "ignore unknown fields" contract).
+        val json = JSONObject().apply {
+            put("from", "C-peer")
+            put("audioEnabled", false)
+            put("videoEnabled", false)
+            put("held", true)
+            put("someFutureField", "ignored") // unknown-to-model key tolerated
+        }
+        val payload = json.toMediaStatePayload()
+        assertNotNull(payload)
+        assertEquals(true, payload!!.held)
+        assertEquals(false, payload.audioEnabled)
+    }
+
+    // ---------------------------------------------------------------
     // toParticipantList
     // ---------------------------------------------------------------
 
@@ -229,6 +290,32 @@ class SignalingPayloadsTest {
         assertEquals("C-1", result[0].cid)
         assertEquals(500L, result[0].joinedAt)
         assertNull(result[1].joinedAt)
+    }
+
+    @Test
+    fun toParticipantList_parsesHeldFromSnapshot() {
+        // The server persists `held` in joined/room_state snapshots so a late
+        // joiner / reconnecting client can render a held peer that cannot
+        // re-broadcast its live media state. Additive; absent stays null.
+        val arr = JSONArray().apply {
+            put(JSONObject().apply { put("cid", "C-1"); put("held", true) })
+            put(JSONObject().apply { put("cid", "C-2"); put("held", false) })
+            put(JSONObject().apply { put("cid", "C-3") })
+        }
+        val result = arr.toParticipantList()
+        assertEquals(true, result[0].held)
+        assertEquals(false, result[1].held)
+        assertNull(result[2].held)
+    }
+
+    @Test
+    fun toParticipantList_nonBooleanHeldIsUnknown() {
+        // Same strict-boolean parity as the media-state path: a non-boolean held
+        // on a participant is unknown (null), not false.
+        val arr = JSONArray().apply {
+            put(JSONObject().apply { put("cid", "C-1"); put("held", 1) }) // number, not boolean
+        }
+        assertNull(arr.toParticipantList().single().held)
     }
 
     @Test

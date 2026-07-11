@@ -3,6 +3,8 @@ package app.serenada.core
 import app.serenada.core.fakes.FakeAudioController
 import app.serenada.core.fakes.FakeAPIClient
 import app.serenada.core.fakes.FakeMediaEngine
+import app.serenada.core.fakes.FakeMultiSessionSignalingProvider
+import app.serenada.core.fakes.FakeProviderChannel
 import app.serenada.core.fakes.FakeSessionClock
 import app.serenada.core.fakes.FakeSignalingProvider
 import android.os.Handler
@@ -10,7 +12,10 @@ import android.os.Looper
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -128,5 +133,290 @@ class SerenadaCoreProviderModeTest {
 
         assertTrue(provider.capabilities.handlesReconnection)
         provider.disconnect()
+    }
+
+    // --- Multi-session (v2) provider + v1 liveness guard (F2) ---
+
+    @Test
+    fun `signalingProvider and multiSessionSignalingProvider together are rejected`() {
+        try {
+            resolveSerenadaConfig(
+                SerenadaConfig(
+                    signalingProvider = FakeSignalingProvider(),
+                    multiSessionSignalingProvider = FakeMultiSessionSignalingProvider(),
+                ),
+            )
+            fail("Expected both provider fields to be rejected")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "Provide only one of signalingProvider or multiSessionSignalingProvider",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun `unsupported multiSessionSignalingProvider version is rejected`() {
+        val provider = object : MultiSessionSignalingProvider {
+            override val version: Int = 3
+            override fun openSession(roomId: String): SignalingProvider = FakeSignalingProvider()
+            override suspend fun getIceServers() = emptyList<org.webrtc.PeerConnection.IceServer>()
+        }
+        try {
+            resolveSerenadaConfig(SerenadaConfig(multiSessionSignalingProvider = provider))
+            fail("Expected unsupported multiSessionSignalingProvider version to be rejected")
+        } catch (error: IllegalArgumentException) {
+            assertEquals("Unsupported multiSessionSignalingProvider version: 3", error.message)
+        }
+    }
+
+    @Test
+    fun `multiSession provider vends one channel per room via openSession`() {
+        val service = FakeMultiSessionSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(multiSessionSignalingProvider = service),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        val channelA = core.createSignalingProvider(core.config, "room-A")
+        val channelB = core.createSignalingProvider(core.config, "room-B")
+
+        assertEquals(listOf("room-A", "room-B"), service.openSessionRoomIds)
+        assertNotSame(channelA, channelB)
+        assertEquals("room-A", (channelA as FakeProviderChannel).channelRoomId)
+        assertEquals("room-B", (channelB as FakeProviderChannel).channelRoomId)
+    }
+
+    @Test
+    fun `v1 provider second concurrent bind fails with a typed error`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        // First session binds the v1 object.
+        core.createSignalingProvider(core.config, "room-1")
+
+        try {
+            core.createSignalingProvider(core.config, "room-2")
+            fail("Expected a second concurrent v1 bind to fail")
+        } catch (error: SingleSessionProviderInUseException) {
+            assertEquals(SINGLE_SESSION_PROVIDER_IN_USE_MESSAGE, error.message)
+            assertEquals(CallError.ProviderUnavailable, error.callError)
+        }
+    }
+
+    @Test
+    fun `v1 provider sequential reuse works after the prior channel closes`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        val first = core.createSignalingProvider(core.config, "room-1")
+        // Teardown releases the bind (the call every session close makes).
+        first.disconnect()
+
+        // A later session may reuse the same v1 object — the guard is concurrency-only.
+        val second = core.createSignalingProvider(core.config, "room-2")
+        assertNotNull(second)
+    }
+
+    @Test
+    fun `v1 bind is released when session construction throws so a later join succeeds`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        // A join claims the v1 bind (createSignalingProvider) and then constructs the
+        // session; if construction throws AFTER the provider was created, no session
+        // exists to release the bind — the join seam must release it before rethrowing.
+        val provider = core.createSignalingProvider(core.config, "room-1")
+        try {
+            core.buildSessionReleasingProviderOnFailure(provider) {
+                throw RuntimeException("boom during session construction")
+            }
+            fail("Expected the construction failure to propagate")
+        } catch (error: RuntimeException) {
+            assertEquals("boom during session construction", error.message)
+        }
+
+        // Bind released: a subsequent v1 join on the same core binds instead of
+        // failing SingleSessionProviderInUseException.
+        val second = core.createSignalingProvider(core.config, "room-2")
+        assertNotNull(second)
+        second.disconnect()
+    }
+
+    @Test
+    fun `v1 guard is process-wide so two cores sharing one v1 provider cannot both bind`() {
+        val v1 = FakeSignalingProvider()
+        val coreA = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+        val coreB = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        val channelA = coreA.createSignalingProvider(coreA.config, "room-1")
+
+        // The second core shares the SAME v1 object. The guard is per provider object
+        // (process-wide), not per core, so binding from the other core must fail rather
+        // than clobber the shared listener.
+        try {
+            coreB.createSignalingProvider(coreB.config, "room-2")
+            fail("Expected the second core's bind of the shared v1 provider to fail")
+        } catch (error: SingleSessionProviderInUseException) {
+            assertEquals(SINGLE_SESSION_PROVIDER_IN_USE_MESSAGE, error.message)
+            assertEquals(CallError.ProviderUnavailable, error.callError)
+        }
+
+        // Closing the first channel releases the process-wide bind; the second core may
+        // now bind the same provider object.
+        channelA.disconnect()
+        val channelB = coreB.createSignalingProvider(coreB.config, "room-3")
+        assertNotNull(channelB)
+        channelB.disconnect()
+    }
+
+    @Test
+    fun `v1 channel detaches the listener on close so late events are dropped`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+        val channel = core.createSignalingProvider(core.config, "room-1")
+
+        val listener = object : SignalingProvider.Listener {}
+        channel.listener = listener
+        assertSame(listener, v1.listener)
+
+        channel.disconnect()
+        // Closed-guard: the underlying listener is detached and cannot be re-attached.
+        assertNull(v1.listener)
+        channel.listener = listener
+        assertNull(v1.listener)
+    }
+
+    @Test
+    fun `retired v1 channel does not disconnect a provider a newer channel rebound`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        // Session A binds the shared v1 object and reaches a terminal error: its
+        // teardown (resetResources -> signalingProvider.disconnect()) retires channel A
+        // and releases the bind.
+        val channelA = core.createSignalingProvider(core.config, "room-A")
+        channelA.listener = object : SignalingProvider.Listener {}
+        channelA.disconnect()
+        assertEquals(1, v1.disconnectCalls)
+        assertNull(v1.listener)
+
+        // The same v1 object is now rebound for a NEW live session B.
+        val channelB = core.createSignalingProvider(core.config, "room-B")
+        var bReceived = 0
+        val listenerB = object : SignalingProvider.Listener {
+            override fun onPeerJoined(event: PeerEvent) {
+                bReceived += 1
+            }
+        }
+        channelB.listener = listenerB
+        assertSame(listenerB, v1.listener)
+
+        // Host now closes the dead session A. A late disconnect on the already-retired
+        // channel must be fully inert: it must NOT forward to the shared provider (no
+        // extra disconnect) nor detach B's listener.
+        channelA.disconnect()
+        assertEquals(1, v1.disconnectCalls)
+        assertSame(listenerB, v1.listener)
+
+        // B is still wired up and receiving.
+        v1.simulatePeerJoined("peer-1")
+        assertEquals(1, bReceived)
+
+        channelB.disconnect()
+    }
+
+    @Test
+    fun `retired v1 channel fences every provider-mutating op so a rebound session is untouched`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+
+        // Session A binds the shared v1 object and reaches a terminal error: its
+        // teardown (resetResources -> signalingProvider.disconnect()) retires channel A
+        // and releases the bind.
+        val channelA = core.createSignalingProvider(core.config, "room-A")
+        channelA.disconnect()
+        assertEquals(1, v1.disconnectCalls)
+
+        // The same v1 object is now rebound for a NEW live session B.
+        val channelB = core.createSignalingProvider(core.config, "room-B")
+        val listenerB = object : SignalingProvider.Listener {}
+        channelB.listener = listenerB
+        assertSame(listenerB, v1.listener)
+
+        // Host now drives the dead session A through leave()/end()/close(). Those reach
+        // leaveRoom/endRoom (and, on other host paths, connect/joinRoom/sendToPeer/
+        // broadcast/forceReconnectIfStale) on the ALREADY-retired channel. Kotlin
+        // `by provider` delegation would otherwise forward each one to the shared
+        // provider and leave or end B's live room; the fence must make them all inert.
+        channelA.connect()
+        channelA.joinRoom("room-A", JoinOptions())
+        channelA.leaveRoom()
+        channelA.endRoom()
+        channelA.sendToPeer("peer-x", "content_state", null)
+        channelA.broadcast("content_state", null)
+        channelA.forceReconnectIfStale(1_000L)
+        channelA.disconnect()
+
+        // Nothing attributable to A reached the shared provider.
+        assertTrue(v1.connectCalls.isEmpty())
+        assertTrue(v1.joinCalls.isEmpty())
+        assertEquals(0, v1.leaveCalls)
+        assertEquals(0, v1.endCalls)
+        assertTrue(v1.sentProviderMessages.isEmpty())
+        assertEquals(0, v1.forceReconnectCalls)
+        assertEquals(1, v1.disconnectCalls)
+
+        // B's room state is intact: its listener is still attached and its OWN ops still
+        // reach the provider.
+        assertSame(listenerB, v1.listener)
+        channelB.leaveRoom()
+        assertEquals(1, v1.leaveCalls)
+
+        channelB.disconnect()
+    }
+
+    @Test
+    fun `double close on a v1 channel disconnects the underlying provider once`() {
+        val v1 = FakeSignalingProvider()
+        val core = SerenadaCore(
+            config = SerenadaConfig(signalingProvider = v1),
+            context = RuntimeEnvironment.getApplication(),
+        )
+        val channel = core.createSignalingProvider(core.config, "room-1")
+
+        channel.disconnect()
+        channel.disconnect()
+
+        assertEquals(1, v1.disconnectCalls)
+
+        // The bind was released on the first close, so the same object rebinds cleanly.
+        val reused = core.createSignalingProvider(core.config, "room-2")
+        assertNotNull(reused)
+        reused.disconnect()
     }
 }

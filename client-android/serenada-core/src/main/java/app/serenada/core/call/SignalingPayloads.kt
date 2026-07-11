@@ -48,6 +48,8 @@ internal data class MediaStatePayload(
     val fromCid: String,
     val audioEnabled: Boolean?,
     val videoEnabled: Boolean?,
+    /** Hold state (multi-call). Null on older senders that omit the field. */
+    val held: Boolean? = null,
 )
 
 internal data class RelayFailedPayload(
@@ -153,6 +155,10 @@ internal fun JSONObject?.toMediaStatePayload(): MediaStatePayload? {
         fromCid = fromCid,
         audioEnabled = if (has("audioEnabled")) optBoolean("audioEnabled") else null,
         videoEnabled = if (has("videoEnabled")) optBoolean("videoEnabled") else null,
+        // Strict boolean read (parity with web `typeof === 'boolean'` / iOS
+        // `boolValue`): a present-but-non-boolean `held` stays unknown (null) rather
+        // than coercing to false the way optBoolean would.
+        held = opt("held") as? Boolean,
     )
 }
 
@@ -180,6 +186,8 @@ internal fun JSONArray?.toParticipantList(): List<Participant> {
                 peerId = p.optString("peerId").ifBlank { null },
                 audioEnabled = if (p.has("audioEnabled")) p.optBoolean("audioEnabled") else null,
                 videoEnabled = if (p.has("videoEnabled")) p.optBoolean("videoEnabled") else null,
+                // Strict boolean read (parity with web/iOS): non-boolean -> unknown (null).
+                held = p.opt("held") as? Boolean,
                 signalingStatus = status,
                 contentState = contentState,
                 capabilities = p.optJSONObject("capabilities")?.toParticipantCapabilities(),

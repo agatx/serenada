@@ -1,5 +1,5 @@
 import type { RoomState, SignalingMessage } from '../signaling/types.js';
-import type { ConnectionStatus, SerenadaLogger } from '../types.js';
+import type { ConnectionStatus, SerenadaLogger, VideoMode } from '../types.js';
 import { parseOfferPayload, parseAnswerPayload, parseIceCandidatePayload } from '../signaling/payloads.js';
 import { MEDIA_RESTART_REASON_LOCAL_TRACK_NEGOTIATION } from '../signaling/protocolConstants.js';
 import { formatError } from '../formatError.js';
@@ -170,6 +170,12 @@ export class MediaEngine {
     connectionStatus: ConnectionStatus = 'connected';
 
     private peers = new Map<string, PeerState>();
+    // Current remote-audio playout gate (multi-call hold). `false` while the call
+    // is held so inbound remote audio is silenced. Stored so the deafen is STICKY:
+    // a peer that joins / renegotiates / produces a new audio receiver WHILE held
+    // is silenced too (applied in `ontrack` and on fresh peer creation), not just
+    // the receivers that existed at hold time. Resume sets it back to `true`.
+    private remotePlaybackEnabled = true;
     private readonly initialVideoEnabled: boolean;
     // Per-remote-CID tally of cumulative `inbound-rtp.bytesReceived`. Sampled
     // by `sampleInboundLiveness()`; a CID is "flowing" when its
@@ -202,10 +208,89 @@ export class MediaEngine {
     // Idempotency latch for the shared stop path (API / rollback / onended).
     private screenShareStopInFlight = false;
     private requestingMedia = false;
+    // Identifies which `startLocalMediaInternal` request currently OWNS the
+    // `requestingMedia` latch (its `requestId`; `null` when unheld). Only that
+    // request may release the latch: a stale continuation whose start was
+    // superseded by a `stopLocalMedia` + a NEWER `startLocalMediaInternal` must
+    // NOT clear a latch the newer acquire now holds, or recovery/toggle paths
+    // would launch a concurrent `getUserMedia` under the newer start. Hold/stop
+    // do NOT take this latch, so a hold+resume (which bumps `mediaRequestId` but
+    // never re-acquires the latch) leaves the parked start the rightful owner —
+    // which is exactly why it may release the latch and hand off to the resume.
+    private mediaLatchOwner: number | null = null;
     private destroyed = false;
     private cameraRecoveryInFlight = false;
     private audioRecoveryInFlight = false;
+    // In-flight `reacquireLocalAudioCapture` worker promise, so a re-entrant call
+    // (e.g. an unmute racing a hold-resume's mic reacquire) AWAITS the running
+    // acquire and returns after the track lands — instead of no-opping and letting
+    // its `.then()` read a still-null track and broadcast `audioEnabled:false`.
+    private audioRecoveryPromise: Promise<void> | null = null;
+    // In-flight camera acquire worker promise (mirrors {@link audioRecoveryPromise}
+    // for the mic). Lets a re-entrant `reacquireVideoTrack` (e.g. a resume racing
+    // a pre-hold camera acquire) AWAIT the running acquire and, if that acquire was
+    // fenced by a hold (see the capture-generation fence), start a fresh acquire
+    // instead of coalescing onto it and ending up camera-less.
+    private cameraRecoveryPromise: Promise<void> | null = null;
+    // True while the call is HELD (Core Invariant 2: a held call owns NO
+    // capture). Set by `suspendLocalMediaForHold`, cleared by
+    // `resumeLocalMediaFromHold` BEFORE it reacquires. While set, every
+    // non-resume capture sink (device-change audio refresh, video stall
+    // recovery, the offer-driven `startLocalMedia` reacquire) is a no-op, so a
+    // delayed devicechange/visibility/offer callback cannot restart `getUserMedia`
+    // on a held call. The user-toggle and resume sinks are guarded in the session
+    // (see `setTrackEnabled` / `resumeForeground`); this is the engine-level
+    // backstop for paths the session can't gate.
+    private heldNoCapture = false;
+    // Resume-handoff intent, armed by {@link resumeLocalMediaFromHold} ONLY when
+    // its reacquire(s) early-returned on the `requestingMedia` guard — i.e. an
+    // in-flight `startLocalMediaInternal` still held the media latch, so the
+    // resumed call's desired mic/camera never got reacquired (route refresh /
+    // reacquire are no-ops). When that stale initial op finally bails out (and
+    // clears `requestingMedia`), {@link handOffToResumedCapture} consumes this and
+    // replays the desired capture via the SAME reacquire sinks resume uses, so a
+    // resumed foreground call is not left permanently mic/camera-less. Consumed
+    // once (cleared on read) and cleared on teardown; the reacquire paths have
+    // their own coalescing/no-op guards, so the handoff cannot loop.
+    private pendingResumeHandoff: { audio: boolean; videoMode: VideoMode } | null = null;
+    // Latest per-kind foreground enable/disable intent, mirrored from the
+    // session's foreground `setTrackEnabled` (see {@link setForegroundCaptureIntent}).
+    // Unlike the nullable {@link pendingResumeHandoff} object — which a full disarm
+    // nulls, so a later re-enable cannot re-arm it — these plain booleans always
+    // reflect the user's CURRENT intent. {@link handOffToResumedCapture} reads them
+    // AFTER its same-kind disarm release await to reconcile the just-released track
+    // against that intent, so an unmute racing the release never leaves the call
+    // silent-unmuted (desired on, no live track).
+    private foregroundAudioIntent = false;
+    private foregroundVideoIntent = false;
+    // One-pending-reschedule latch for {@link rescheduleResumeHandoff}. Set when a
+    // fresh {@link handOffToResumedCapture} pass is requested (because a user enable
+    // raced the bound-side safe release in {@link reconcileHandoffCapture}) and
+    // cleared when the follow-up pass STARTS (at the loop top in
+    // {@link handOffToResumedCapture}). A burst of bound-side releases can thus queue
+    // only ONE reconcile pass at a time — the reschedule cannot stack.
+    private resumeHandoffRescheduled = false;
+    // Serialization gate for {@link handOffToResumedCapture}: the promise of the
+    // currently running pass loop, or null when none is running. Exactly one pass
+    // body runs at a time; a reschedule (or re-entrant call) requested WHILE a pass
+    // is in flight runs strictly AFTER it fully completes, via the loop's tail
+    // rerun — never overlapping it (an overlap lets the original pass publish a
+    // camera the follow-up already released for a disable). Cleared by the loop's
+    // own `finally`.
+    private handoffInFlight: Promise<void> | null = null;
     private localMediaStartPromise: Promise<MediaStream | null> | null = null;
+    // Monotonic CAPTURE GENERATION. Bumped synchronously whenever the current
+    // capture is invalidated: a media (re)start (`startLocalMediaInternal`), a
+    // full stop (`stopLocalMedia` / `destroy`), and — critically for multi-call
+    // hold — `suspendLocalMediaForHold`. Every async capture operation snapshots
+    // it before the first `getUserMedia`/`getDisplayMedia` await and re-checks it
+    // after each acquisition AND attachment await (see `isCaptureStale`). A
+    // continuation whose generation no longer matches was superseded by a hold
+    // (or another start/stop) that latched AFTER it began — including the ABA
+    // case where a resume cleared `heldNoCapture` again — so it MUST drop its
+    // freshly acquired track(s), undo any attachment, and not publish (Core
+    // Invariant 2 / privacy). `heldNoCapture` alone cannot detect ABA because a
+    // resume flips it back to false; the generation is the durable fence.
     private mediaRequestId = 0;
     private retryingTimer: number | null = null;
     private localVideoHeartbeatAt = Date.now();
@@ -384,8 +469,117 @@ export class MediaEngine {
     }
     private _lastLocalMediaError: { name: string; message: string } | null = null;
 
+    // Session-level "capture succeeded at least once" latches, set when a
+    // `getUserMedia` for that kind has resolved (regardless of whether the track
+    // was later kept). The permission was granted by the user at that point.
+    // Used by the session's foreground preflight as a grant signal when the
+    // Permissions API is unavailable/unusable (e.g. Safari, or a policy that
+    // throws): a prior successful capture proves the grant, so a host-driven
+    // prompt+retry can actually foreground instead of looping forever.
+    private _audioCaptureGranted = false;
+    private _videoCaptureGranted = false;
+
+    /** True once a microphone `getUserMedia` has succeeded this session. */
+    get audioCaptureEverSucceeded(): boolean { return this._audioCaptureGranted; }
+    /** True once a camera `getUserMedia` has succeeded this session. */
+    get videoCaptureEverSucceeded(): boolean { return this._videoCaptureGranted; }
+
+    /**
+     * True when a capture continuation that snapshotted `gen` (via
+     * {@link mediaRequestId}) before an await is now stale and must not publish:
+     * the engine was destroyed, the call is held, or the capture generation moved
+     * on (a hold — even one already resumed past, the ABA case — or another
+     * start/stop). Callers stop the freshly acquired track(s) and undo any
+     * attachment when this returns true.
+     */
+    private isCaptureStale(gen: number): boolean {
+        return this.destroyed || this.heldNoCapture || this.mediaRequestId !== gen;
+    }
+
+    /**
+     * Release the `requestingMedia` latch ONLY if `requestId` still owns it (see
+     * {@link mediaLatchOwner}). A stale `startLocalMediaInternal` continuation
+     * whose start was superseded by a `stopLocalMedia` + a newer start no longer
+     * owns the latch, so it must leave the newer acquire's latch intact rather
+     * than clobbering it. A hold+resume never re-takes the latch, so the parked
+     * start remains the owner and this DOES release it (enabling the handoff).
+     */
+    private releaseMediaLatchIfOwner(requestId: number): void {
+        if (this.mediaLatchOwner === requestId) {
+            this.requestingMedia = false;
+            this.mediaLatchOwner = null;
+        }
+    }
+
+    /**
+     * The track the CURRENT capture generation wants attached to `sender`, or
+     * `null` when the live state says the sender should carry nothing. Resolves
+     * by role for independent peers (audio/camera/content senders map to the
+     * live local audio/camera/content track) and by kind for legacy peers (whose
+     * single video sender carries the screen share while active, else the
+     * camera). A non-live candidate resolves to `null`.
+     */
+    private currentTrackForSender(peer: PeerState, sender: RTCRtpSender, senderKind: string): MediaStreamTrack | null {
+        let desired: MediaStreamTrack | null;
+        if (peer.mediaRoles.audio?.sender === sender) {
+            desired = this.localStream?.getAudioTracks()[0] ?? null;
+        } else if (peer.mediaRoles.camera?.sender === sender) {
+            desired = this.localCameraTrack;
+        } else if (peer.mediaRoles.content?.sender === sender) {
+            desired = this.localContentTrack;
+        } else if (senderKind === 'audio') {
+            // Legacy peer (no role mapping): disambiguate by kind.
+            desired = this.localStream?.getAudioTracks()[0] ?? null;
+        } else {
+            desired = this.isScreenSharing && this.localContentTrack ? this.localContentTrack : this.localCameraTrack;
+        }
+        return desired && desired.readyState === 'live' ? desired : null;
+    }
+
+    /**
+     * Undo a superseded (stale) capture operation's sender attachment(s): for
+     * every peer sender that STILL carries `staleTrack` — the exact track this
+     * operation attached before a hold/stop bumped the capture generation —
+     * restore the track the CURRENT generation owns for that sender (via
+     * {@link currentTrackForSender}), falling back to `null` when the live state
+     * wants nothing there. A sender a NEWER generation already repointed
+     * (`sender.track !== staleTrack`) is left untouched (per-sender ownership).
+     *
+     * The restore (rather than a blind `null`) matters when a stale pre-hold
+     * `replaceTrack` physically LANDS after resume already repointed the sender
+     * to a resumed track: the browser leaves the sender carrying `staleTrack`, so
+     * this undo re-installs the resumed mic/camera/content instead of stripping
+     * the foreground call. `staleTrack` is being torn down by the caller, so if
+     * the live state still names it as current (its release runs after this) we
+     * fall back to `null`.
+     *
+     * This is the attachment-await counterpart to the post-acquire fences: the
+     * generation is re-checked AFTER every `replaceTrack` yields, and a stale
+     * continuation whose `replaceTrack` won the race against a concurrent hold is
+     * unwound here. Callers stop the stale capture track separately.
+     */
+    private async detachStaleTrackFromSenders(staleTrack: MediaStreamTrack): Promise<void> {
+        await Promise.all(Array.from(this.peers.values()).map(async (peer) => {
+            for (const sender of peer.pc.getSenders()) {
+                if (sender.track !== staleTrack) continue;
+                const current = this.currentTrackForSender(peer, sender, staleTrack.kind);
+                const replacement = current === staleTrack ? null : current;
+                try {
+                    await sender.replaceTrack(replacement);
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `Failed to restore current track on stale sender: ${formatError(err)}`);
+                }
+            }
+        }));
+    }
+
     async startLocalMedia(): Promise<MediaStream | null> {
         if (this.localStream) return this.localStream;
+        // Core Invariant 2: a held call owns NO capture. The offer-driven
+        // reacquire (`applyRemoteOffer`, which calls this when `localStream` is
+        // null) must not start `getUserMedia` while held. Resume reacquires via
+        // the dedicated `resumeLocalMediaFromHold` sinks, not this path.
+        if (this.heldNoCapture) return null;
         if (this.localMediaStartPromise) return this.localMediaStartPromise;
         const startPromise = this.startLocalMediaInternal();
         this.localMediaStartPromise = startPromise;
@@ -403,10 +597,11 @@ export class MediaEngine {
         this.mediaRequestId = requestId;
 
         this.requestingMedia = true;
+        this.mediaLatchOwner = requestId;
         this._lastLocalMediaError = null;
         try {
             if (!navigator.mediaDevices?.getUserMedia) {
-                this.requestingMedia = false;
+                this.releaseMediaLatchIfOwner(requestId);
                 this._lastLocalMediaError = { name: 'NotSupportedError', message: 'getUserMedia is not supported' };
                 return null;
             }
@@ -424,25 +619,71 @@ export class MediaEngine {
                 }
             }
 
-            if (this.destroyed || this.mediaRequestId !== requestId) {
+            // Latch the per-kind permission grant from what actually landed: the
+            // initial acquire requests audio (always) and video (when enabled), so
+            // the resolved tracks tell us which grants the user gave.
+            if (stream.getAudioTracks().length > 0) this._audioCaptureGranted = true;
+            if (stream.getVideoTracks().length > 0) this._videoCaptureGranted = true;
+
+            // Capture-generation fence (also catches a hold latching mid-acquire:
+            // `suspendLocalMediaForHold` bumps `mediaRequestId` and sets
+            // `heldNoCapture`, so a held-while-pending initial media drops its
+            // freshly captured tracks instead of attaching them to peers).
+            if (this.isCaptureStale(requestId)) {
                 stream.getTracks().forEach(t => t.stop());
+                // Release the media latch (this bail-out is the one path that took
+                // it and does NOT reach the happy-path clear below) so the handoff's
+                // reacquires can proceed, then hand off to any resume that this op
+                // blocked while parked in the acquire await. Only release when THIS
+                // op still owns the latch: a `stopLocalMedia` + newer start may own
+                // it by now, and clearing it would let the newer start's recovery /
+                // toggle paths launch a concurrent acquire.
+                this.releaseMediaLatchIfOwner(requestId);
+                await this.handOffToResumedCapture();
                 return null;
             }
 
             this.applySpeechTrackHints(stream);
             this.localStream = stream;
+            // Stable snapshot of the tracks THIS start acquired, taken NOW — before
+            // the device-detection / route-refresh awaits below. A concurrent
+            // hold/resume during those awaits swaps `this.localStream`'s contents for
+            // newer-generation (resumed) tracks; the stale-cleanup below must operate
+            // on THIS operation's OWN captured tracks, never on a re-read of the
+            // mutable current stream (which would stop the resumed call's tracks).
+            const acquiredTracks = stream.getTracks();
             const postStartDevices = await this.enumerateMediaDevices();
             await this.detectCameras(postStartDevices);
-            this.requestingMedia = false;
+            // Release the latch so the route refresh below (a reacquire sink) can
+            // run — but only if THIS op still owns it. A `stopLocalMedia` + newer
+            // start during the awaits above may own it now; leaving it set keeps
+            // the newer start's latch intact (this op bails at the fence below).
+            this.releaseMediaLatchIfOwner(requestId);
             if (this.roomState && this.clientId) {
                 await this.refreshLocalAudioTrack('initial-route-check', postStartDevices);
+            }
+            // Re-check the generation AFTER the device-detection / route-refresh
+            // awaits and BEFORE re-reading or attaching `this.localStream`: a
+            // hold/resume during those awaits installs newer-generation tracks into
+            // `this.localStream`. A stale initial op that proceeded would attach and
+            // then (at the post-attach fence) STOP those resumed tracks as if they
+            // were its own. Undo only THIS op's own captured tracks and publish nothing.
+            if (this.isCaptureStale(requestId)) {
+                for (const track of acquiredTracks) {
+                    await this.detachStaleTrackFromSenders(track);
+                    try { track.stop(); } catch { /* ignore */ }
+                }
+                // `requestingMedia` was cleared above; hand off to a resume this op
+                // blocked while parked in the device-detection / route-refresh await.
+                await this.handOffToResumedCapture();
+                return null;
             }
             const activeStream = this.localStream;
             if (!activeStream) return null;
 
             for (const [remoteCid, peer] of this.peers) {
                 if (peer.supportsIndependentContentVideo) {
-                    this.attachLocalTracksToIndependentPeer(remoteCid, peer);
+                    await this.attachLocalTracksToIndependentPeer(remoteCid, peer);
                 } else {
                     await this.attachLocalTracksToPeer(remoteCid, peer, activeStream);
                 }
@@ -457,6 +698,25 @@ export class MediaEngine {
                     this.scheduleLocalTrackNegotiation(remoteCid, peer);
                 }
             }
+            // Post-attachment fence: the per-peer attach loop above yields on
+            // `replaceTrack` (legacy `attachLocalTracksToPeer`), so a hold — or
+            // another start/stop — can latch DURING an attach await: its
+            // `suspendLocalMediaForHold` bumps the generation and releases capture.
+            // If this superseded continuation's `replaceTrack` won the race, the
+            // sender is left carrying a stopped pre-hold track. Undo ONLY the
+            // senders still carrying the tracks THIS start attached (a resumed
+            // track a newer generation installed is never clobbered — per-sender
+            // ownership), stop the stale capture, and publish nothing.
+            if (this.isCaptureStale(requestId)) {
+                for (const track of acquiredTracks) {
+                    await this.detachStaleTrackFromSenders(track);
+                    try { track.stop(); } catch { /* ignore */ }
+                }
+                // `requestingMedia` was cleared above; hand off to a resume this op
+                // blocked while parked in an attach await.
+                await this.handOffToResumedCapture();
+                return null;
+            }
             this.notifyChange();
             return activeStream;
         } catch (err) {
@@ -465,7 +725,13 @@ export class MediaEngine {
                 name: err instanceof DOMException ? err.name : 'Error',
                 message: formatError(err),
             };
-            this.requestingMedia = false;
+            // Release the latch (only if this op still owns it — see the stale
+            // exits above) and hand off to any resume this op blocked while parked
+            // in the failing acquire. Without the handoff, a transient initial
+            // acquire failure would leave an un-gated foreground resume permanently
+            // capture-less. `handOffToResumedCapture` re-checks held/destroyed.
+            this.releaseMediaLatchIfOwner(requestId);
+            await this.handOffToResumedCapture();
             return null;
         }
     }
@@ -489,7 +755,21 @@ export class MediaEngine {
             this.localStream = null;
         }
         this.isScreenSharing = false;
+        // Full teardown: the latch (and its ownership) is unconditionally
+        // released — no in-flight start survives a stop (the generation bump
+        // above fences any parked continuation).
         this.requestingMedia = false;
+        this.mediaLatchOwner = null;
+        // A full teardown supersedes any pending resume handoff (also covers
+        // `destroy`, which routes through here). This invalidates a RUNNING handoff
+        // pass, not just an un-started one: the `mediaRequestId` bump above is the
+        // pass-local abort signal (`runResumedCapturePass`/`reconcileHandoffCapture`
+        // re-check it around every await and bail once it moves), so a parked
+        // reacquire can no longer resurrect the camera/mic after a terminal reset.
+        // Clearing the reschedule latch stops any queued tail rerun from firing;
+        // clearing the intent lets a future handoff reschedule cleanly.
+        this.pendingResumeHandoff = null;
+        this.resumeHandoffRescheduled = false;
         this.notifyChange();
     }
 
@@ -525,19 +805,669 @@ export class MediaEngine {
 
     async reacquireVideoTrack(): Promise<void> {
         if (!this.videoCaptureSupported) return;
+        // Core Invariant 2: a held call owns NO capture. Cheap entry guard so this
+        // never even STARTS `getUserMedia` on a held call (the post-acquire fence
+        // is a backstop, not a substitute). Resume clears `heldNoCapture` BEFORE
+        // it calls this, and foreground toggles run while not held, so no
+        // legitimate caller relies on this being absent.
+        if (this.heldNoCapture) return;
         // Independent share: camera is separate, so re-enabling the camera must
         // work while sharing. Only the legacy single-video share blocks it.
         if (this.isLegacyScreenSharing) return;
         if (this.localStream?.getVideoTracks()[0]) return;
-        if (this.cameraRecoveryInFlight || this.requestingMedia) return;
+        if (this.cameraRecoveryInFlight) {
+            // Coalesce onto the running camera acquire. But it may have been FENCED
+            // by a hold that bumped the capture generation (a resume racing a
+            // pre-hold acquire that this call coalesced onto): it drops its track
+            // and lands nothing. If we still need the camera and are no longer
+            // held, fall through to start ONE fresh acquire so a resume does not end
+            // up camera-less (camera-coalescing ABA hazard; mirrors the mic path).
+            if (this.cameraRecoveryPromise) await this.cameraRecoveryPromise;
+            if (this.heldNoCapture || this.localStream?.getVideoTracks()[0]) return;
+            if (this.cameraRecoveryInFlight) return; // another caller already restarted it
+        }
+        if (this.requestingMedia) return;
         this.cameraRecoveryInFlight = true;
+        const work = this.reacquireVideoTrackInternal();
+        this.cameraRecoveryPromise = work;
         try {
-            const track = await this.acquireCameraTrack(this.facingMode, true);
-            await this.swapLocalVideoTrack(track, null);
-        } catch (err) {
-            this.logger?.log('error', 'Camera', `Failed to reacquire camera: ${formatError(err)}`);
+            await work;
         } finally {
             this.cameraRecoveryInFlight = false;
+            this.cameraRecoveryPromise = null;
+        }
+    }
+
+    /** Worker for {@link reacquireVideoTrack}; assumes the in-flight latch is held. */
+    private async reacquireVideoTrackInternal(): Promise<void> {
+        // Snapshot the capture generation BEFORE the getUserMedia await so a hold
+        // (or another start/stop) latching mid-acquire — including one already
+        // resumed past (ABA) — supersedes this continuation.
+        const gen = this.mediaRequestId;
+        try {
+            const track = await this.acquireCameraTrack(this.facingMode, true);
+            // Camera getUserMedia resolved: the grant is proven even if a hold
+            // fence drops the track below.
+            this._videoCaptureGranted = true;
+            // Post-acquire fence: a held call must never publish a live camera
+            // track to peers (Core Invariant 2 / privacy), so drop the freshly
+            // captured track instead of attaching it. (`localStream` may
+            // legitimately be null here for a held-initial, video-only resume,
+            // where `swapLocalVideoTrack` creates it.)
+            if (this.isCaptureStale(gen)) {
+                track.stop();
+                return;
+            }
+            await this.swapLocalVideoTrack(track, null);
+            // Post-attachment fence: `swapLocalVideoTrack` yields on per-peer
+            // `replaceTrack`, so a hold can latch DURING the attach await. Undo the
+            // attachment (detach the sender + stop the track) rather than leaving a
+            // held call publishing live camera.
+            if (this.isCaptureStale(gen)) {
+                await this.releaseVideoTrack();
+            }
+        } catch (err) {
+            this._lastLocalMediaError = {
+                name: err instanceof DOMException ? err.name : 'Error',
+                message: formatError(err),
+            };
+            this.logger?.log('error', 'Camera', `Failed to reacquire camera: ${formatError(err)}`);
+        }
+    }
+
+    // --- Multi-call hold/resume primitives (design "Add Local Media
+    // Suspension Primitives"). These release foreground media so a held call
+    // owns no mic, camera, screen share, or audible remote playout, while
+    // preserving peer connections, transceivers/senders, and signaling. ---
+
+    /**
+     * Release all foreground LOCAL media for a held call: stop screen share,
+     * release the microphone CAPTURE (not just `track.enabled=false` — the
+     * browser keeps capture live otherwise) and null the audio sender track,
+     * release the camera (reusing {@link releaseVideoTrack}), and silence remote
+     * audio playout. Peer connections, transceivers/senders, and signaling are
+     * left intact so resume can re-attach fresh tracks with no renegotiation.
+     */
+    async suspendLocalMediaForHold(): Promise<void> {
+        // Latch held FIRST so any non-resume capture sink that fires during/after
+        // the release (a devicechange settle timer, visibility resume, or an
+        // inbound offer) is a no-op rather than reacquiring `getUserMedia`.
+        this.heldNoCapture = true;
+        // Bump the capture generation so any in-flight capture continuation
+        // (initial media, mic/camera reacquire, screen-share picker, flip, route/
+        // stall refresh) is fenced: when its getUserMedia/getDisplayMedia resolves
+        // it sees a moved generation and drops its track instead of attaching it —
+        // even if a resume flips `heldNoCapture` back to false first (ABA).
+        this.mediaRequestId += 1;
+        if (this.isScreenSharing) {
+            await this.stopScreenShare();
+        }
+        await this.releaseLocalAudioCapture();
+        await this.releaseVideoTrack();
+        this.setRemotePlaybackEnabled(false);
+        this.detachOrPauseRenderersForHold();
+        this.notifyChange();
+    }
+
+    /**
+     * Enter held-without-capture mode for a session joined directly into the
+     * `held` initial role (Core Invariant 3 / contract §5). Latches the
+     * no-capture backstop and silences remote playout BEFORE any peer/transceiver
+     * is created, so the offer-driven `startLocalMedia` reacquire never grabs the
+     * mic/camera and inbound audio is silent. Stable audio + video
+     * transceivers/senders are still created during negotiation (with a `null`
+     * sender track) via the normal `getOrCreatePeer` path; resume attaches fresh
+     * tracks to those existing senders. No-op `getUserMedia` is the whole point:
+     * a held-initial call owns no capture and holds no lease.
+     */
+    initializeHeldWithoutCapture(): void {
+        this.heldNoCapture = true;
+        this.setRemotePlaybackEnabled(false);
+    }
+
+    /**
+     * Re-acquire foreground LOCAL media for a resumed call per the call's
+     * desired intent: reacquire the microphone (and re-attach to the audio
+     * senders) when `desiredAudio`, reacquire the camera when `desiredVideoMode`
+     * is not `'off'`, and re-enable audible remote playout. Attaches fresh
+     * tracks to the existing senders via `replaceTrack` (no SDP renegotiation on
+     * the common path).
+     */
+    async resumeLocalMediaFromHold(desiredAudio: boolean, desiredVideoMode: VideoMode): Promise<void> {
+        // Clear the held latch BEFORE reacquiring so resume's own capture sinks
+        // are not blocked. The session fences a superseded/failed resume and
+        // re-suspends (re-latching held) via `suspendLocalMediaForHold`.
+        this.heldNoCapture = false;
+        if (desiredAudio) {
+            await this.reacquireLocalAudioCapture();
+        }
+        if (desiredVideoMode !== 'off') {
+            // Reconcile facing to the desired mode BEFORE reacquiring: a
+            // `setCameraMode`/`flipCamera` while held only updates `desiredVideoMode`
+            // (Core Invariant 2 defers the real switch to resume), so resume must
+            // apply it here — otherwise `reacquireVideoTrack` reacquires on the STALE
+            // `facingMode` and the camera comes back on the OLD facing. Mirrors
+            // iOS/Android applying the specific mode on resume. `selfie` -> 'user';
+            // `world`/`composite` -> 'environment' (web drops `composite` from the
+            // available modes, so it only reaches here as a defensive rear mapping).
+            this.facingMode = desiredVideoMode === 'selfie' ? 'user' : 'environment';
+            await this.reacquireVideoTrack();
+        }
+        this.setRemotePlaybackEnabled(true);
+        // If a concurrent `startLocalMediaInternal` still holds the media latch,
+        // the reacquire(s) above early-returned on their `requestingMedia` guard
+        // and the resumed call is left without the mic/camera it wants. Arm a
+        // handoff so that op's stale bail-out replays the desired capture once the
+        // latch clears. Only arm for a kind that is genuinely still missing while
+        // not held, so a resume whose reacquires actually landed arms nothing.
+        if (this.requestingMedia && !this.heldNoCapture) {
+            const audioMissing = desiredAudio && !this.localStream?.getAudioTracks()[0];
+            const videoMissing = desiredVideoMode !== 'off' && !this.localStream?.getVideoTracks()[0];
+            if (audioMissing || videoMissing) {
+                this.pendingResumeHandoff = { audio: desiredAudio, videoMode: desiredVideoMode };
+            }
+        }
+        this.notifyChange();
+    }
+
+    /**
+     * Withdraw one media kind from a still-pending resume handoff (see
+     * {@link pendingResumeHandoff}). The armed intent snapshots the desired
+     * media AT RESUME TIME; if the user then toggles that kind OFF before the
+     * blocking initial start releases the latch and the handoff consumes, the
+     * handoff must NOT reacquire and attach media the user has since disabled
+     * (which would transmit after they turned it off). The session's foreground
+     * toggle-off paths call this so the handoff stays current with user intent.
+     * No-op when nothing is armed; clears the whole intent once both kinds are
+     * withdrawn.
+     */
+    disarmResumeHandoff(kind: 'audio' | 'video'): void {
+        const intent = this.pendingResumeHandoff;
+        if (!intent) return;
+        if (kind === 'audio') intent.audio = false;
+        else intent.videoMode = 'off';
+        if (!intent.audio && intent.videoMode === 'off') this.pendingResumeHandoff = null;
+    }
+
+    /**
+     * Mirror the session's latest foreground enable/disable intent for a media
+     * kind into the engine. Called from the session's foreground
+     * `setTrackEnabled` on every toggle. Read only by
+     * {@link handOffToResumedCapture}'s post-release reconcile: when a same-kind
+     * disarm made the handoff release a just-attached track, the user may have
+     * re-enabled the kind meanwhile via a path that only flipped `track.enabled`
+     * (the track was still attached then) and scheduled no reacquire. This flag —
+     * which survives a full disarm nulling {@link pendingResumeHandoff} — lets the
+     * handoff reacquire a fresh track so the call is never left silent-unmuted.
+     */
+    setForegroundCaptureIntent(kind: 'audio' | 'video', enabled: boolean): void {
+        if (kind === 'audio') this.foregroundAudioIntent = enabled;
+        else this.foregroundVideoIntent = enabled;
+    }
+
+    /**
+     * Consume the armed resume handoff, but only if `intent` is STILL the armed
+     * one. A {@link disarmResumeHandoff} that withdrew both kinds during a
+     * reacquire await already nulled `pendingResumeHandoff`, and a fresh resume
+     * could have re-armed a DIFFERENT intent while this handoff awaited; neither
+     * must be clobbered by this handoff nulling blindly.
+     */
+    private consumeResumeHandoff(intent: { audio: boolean; videoMode: VideoMode }): void {
+        if (this.pendingResumeHandoff === intent) this.pendingResumeHandoff = null;
+    }
+
+    /**
+     * Replay a resumed call's desired capture that a concurrent in-flight
+     * initial-media start blocked (see {@link pendingResumeHandoff}). Called from
+     * the stale bail-outs of {@link startLocalMediaInternal} AFTER that op has
+     * cleared `requestingMedia`, so the reacquire sinks (which early-return while
+     * `requestingMedia` is set) now proceed. Reacquires each still-missing kind
+     * via the SAME sinks resume uses. No-op when nothing was armed, when the call
+     * is held again, or when the engine was destroyed; the reacquire paths carry
+     * their own no-op guards, so this cannot loop.
+     */
+    private handOffToResumedCapture(): Promise<void> {
+        // Serialize passes: exactly ONE pass body runs at a time, and a reschedule
+        // requested mid-pass runs strictly AFTER the current pass fully completes
+        // (both audio AND video reconciled). Without this, the reschedule microtask
+        // could start a fresh pass while the original is still parked in its video
+        // reacquire; the original then republishes a camera the follow-up already
+        // released for a disable, leaving it transmitting after the user turned it
+        // off (the finding). A re-entrant call while a pass is in flight requests one
+        // more tail pass (so a just-armed intent — e.g. a stale-start bail-out racing
+        // an in-flight pass — is not dropped) and awaits the running loop rather than
+        // overlapping it.
+        if (this.handoffInFlight) {
+            this.resumeHandoffRescheduled = true;
+            return this.handoffInFlight;
+        }
+        const loop = (async () => {
+            do {
+                // Starting a (follow-up) pass consumes the pending-reschedule marker;
+                // a reschedule requested DURING this pass re-sets it and the loop runs
+                // one more pass AFTER this one finishes. Progress is bounded by user
+                // input (a fresh pass does real work only if the intent changed) and
+                // by the per-kind `lastActed` no-progress terminator inside
+                // {@link reconcileHandoffCapture}, so a persistent failure never loops.
+                this.resumeHandoffRescheduled = false;
+                await this.runResumedCapturePass();
+            } while (!this.destroyed && this.resumeHandoffRescheduled);
+        })();
+        this.handoffInFlight = loop;
+        void loop.finally(() => {
+            if (this.handoffInFlight === loop) this.handoffInFlight = null;
+        });
+        return loop;
+    }
+
+    /**
+     * One resume-handoff pass: reconcile audio, then video, against the armed
+     * {@link pendingResumeHandoff} intent and the engine-mirrored foreground intent.
+     * The serialization wrapper {@link handOffToResumedCapture} guarantees exactly
+     * one of these runs at a time.
+     */
+    private async runResumedCapturePass(): Promise<void> {
+        // Only the continuation that released the ACTIVE latch runs the handoff.
+        // If `requestingMedia` is still set, ANOTHER start owns the latch (a
+        // `stopLocalMedia` + newer start superseded this parked op) and this op's
+        // stale exit does NOT own it. Consuming the intent here would strand it:
+        // the reacquire sinks early-return on the `requestingMedia` guard, and the
+        // owning start's later exit would find nothing to replay. Return WITHOUT
+        // consuming so the intent survives for that owning start's exit.
+        if (this.requestingMedia) return;
+        const intent = this.pendingResumeHandoff;
+        if (!intent) return;
+        // Snapshot the capture generation for the WHOLE pass. A terminal
+        // {@link stopLocalMedia} (the session's `resetSessionResources` on
+        // remote-ended / signaling error / join timeout tears media down WITHOUT
+        // destroying the engine) bumps `mediaRequestId`, and a hold likewise. This
+        // pass captured `intent` up front, so without re-checking the generation a
+        // parked reacquire that resolves after the teardown would keep driving the
+        // now-stale intent — reacquiring the camera AFTER the call ended (the
+        // finding). `gen` is threaded into {@link reconcileHandoffCapture} and
+        // re-checked between the two kinds so the whole pass aborts once the
+        // lifecycle moves.
+        const gen = this.mediaRequestId;
+        if (this.isCaptureStale(gen)) return;
+        // Do NOT null `pendingResumeHandoff` up front: keep it referencing this
+        // in-flight `intent` so a `disarmResumeHandoff(kind)` during a reacquire
+        // await below still mutates the SAME object the video facing recovery
+        // reads, and the withdrawn kind is not reacquired. Consumed only at the
+        // exit (via {@link consumeResumeHandoff}, which no-ops if a disarm or a
+        // fresh resume already replaced it).
+        //
+        // Per-kind desired = the armed handoff intent OR the engine-mirrored
+        // foreground intent (`foreground{Audio,Video}Intent`). The armed `intent`
+        // is the resume-time desire and stays authoritative for the reacquire even
+        // when no foreground toggle has run (so the mirror is still its `false`
+        // default); a `disarmResumeHandoff` withdraws its kind. The mirror is ORed
+        // in so a re-enable that raced a FULL disarm — which nulled
+        // `pendingResumeHandoff`, leaving nothing to re-arm — is still seen. Both
+        // are re-read AFTER every await inside the loop, so a disable landing while
+        // a reacquire is parked in getUserMedia is observed and the just-attached
+        // track released on the next pass, instead of slipping past a one-shot
+        // post-reacquire check (the finding). This subsumes the former one-shot
+        // post-release and post-reacquire checks. `intent.videoMode` is also read
+        // to recover the desired camera facing for a video reacquire.
+        await this.reconcileHandoffCapture(
+            gen,
+            () => intent.audio || this.foregroundAudioIntent,
+            () => this.localStream?.getAudioTracks()[0] ?? null,
+            () => this.reacquireLocalAudioCapture(),
+            () => this.releaseLocalAudioCapture(),
+        );
+        // A terminal stop (or hold) landing during the audio reconcile moved the
+        // generation; abort before touching the camera so the video branch never
+        // reacquires on a torn-down call.
+        if (this.isCaptureStale(gen)) return;
+        await this.reconcileHandoffCapture(
+            gen,
+            () => intent.videoMode !== 'off' || this.foregroundVideoIntent,
+            () => this.localStream?.getVideoTracks()[0] ?? null,
+            () => this.reacquireVideoTrack(),
+            () => this.releaseVideoTrack(),
+            () => {
+                // Recover the desired facing from the still-armed intent right
+                // before each reacquire (selfie -> 'user'; world/composite ->
+                // 'environment'). When a full disarm has nulled the mode to 'off'
+                // (a mute a later unmute then re-enabled — the mirror wants video
+                // but the armed mode is gone), keep the facing the first reacquire
+                // already applied.
+                if (intent.videoMode !== 'off') {
+                    this.facingMode = intent.videoMode === 'selfie' ? 'user' : 'environment';
+                }
+            },
+        );
+        this.consumeResumeHandoff(intent);
+    }
+
+    /**
+     * Bounded fixed-point reconcile of ONE media kind's live capture against the
+     * engine-mirrored foreground intent, for {@link handOffToResumedCapture}. Each
+     * pass re-reads the intent and the current track AFTER the previous await, so a
+     * disable (or re-enable) that races an in-flight reacquire/release is observed
+     * and corrected on the next pass rather than slipping past a one-shot check:
+     * reacquire when the kind is wanted but no live track is present, release when a
+     * live track is present but the kind is not wanted (which also covers a hold
+     * that latched mid-await — a held call must own no capture), and stop once the
+     * two agree. Two independent terminators: `lastActed` stops a futile retry when
+     * the corrective sink made no progress under an UNCHANGED intent (getUserMedia
+     * denied, a hold fence dropped the track) so a hard failure is attempted once,
+     * as the former one-shot did, not hammered; and `maxPasses` caps a pathological
+     * enable/disable alternation. On exhausting the bound, take the SAFE side:
+     * release any live track the current intent says should be off — never leave one
+     * transmitting.
+     *
+     * Termination is QUIESCENCE-based, not counter-truncated: the bound-side release
+     * itself awaits a `replaceTrack(null)`, and a user ENABLE of the kind can land
+     * during that await (the session's enable-with-track-present path only flips
+     * `track.enabled` and schedules no reacquire, then this release removes the
+     * track — desired ON, no live track). So after the release, re-read the intent
+     * one final time; on that mismatch (kind now wanted, no live track) do NOT return
+     * silently — {@link rescheduleResumeHandoff} re-arms and queues a FRESH pass.
+     * Each rescheduled pass is triggerable only by a NEW user action racing the
+     * previous one, so progress is bounded by user input, not the counter; the
+     * per-pass `lastActed` terminator still prevents same-input cycling. An enable
+     * that lands AFTER the handoff fully finishes is self-healed by the session
+     * toggle path (no live track -> it reacquires), so the reschedule is only needed
+     * for this mid-release window.
+     */
+    private async reconcileHandoffCapture(
+        gen: number,
+        wanted: () => boolean,
+        currentTrack: () => MediaStreamTrack | null,
+        reacquire: () => Promise<void>,
+        release: () => Promise<void>,
+        prepareReacquire?: () => void,
+    ): Promise<void> {
+        const maxPasses = 5;
+        let lastActed: boolean | null = null;
+        // The exact track THIS pass acquired and attached under `gen`. Recorded
+        // only when the reacquire returned with the generation STILL ours, so it
+        // can never point at a track a superseding start attached: a reacquire
+        // fenced by a mid-await teardown drops its own track (its internal
+        // generation fence), leaving `currentTrack()` either null or a newer
+        // start's foreign track. The abort/cleanup branches release ONLY this
+        // recorded track — the invariant is that the pass may undo only its own
+        // acquisitions, never a superseding generation's live capture.
+        let acquiredTrack: MediaStreamTrack | null = null;
+        const hasLiveTrack = () => currentTrack() !== null;
+        for (let pass = 0; pass < maxPasses; pass++) {
+            if (this.destroyed) return;
+            // Lifecycle moved mid-pass: a terminal {@link stopLocalMedia} (session
+            // reset) or a hold bumped `gen` while a reacquire/release awaited. Abort
+            // the whole pass — the captured `intent` no longer describes a live call.
+            // Release ONLY a track THIS pass acquired: a `stopLocalMedia` + newer
+            // `startLocalMedia` can have attached a fresh track of this kind under a
+            // newer generation, and `release()` is NOT ownership-scoped — it would
+            // stop the superseding start's live track (the finding), leaving the new
+            // call capture-less with nothing to retry. Compare identity: leave any
+            // track we did not acquire untouched.
+            if (this.mediaRequestId !== gen) {
+                const live = currentTrack();
+                if (live && live === acquiredTrack) await release();
+                return;
+            }
+            // A held call owns no capture, so a wanted kind is NOT wanted-live while
+            // held: this releases a track a hold stranded and skips reacquiring.
+            const wantLive = wanted() && !this.heldNoCapture;
+            if (wantLive === hasLiveTrack()) return; // fixed point reached
+            // Same target as last pass but still not reached: the sink failed or was
+            // fenced and repeating it under the unchanged intent won't help. A
+            // CHANGED intent (wantLive flipped) still gets its corrective pass.
+            if (wantLive === lastActed) break;
+            lastActed = wantLive;
+            if (wantLive) {
+                prepareReacquire?.();
+                await reacquire();
+                // Record the track we just attached as this pass's own, but only if
+                // the generation is still ours. If a teardown + newer start raced the
+                // reacquire, the generation has moved and `currentTrack()` is now the
+                // superseding start's track (or null) — never ours — so skipping the
+                // record keeps the ownership check above honest.
+                if (this.mediaRequestId === gen) acquiredTrack = currentTrack();
+            } else {
+                await release();
+                // We just tore down our own capture; nothing of ours remains live.
+                acquiredTrack = null;
+            }
+        }
+        // Bound exhausted under alternating intent: never leave a live track the
+        // current intent says is off. Take the SAFE side and release it.
+        if (this.destroyed) return;
+        // Same lifecycle abort as the loop: a terminal stop / hold during the last
+        // await moved `gen`. Release ONLY this pass's own acquisition (same
+        // ownership rule as the loop-top abort — a superseding start's live track
+        // must be left alone), and stop — do NOT fall through to the reschedule
+        // below, which would re-arm a fresh pass after the call was torn down.
+        if (this.mediaRequestId !== gen) {
+            const live = currentTrack();
+            if (live && live === acquiredTrack) await release();
+            return;
+        }
+        if (!(wanted() && !this.heldNoCapture) && hasLiveTrack()) {
+            await release();
+            // The release above awaited (a parked `replaceTrack(null)`); a user
+            // ENABLE of this kind can have landed while it was in flight. The
+            // session's enable-with-track-present path only flipped `track.enabled`
+            // (the track was still attached) and scheduled NO reacquire, then this
+            // release stopped+removed it: desired ON, no live track (silent-unmuted).
+            // The after-every-await fixed point does not hold at the counter bound,
+            // so re-read the intent once more and, on that mismatch, reschedule a
+            // fresh handoff pass instead of returning silently.
+            // The bound-side release awaited too: a terminal stop / hold could have
+            // landed during it. Only reschedule when the generation is still ours —
+            // otherwise re-arming would resurrect a handoff for a torn-down call.
+            if (!this.destroyed && this.mediaRequestId === gen
+                && wanted() && !this.heldNoCapture && !hasLiveTrack()) {
+                this.rescheduleResumeHandoff();
+            }
+        }
+    }
+
+    /**
+     * Reschedule a FRESH {@link handOffToResumedCapture} pass after
+     * {@link reconcileHandoffCapture} hit its iteration bound with the intent now
+     * wanting a kind whose live track the bound-side safe release just removed (a
+     * user enable that raced the parked `replaceTrack(null)`). Rather than looping
+     * in place or returning silent-unmuted, re-arm the handoff from the CURRENT
+     * mirrored foreground intent and run another pass on a microtask.
+     *
+     * Progress is bounded by USER INPUT, not a counter: a rescheduled pass can only
+     * do work if a new toggle changed the intent again; otherwise its reconcile
+     * reaches the fixed point (or the `lastActed` no-progress terminator stops it)
+     * and it reschedules nothing. At most one reschedule is pending at a time
+     * ({@link resumeHandoffRescheduled}), so a burst of bound-side releases cannot
+     * stack passes.
+     *
+     * Serialization: this is called from inside a RUNNING {@link reconcileHandoffCapture}
+     * (itself inside {@link handOffToResumedCapture}). Queuing a microtask to run the
+     * follow-up would overlap the still-in-flight pass — the original could then
+     * publish a camera the follow-up already released (the finding). So when a pass
+     * is in flight we only SET the marker; the running loop's tail rerun runs the
+     * follow-up strictly after the current pass completes. Only when NO pass is
+     * running (defensive — this call site is always mid-pass today) do we fire
+     * promptly on a microtask. The usual entry guards (`requestingMedia`,
+     * `destroyed`, `heldNoCapture`) are re-checked by the pass body when it runs.
+     */
+    private rescheduleResumeHandoff(): void {
+        if (this.resumeHandoffRescheduled) return; // one pending reschedule at a time
+        if (this.destroyed || this.heldNoCapture) return;
+        // Re-arm from the CURRENT mirrored foreground intent (the plain booleans,
+        // which survive a full disarm nulling `pendingResumeHandoff`) so the fresh
+        // pass reacquires exactly the kinds the user now wants. Recover the camera
+        // facing from the engine's `facingMode`, already applied by the prior pass.
+        // A NEW object is armed (never a mutation of the running pass's captured
+        // intent), so a `disarmResumeHandoff` landing during the running pass mutates
+        // only this follow-up intent — the running pass keeps its own — and the
+        // identity-guarded {@link consumeResumeHandoff} leaves this armed for the
+        // follow-up.
+        this.pendingResumeHandoff = {
+            audio: this.foregroundAudioIntent,
+            videoMode: this.foregroundVideoIntent
+                ? (this.facingMode === 'user' ? 'selfie' : 'world')
+                : 'off',
+        };
+        this.resumeHandoffRescheduled = true;
+        // In flight: the loop's tail rerun runs the follow-up after this pass ends.
+        // Not in flight: fire promptly (the marker is cleared at the loop top).
+        if (!this.handoffInFlight) {
+            queueMicrotask(() => { void this.handOffToResumedCapture(); });
+        }
+    }
+
+    /**
+     * Gate audible remote playout for every peer by toggling
+     * `receiver.track.enabled` on inbound AUDIO receivers. Defense in depth: the
+     * call UI also mounts audible elements only for the active session, but a
+     * held session must silence its own receivers so a host that hand-mounts
+     * streams still gets silence.
+     */
+    setRemotePlaybackEnabled(enabled: boolean): void {
+        // Remember the gate so it is applied to receivers/tracks that appear
+        // AFTER hold (new peers, renegotiation, late `ontrack`) — see
+        // `applyRemotePlaybackToPeer` callers. Otherwise a peer that joins or
+        // renegotiates while held would become audible.
+        this.remotePlaybackEnabled = enabled;
+        for (const peer of this.peers.values()) {
+            this.applyRemotePlaybackToPeer(peer);
+        }
+    }
+
+    /**
+     * Apply the current {@link remotePlaybackEnabled} gate to one peer's inbound
+     * AUDIO receivers. Called from {@link setRemotePlaybackEnabled} (all peers),
+     * from {@link getOrCreatePeer} (a peer created while held), and from
+     * `ontrack` (a fresh receiver track surfaced while held) so the deafen is
+     * sticky across peers/receivers that appear after hold.
+     */
+    private applyRemotePlaybackToPeer(peer: PeerState): void {
+        for (const receiver of peer.pc.getReceivers()) {
+            const track = receiver.track;
+            if (track?.kind === 'audio') {
+                track.enabled = this.remotePlaybackEnabled;
+            }
+        }
+    }
+
+    /**
+     * No-op on web. The web core does not own renderers — the UI layer mounts
+     * the audible `<audio>`/`<video>` elements and only does so for the active
+     * call. Audible suppression for held calls is the combination of
+     * {@link setRemotePlaybackEnabled}(false) (receiver-track disable, done in
+     * core) and the UI un-mounting active-only elements. This method exists for
+     * cross-platform contract parity with iOS/Android, where renderers are
+     * detached/paused in the SDK.
+     */
+    detachOrPauseRenderersForHold(): void {
+        /* web: renderers are UI-owned; see method doc. */
+    }
+
+    /**
+     * Stop the local microphone CAPTURE and detach it from every peer's audio
+     * sender. Stopping the track (not just `enabled=false`) is what makes the OS
+     * stop reporting this session as capturing while held. The audio sender is
+     * preserved (its track is replaced with `null`) so resume can re-attach a
+     * fresh track without renegotiation.
+     */
+    private async releaseLocalAudioCapture(): Promise<void> {
+        const audioTrack = this.localStream?.getAudioTracks()[0] ?? null;
+        await Promise.all(Array.from(this.peers.values()).map(async (peer) => {
+            for (const sender of peer.pc.getSenders()) {
+                if (sender.track?.kind !== 'audio') continue;
+                try {
+                    await sender.replaceTrack(null);
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `Failed to detach audio sender for hold: ${formatError(err)}`);
+                }
+            }
+        }));
+        if (audioTrack && this.localStream) {
+            try { audioTrack.stop(); } catch { /* ignore */ }
+            this.localStream.removeTrack(audioTrack);
+        }
+    }
+
+    /**
+     * Re-acquire the local microphone and re-attach it to every peer's audio
+     * sender via `replaceTrack` (no renegotiation on the common path). No-op
+     * when a live audio track is already present. Used both by
+     * {@link resumeLocalMediaFromHold} and by the foreground audio-enable path
+     * when a resumed-while-muted call has no live mic track yet (mirrors the
+     * public {@link reacquireVideoTrack}).
+     */
+    async reacquireLocalAudioCapture(): Promise<void> {
+        // Held-initial resume (Core Invariant 3 / contract §5): a session joined
+        // directly into `held` never ran `startLocalMedia`, so `localStream` is
+        // null here. Create an empty stream so the freshly acquired mic can be
+        // added and attached to the existing held audio senders via
+        // `replaceTrack`. For a normally-joined call `localStream` already
+        // exists, so this is a no-op (single-call behavior unchanged).
+        if (!this.localStream) this.localStream = new MediaStream();
+        if (this.localStream.getAudioTracks()[0]) return;
+        // Coalesce a re-entrant call onto the running acquire instead of no-opping:
+        // an unmute racing a hold-resume's mic reacquire must AWAIT the in-flight
+        // acquire and return only after the track lands, so the caller's `.then()`
+        // sees the live track and broadcasts `audioEnabled:true` (not a stale
+        // `false`). The `requestingMedia` (initial getUserMedia) case keeps its
+        // early-return — that path is a full media start, not an audio reacquire.
+        if (this.audioRecoveryInFlight) {
+            // The in-flight acquire may have been FENCED by a hold that bumped the
+            // capture generation (an unmute that started before a hold, which this
+            // resume then coalesced onto): it drops its track and lands nothing. If
+            // we still need a mic and are no longer held, fall through to start ONE
+            // fresh acquire so a resume does not end up mic-less (mic-coalescing ABA
+            // hazard). This is bounded: at most one fresh acquire, no retry loop.
+            if (this.audioRecoveryPromise) await this.audioRecoveryPromise;
+            if (this.heldNoCapture || this.localStream.getAudioTracks()[0]) return;
+            if (this.audioRecoveryInFlight) return; // another caller already restarted it
+        }
+        if (this.requestingMedia) return;
+        this.audioRecoveryInFlight = true;
+        const work = this.reacquireLocalAudioCaptureInternal();
+        this.audioRecoveryPromise = work;
+        try {
+            await work;
+        } finally {
+            this.audioRecoveryInFlight = false;
+            this.audioRecoveryPromise = null;
+        }
+    }
+
+    /** Worker for {@link reacquireLocalAudioCapture}; assumes the in-flight latch is held. */
+    private async reacquireLocalAudioCaptureInternal(): Promise<void> {
+        // Snapshot the capture generation BEFORE the getUserMedia await so a hold
+        // (or another start/stop) latching mid-acquire — including one already
+        // resumed past (ABA) — supersedes this continuation.
+        const gen = this.mediaRequestId;
+        try {
+            const devices = await this.enumerateMediaDevices();
+            const preferredInput = this.selectPreferredAudioInput(devices, null);
+            const track = await this.acquireAudioTrack(true, preferredInput.device?.deviceId);
+            // Mic getUserMedia resolved: the grant is proven even if a hold fence
+            // drops the track below.
+            this._audioCaptureGranted = true;
+            // Post-acquire fence: a held call must never publish live mic to peers
+            // (Core Invariant 2 / privacy), so drop the freshly captured track
+            // instead of attaching it.
+            if (!this.localStream || this.isCaptureStale(gen)) {
+                track.stop();
+                return;
+            }
+            this.localStream.addTrack(track);
+            await this.replaceAudioTrackOnAllPeers(track, this.localStream);
+            // Post-attachment fence: `replaceAudioTrackOnAllPeers` yields on
+            // per-peer `replaceTrack`, so a hold can latch DURING the attach await.
+            // Undo the attachment (detach the senders + stop the track).
+            if (this.isCaptureStale(gen)) {
+                await this.releaseLocalAudioCapture();
+            }
+        } catch (err) {
+            this._lastLocalMediaError = {
+                name: err instanceof DOMException ? err.name : 'Error',
+                message: formatError(err),
+            };
+            this.logger?.log('error', 'WebRTC', `Failed to reacquire microphone from hold: ${formatError(err)}`);
         }
     }
 
@@ -561,6 +1491,12 @@ export class MediaEngine {
     }
 
     async startScreenShare(): Promise<void> {
+        // Core Invariant 2: held media owns no capture, including the display
+        // surface. Engine-level backstop so a held call never reaches
+        // `getDisplayMedia` (the arbiter serializes screen-share ownership to the
+        // foreground call). Screen share is foreground-only and not auto-restored
+        // on resume, so there is no intent to record — just decline.
+        if (this.heldNoCapture) return;
         if (this.isScreenSharing || !this.canScreenShare) return;
         if (!this.videoMediaEnabled) return;
         if (this.enableIndependentContentVideo) {
@@ -583,12 +1519,27 @@ export class MediaEngine {
     private async startScreenShareLegacy(): Promise<void> {
         if (!this.localStream) return;
 
+        // Snapshot the capture generation before the picker await so a hold that
+        // latches during/after the picker (even one already resumed past — ABA)
+        // fences this share.
+        const gen = this.mediaRequestId;
         try {
             const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
             const displayTrack = displayStream.getVideoTracks()[0];
             if (!displayTrack) {
                 displayStream.getTracks().forEach(track => track.stop());
                 throw new Error('No display track returned');
+            }
+            // Re-check after the `getDisplayMedia` picker await: a hold/switch racing
+            // the pending picker latches `heldNoCapture` / bumps the generation and
+            // releases capture, but cannot see this share (the top-level guard
+            // already passed and `isScreenSharing` is not set until below). A held
+            // call owns no display surface (Core Invariant 2), so drop the freshly
+            // captured surface instead of attaching it and broadcasting
+            // `content_state active:true`. Mirrors the audio reacquire re-check.
+            if (this.isCaptureStale(gen)) {
+                displayStream.getTracks().forEach(track => track.stop());
+                return;
             }
 
             const previousVideoTrack = this.localStream.getVideoTracks()[0];
@@ -604,6 +1555,29 @@ export class MediaEngine {
             displayTrack.onended = () => { void this.stopScreenShare(); };
 
             await this.swapLocalVideoTrack(displayTrack, previousVideoTrack);
+            // Re-check after the attach await too: `swapLocalVideoTrack` yields (it
+            // awaits `replaceTrack` on every peer), so a hold can latch HERE, after
+            // the post-picker guard above already passed. `isScreenSharing` is still
+            // false at this point, so the racing `suspendLocalMediaForHold` did not
+            // route through `stopScreenShare` — the start path must not mark the
+            // share active or broadcast `content_state active:true` from a held call.
+            // Stop the display surface and bail; the concurrent hold's `releaseVideoTrack`
+            // owns the sender/`localStream` teardown (it sees this track and removes it).
+            if (this.isCaptureStale(gen)) {
+                if (this.screenShareTrack === displayTrack) {
+                    this.screenShareTrack.onended = null;
+                    this.screenShareTrack = null;
+                }
+                this.screenShareRestoreVideoEnabled = null;
+                // Undo the sender mutation this stale swap made: if a peer's video
+                // sender still carries the display track (this op's `replaceTrack`
+                // won the race against the concurrent hold's `releaseVideoTrack`),
+                // detach it. A sender the hold/resume already repointed elsewhere is
+                // left untouched (per-sender ownership).
+                await this.detachStaleTrackFromSenders(displayTrack);
+                try { displayTrack.stop(); } catch { /* ignore */ }
+                return;
+            }
             this.isScreenSharing = true;
             this.sendContentState({ active: true, contentType: 'screenShare' });
             this.notifyChange();
@@ -660,6 +1634,10 @@ export class MediaEngine {
      * peers attached and none is pending.
      */
     private async startScreenShareIndependent(): Promise<void> {
+        // Snapshot the capture generation before the picker await so a hold that
+        // latches during/after the picker (even one already resumed past — ABA)
+        // fences this share.
+        const gen = this.mediaRequestId;
         let displayTrack: MediaStreamTrack | null = null;
         try {
             const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
@@ -667,6 +1645,17 @@ export class MediaEngine {
             if (!displayTrack) {
                 displayStream.getTracks().forEach(track => track.stop());
                 throw new Error('No display track returned');
+            }
+            // Re-check after the `getDisplayMedia` picker await: a hold/switch racing
+            // the pending picker latches `heldNoCapture` / bumps the generation and
+            // releases capture, but cannot see this share (the top-level guard
+            // already passed and the `isScreenSharing` flag + per-peer attach happen
+            // below). A held call owns no display surface (Core Invariant 2), so drop
+            // the surface instead of attaching it and broadcasting
+            // `content_state active:true` from a held call.
+            if (this.isCaptureStale(gen)) {
+                displayStream.getTracks().forEach(track => track.stop());
+                return;
             }
         } catch (err) {
             // Permission/capture denied: whole-operation failure, untouched camera.
@@ -716,6 +1705,26 @@ export class MediaEngine {
                 }
             }
         }));
+
+        // Re-check after the attach await too: it yields (per-peer `replaceTrack`), so
+        // a hold can latch HERE, after the post-picker guard passed. Independent set
+        // `isScreenSharing = true` BEFORE the await, so a racing
+        // `suspendLocalMediaForHold` already routed through `stopScreenShare` (content
+        // track torn down, `active:false` broadcast). The start path must NOT then
+        // re-broadcast `active:true` (a higher revision) from a held call: release the
+        // surface (idempotent with the stop) and bail without sending.
+        if (this.isCaptureStale(gen)) {
+            // Undo the sender mutation this stale attach made: detach the display
+            // track from any content (or legacy single-video) sender that still
+            // carries it, so the concurrent hold's teardown is not re-clobbered by
+            // this op's late `replaceTrack`. A sender a newer op already repointed
+            // is left untouched (per-sender ownership).
+            await this.detachStaleTrackFromSenders(displayTrack);
+            this.releaseLocalContentTrack();
+            this.isScreenSharing = false;
+            this.notifyChange();
+            return;
+        }
 
         // Roll back only if the share can never flow anywhere. Because the
         // active:true signal is delayed until after this check, peers do not see
@@ -908,6 +1917,12 @@ export class MediaEngine {
     }
 
     async flipCamera(): Promise<void> {
+        // Core Invariant 2: a held call owns NO capture. `flipCamera` acquires a
+        // fresh camera track via `getUserMedia`, so it must be a no-op while held —
+        // engine-level backstop (parity with the other capture sinks). Return
+        // before touching `facingMode`: the held session tracks desired facing as
+        // intent and resume reapplies it via `resumeLocalMediaFromHold`.
+        if (this.heldNoCapture) return;
         // Independent share: the camera is a separate track, so flipping it
         // during a share is valid and leaves the content track untouched. Only
         // the legacy single-video share (camera == display track) blocks flip.
@@ -919,10 +1934,26 @@ export class MediaEngine {
 
         if (!this.localStream) { this.notifyChange(); return; }
 
+        // Snapshot the capture generation before the getUserMedia await so a hold
+        // latching mid-flip (even one already resumed past — ABA) fences it.
+        const gen = this.mediaRequestId;
         try {
             const oldVideoTrack = this.localStream.getVideoTracks()[0];
             const newVideoTrack = await this.acquireCameraTrack(newMode, oldVideoTrack?.enabled ?? true);
+            // Post-acquire fence: a held call must never publish a live camera track
+            // (Core Invariant 2). Drop the freshly flipped track instead of swapping
+            // it in; resume reapplies the desired facing via `resumeLocalMediaFromHold`.
+            if (this.isCaptureStale(gen)) {
+                newVideoTrack.stop();
+                return;
+            }
             await this.swapLocalVideoTrack(newVideoTrack, oldVideoTrack);
+            // Post-attachment fence: `swapLocalVideoTrack` yields on per-peer
+            // `replaceTrack`, so a hold can latch DURING the attach; undo it.
+            if (this.isCaptureStale(gen)) {
+                await this.releaseVideoTrack();
+                return;
+            }
             this.notifyChange();
         } catch (err) {
             this.logger?.log('error', 'Camera', `Failed to flip camera: ${formatError(err)}`);
@@ -1274,6 +2305,12 @@ export class MediaEngine {
                 return;
             }
             this.logger?.log('debug', 'WebRTC', `[${remoteCid}] Remote track received`);
+            // Sticky deafen: a remote audio track surfaced while the call is held
+            // (peer joined/renegotiated after hold) must inherit the current
+            // playout gate, otherwise it would be audible despite the hold.
+            if (event.track.kind === 'audio') {
+                event.track.enabled = this.remotePlaybackEnabled;
+            }
             let remoteStream: MediaStream;
             if (event.streams?.[0]) {
                 remoteStream = event.streams[0];
@@ -1364,6 +2401,12 @@ export class MediaEngine {
         };
 
         this.peers.set(remoteCid, peerState);
+        // Sticky deafen: if this peer is created while the call is held, apply
+        // the current playout gate to any receivers it already has. (New audio
+        // tracks that arrive later are gated in `ontrack` above.)
+        if (!this.remotePlaybackEnabled) {
+            this.applyRemotePlaybackToPeer(peerState);
+        }
         return peerState;
     }
 
@@ -1493,10 +2536,17 @@ export class MediaEngine {
             }
             void this.applyAudioSenderParameters(pc);
         } else if (!this.findTransceiver(pc, 'audio') && !pc.getSenders().some(sender => sender.track?.kind === 'audio')) {
-            peer.mediaRoles.audio = pc.addTransceiver('audio', { direction: 'recvonly' });
+            // Held-without-capture: reserve the audio transceiver as `sendrecv`
+            // (null track sends nothing) so resume can `replaceTrack` a fresh mic
+            // onto a SEND-capable sender WITHOUT renegotiation (Core Invariant 3 /
+            // contract §5; parity with Android's SEND_RECV+null-track held join). A
+            // normal recvonly reservation would force renegotiation on resume.
+            peer.mediaRoles.audio = pc.addTransceiver('audio', {
+                direction: this.heldNoCapture ? 'sendrecv' : 'recvonly',
+            });
         }
 
-        this.ensureOwnerVideoTransceivers(peer);
+        void this.ensureOwnerVideoTransceivers(peer);
     }
 
     /**
@@ -1504,7 +2554,7 @@ export class MediaEngine {
      * transceiver second, both `sendrecv`, with no sender track yet (a null
      * sender track sends nothing). Idempotent — re-entry binds nothing new.
      */
-    private ensureOwnerVideoTransceivers(peer: PeerState): void {
+    private async ensureOwnerVideoTransceivers(peer: PeerState): Promise<void> {
         if (!peer.mediaRoles.camera) {
             const cameraTrack = this.localCameraTrack;
             const transceiver = cameraTrack && cameraTrack.readyState === 'live'
@@ -1520,7 +2570,8 @@ export class MediaEngine {
                 peer.pendingContentAttach = true;
             }
         }
-        this.attachPendingLocalTracks(peer);
+        // Surface the attach promise so a fenced caller can await it.
+        await this.attachPendingLocalTracks(peer);
     }
 
     /**
@@ -1560,7 +2611,7 @@ export class MediaEngine {
                 }
             } catch { /* ignore */ }
         }
-        this.attachPendingLocalTracks(peer);
+        void this.attachPendingLocalTracks(peer);
     }
 
     /**
@@ -1605,24 +2656,51 @@ export class MediaEngine {
      *     instead of leaving the content sender empty.
      * Mirrors the camera path's `sender.track !== track` idempotence guard.
      */
-    private attachPendingLocalTracks(peer: PeerState): void {
+    private async attachPendingLocalTracks(peer: PeerState): Promise<void> {
+        // Snapshot the capture generation before the `replaceTrack` awaits so a hold
+        // (or another start/stop) latching DURING an attach — even one already
+        // resumed past (ABA) — is caught below. This fences every launcher
+        // automatically (assignRemoteVideoRoles' role-binding attach,
+        // ensureOwnerVideoTransceivers, handleAnswerFrom's post-answer attach, and
+        // the missing-role camera attach in replaceVideoTrackOnAllPeers), none of
+        // which re-snapshot the generation themselves.
+        const gen = this.mediaRequestId;
+        const attaches: Promise<unknown>[] = [];
         const cameraTrack = this.localCameraTrack;
+        let attachedCamera = false;
         if (peer.mediaRoles.camera && cameraTrack && cameraTrack.readyState === 'live' &&
             peer.mediaRoles.camera.sender.track !== cameraTrack) {
-            void this.replaceRoleTrack(peer, 'camera', cameraTrack);
+            attaches.push(this.replaceRoleTrack(peer, 'camera', cameraTrack));
+            attachedCamera = true;
         }
         const contentTrack = this.localContentTrack;
         const wantsContent = peer.pendingContentAttach ||
             (this.isScreenSharing && contentTrack !== null && contentTrack.readyState === 'live');
+        let attachedContent = false;
         if (peer.mediaRoles.content && wantsContent && contentTrack &&
             peer.mediaRoles.content.sender.track !== contentTrack) {
             peer.pendingContentAttach = false;
-            void this.replaceRoleTrack(peer, 'content', contentTrack);
+            attaches.push(this.replaceRoleTrack(peer, 'content', contentTrack));
+            attachedContent = true;
         } else if (peer.mediaRoles.content && contentTrack &&
             peer.mediaRoles.content.sender.track === contentTrack) {
             // Already attached (e.g. re-bind after a successful replaceTrack):
             // clear the pending flag so it doesn't linger.
             peer.pendingContentAttach = false;
+        }
+        // Return the settled attachments so a fenced caller can await them
+        // (fire-and-forget callers `void` the result).
+        await Promise.all(attaches);
+        // Post-attachment fence: a hold latching during any `replaceTrack` above
+        // detached these role senders and stopped the pre-hold camera/content; if a
+        // stale replacement won that race the sender is left carrying a stopped
+        // track. Undo ONLY the tracks THIS call attached — restore the
+        // current-generation track (or null) per detachStaleTrackFromSenders
+        // ownership semantics, so a resumed track a newer generation installed is
+        // never clobbered.
+        if (this.isCaptureStale(gen)) {
+            if (attachedCamera && cameraTrack) await this.detachStaleTrackFromSenders(cameraTrack);
+            if (attachedContent && contentTrack) await this.detachStaleTrackFromSenders(contentTrack);
         }
     }
 
@@ -1683,8 +2761,20 @@ export class MediaEngine {
         }
     }
 
-    /** Attach the live local audio track to a capable peer's audio transceiver. */
-    private attachAudioTrackToIndependentPeer(peer: PeerState): void {
+    /**
+     * Attach the live local audio track to a capable peer's audio transceiver.
+     * Returns a promise that resolves once the `replaceTrack` settles so a caller
+     * inside a capture-generation fence can await the attachment (see
+     * {@link attachLocalTracksToIndependentPeer}).
+     */
+    private async attachAudioTrackToIndependentPeer(peer: PeerState): Promise<void> {
+        // Snapshot the capture generation before the `replaceTrack` await so a hold
+        // (or another start/stop) that latches DURING the attach — even one already
+        // resumed past (ABA) — is caught below. This is the negotiation-time
+        // counterpart to the initial-media post-attach fence: the fire-and-forget
+        // callers (applyRemoteOffer's audio attach, attachLocalTracksToIndependentPeer)
+        // are covered automatically because the continuation fences itself.
+        const gen = this.mediaRequestId;
         const audioTrack = this.localStream?.getAudioTracks()[0] ?? null;
         if (!audioTrack || audioTrack.readyState !== 'live') return;
         const audioTransceiver = peer.mediaRoles.audio
@@ -1693,8 +2783,21 @@ export class MediaEngine {
         if (audioTransceiver) {
             peer.mediaRoles.audio = audioTransceiver;
             if (audioTransceiver.sender.track !== audioTrack) {
-                void audioTransceiver.sender.replaceTrack(audioTrack).catch(err =>
-                    this.logger?.log('warning', 'WebRTC', `Failed to attach audio to capable peer: ${formatError(err)}`));
+                try {
+                    await audioTransceiver.sender.replaceTrack(audioTrack);
+                    // Post-attachment fence: a hold latching during the `replaceTrack`
+                    // await detached this audio sender and stopped the pre-hold mic; if
+                    // this stale replacement won the race the sender is left carrying a
+                    // stopped track. Restore the current-generation track (or null) per
+                    // detachStaleTrackFromSenders ownership semantics — idempotent with
+                    // the initial-media caller's own fence.
+                    if (this.isCaptureStale(gen)) {
+                        await this.detachStaleTrackFromSenders(audioTrack);
+                        return;
+                    }
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `Failed to attach audio to capable peer: ${formatError(err)}`);
+                }
             }
             // Inlined (not `ensureRoleSendCapable`): that helper is video-gated
             // (`videoMediaEnabled`), but audio must stay send-capable even when
@@ -1714,12 +2817,20 @@ export class MediaEngine {
      * created owner transceivers is driven by the generic shouldIOffer /
      * !remoteDescription block at the sole call site, so nothing is returned.
      */
-    private attachLocalTracksToIndependentPeer(remoteCid: string, peer: PeerState): void {
-        this.attachAudioTrackToIndependentPeer(peer);
+    private async attachLocalTracksToIndependentPeer(remoteCid: string, peer: PeerState): Promise<void> {
+        // Collect the attach promises so the caller's post-attachment capture
+        // fence awaits them: a fire-and-forget attach could otherwise settle AFTER
+        // the fence passed, letting a late `replaceTrack` install a stopped
+        // pre-hold track on a sender a concurrent hold had already detached.
+        const attaches: Promise<unknown>[] = [this.attachAudioTrackToIndependentPeer(peer)];
         if (this.shouldIOffer(remoteCid)) {
-            this.ensureOwnerVideoTransceivers(peer);
+            // Owner: ensureOwnerVideoTransceivers creates the role transceivers AND
+            // attaches pending camera/content tracks — its promise covers them.
+            attaches.push(this.ensureOwnerVideoTransceivers(peer));
+        } else {
+            attaches.push(this.attachPendingLocalTracks(peer));
         }
-        this.attachPendingLocalTracks(peer);
+        await Promise.all(attaches);
     }
 
     /**
@@ -2036,7 +3147,7 @@ export class MediaEngine {
             if (!this.localStream) {
                 await this.startLocalMedia();
             } else {
-                this.attachAudioTrackToIndependentPeer(peer);
+                void this.attachAudioTrackToIndependentPeer(peer);
             }
             this.assignRemoteVideoRoles(peer);
         } else if (this.localStream) {
@@ -2095,7 +3206,7 @@ export class MediaEngine {
             // attach. Idempotent: `attachPendingLocalTracks` skips senders that
             // already carry the right track.
             if (peer.supportsIndependentContentVideo && this.videoMediaEnabled) {
-                this.attachPendingLocalTracks(peer);
+                void this.attachPendingLocalTracks(peer);
             }
         } catch (err) {
             const peer = this.peers.get(fromCid);
@@ -2246,7 +3357,7 @@ export class MediaEngine {
                         await this.replaceRoleTrack(peer, 'camera', newTrack);
                     } else if (newTrack && this.shouldIOffer(remoteCid)) {
                         // Owner not yet set up (peer pre-dates media): create now.
-                        this.ensureOwnerVideoTransceivers(peer);
+                        void this.ensureOwnerVideoTransceivers(peer);
                         this.scheduleLocalTrackNegotiation(remoteCid, peer);
                     }
                     return;
@@ -2294,8 +3405,16 @@ export class MediaEngine {
 
     private async swapLocalVideoTrack(nextTrack: MediaStreamTrack | null, previousTrack: MediaStreamTrack | null): Promise<void> {
         if (!this.localStream) {
-            if (previousTrack && previousTrack !== nextTrack) previousTrack.stop();
-            return;
+            // Nothing to attach (a release/clear): keep the prior behavior.
+            if (!nextTrack) {
+                if (previousTrack && previousTrack !== nextTrack) previousTrack.stop();
+                return;
+            }
+            // Held-initial resume (Core Invariant 3 / contract §5): a held-joined
+            // session never ran `startLocalMedia`, so `localStream` is null but a
+            // fresh camera track must still land on the existing held video
+            // senders via `replaceTrack`. Create an empty stream and fall through.
+            this.localStream = new MediaStream();
         }
         const nextStream = new MediaStream();
         let replacedVideo = false;
@@ -2393,6 +3512,13 @@ export class MediaEngine {
     }
 
     private async refreshLocalAudioTrack(reason: string, devices?: MediaDeviceInfo[] | null, updatePeers = true): Promise<boolean> {
+        // Core Invariant 2: a held call owns NO capture. A devicechange (or its
+        // settle timer) must not reacquire the mic — after hold the stream is
+        // empty (non-null), so without this guard a default-route change would
+        // call `getUserMedia` and restart capture on a held call.
+        if (this.heldNoCapture) {
+            return false;
+        }
         const currentAudioTrack = this.localStream?.getAudioTracks()[0] ?? null;
         if (!this.localStream) {
             return false;
@@ -2416,9 +3542,17 @@ export class MediaEngine {
 
         const requestId = this.mediaRequestId;
         this.audioRecoveryInFlight = true;
-        try {
+        // Publish the in-flight work as `audioRecoveryPromise` (mirrors
+        // `reacquireLocalAudioCapture`): without it, a resume's mic reacquire that
+        // coalesces onto this route-refresh has nothing to await and would return
+        // mic-less. Wrapped in an inner worker so we can store the promise before
+        // awaiting.
+        const work = (async (): Promise<boolean> => {
             const nextTrack = await this.acquireAudioTrack(currentAudioTrack?.enabled ?? true, preferredInput.device?.deviceId);
-            if (this.destroyed || !this.localStream || this.mediaRequestId !== requestId) {
+            // Post-acquire fence: a held call (or another start/stop) that latched
+            // during the getUserMedia await supersedes this refresh — drop the
+            // freshly captured track instead of routing it onto the peers.
+            if (!this.localStream || this.isCaptureStale(requestId)) {
                 nextTrack.stop();
                 return false;
             }
@@ -2442,24 +3576,42 @@ export class MediaEngine {
             if (updatePeers) {
                 await this.replaceAudioTrackOnAllPeers(nextTrack, nextStream);
             }
+            // Post-attachment fence: undo the attach if a hold latched during the
+            // per-peer `replaceTrack` await.
+            if (this.isCaptureStale(requestId)) {
+                await this.releaseLocalAudioCapture();
+                return false;
+            }
             if (currentAudioTrack && currentAudioTrack !== nextTrack) currentAudioTrack.stop();
             this.logger?.log('info', 'WebRTC', `Refreshed local audio track (${reason})`);
             this.notifyChange();
             return true;
+        })();
+        this.audioRecoveryPromise = work.then(() => undefined, () => undefined);
+        try {
+            return await work;
         } catch (err) {
             this.logger?.log('warning', 'WebRTC', `Failed to refresh local audio track (${reason}): ${formatError(err)}`);
             return false;
         } finally {
             this.audioRecoveryInFlight = false;
+            this.audioRecoveryPromise = null;
         }
     }
 
     private ensureMediaTransceivers(pc: RTCPeerConnection): void {
+        // Held-without-capture: reserve audio (and legacy video) as `sendrecv`
+        // with a null track so resume can `replaceTrack` onto a SEND-capable
+        // sender WITHOUT renegotiation (Core Invariant 3 / contract §5; parity
+        // with Android's SEND_RECV+null-track held join). Outside hold, audio
+        // stays `recvonly` until a live track is attached (unchanged behavior).
         if (!this.findTransceiver(pc, 'audio') && !pc.getSenders().some(sender => sender.track?.kind === 'audio')) {
-            pc.addTransceiver('audio', { direction: 'recvonly' });
+            pc.addTransceiver('audio', { direction: this.heldNoCapture ? 'sendrecv' : 'recvonly' });
         }
         if (this.videoMediaEnabled && !this.findTransceiver(pc, 'video') && !pc.getSenders().some(sender => sender.track?.kind === 'video')) {
-            pc.addTransceiver('video', { direction: this.videoCaptureSupported ? 'sendrecv' : 'recvonly' });
+            pc.addTransceiver('video', {
+                direction: (this.heldNoCapture || this.videoCaptureSupported) ? 'sendrecv' : 'recvonly',
+            });
         }
     }
 
@@ -2584,10 +3736,32 @@ export class MediaEngine {
         if (!track || track.readyState !== 'live' || !track.enabled) {
             return false;
         }
+        // A transceiver reserved send-capable but NEVER negotiated needs no
+        // renegotiation to start sending: its m-line is (or is being negotiated
+        // as) send-capable, so `replaceTrack` is enough. This is the structural
+        // guarantee behind held-initial resume (Core Invariant 3 / contract §5):
+        // held senders are reserved `sendrecv` at join, so a resume that lands a
+        // fresh track on them emits NO offer even while the join offer/answer is
+        // still in flight (negotiated `currentDirection` not yet observed). A
+        // transceiver already negotiated `recvonly`/`inactive` (e.g. an answerer
+        // that locally flips to `sendrecv`) still needs a renegotiation, so this
+        // only short-circuits the never-negotiated (`currentDirection == null`)
+        // reserved-send case.
+        if (transceiver.currentDirection === null
+            && (transceiver.direction === 'sendrecv' || transceiver.direction === 'sendonly')) {
+            return false;
+        }
         return transceiver.currentDirection !== 'sendrecv' && transceiver.currentDirection !== 'sendonly';
     }
 
     private async refreshLocalVideoTrack(reason: string, forceRefresh = false): Promise<boolean> {
+        // Core Invariant 2: a held call owns NO capture. A visibility/pageshow/
+        // sleep-resume must not reacquire the camera while held. (After hold there
+        // is normally no video track, which `shouldRecoverLocalVideo` already
+        // declines; this is the explicit backstop for the held state.)
+        if (this.heldNoCapture) {
+            return false;
+        }
         const currentVideoTrack = this.localStream?.getVideoTracks()[0] ?? null;
         const shouldRecover = shouldRecoverLocalVideo({
             hasVideoTrack: !!currentVideoTrack,
@@ -2604,16 +3778,38 @@ export class MediaEngine {
         if (!shouldRecover || this.cameraRecoveryInFlight || this.requestingMedia) return false;
 
         this.cameraRecoveryInFlight = true;
-        try {
+        // Snapshot the capture generation before the getUserMedia await so a hold
+        // latching mid-refresh (even one already resumed past — ABA) fences it.
+        const gen = this.mediaRequestId;
+        // Publish the in-flight work as `cameraRecoveryPromise` (mirrors
+        // `reacquireVideoTrack`) so a resume's camera reacquire can await/retry
+        // rather than coalescing onto a stall-refresh that lands nothing.
+        const work = (async (): Promise<boolean> => {
             const nextTrack = await this.acquireCameraTrack(this.facingMode, currentVideoTrack?.enabled ?? true);
+            // Post-acquire fence: drop the freshly captured track on a held call.
+            if (this.isCaptureStale(gen)) {
+                nextTrack.stop();
+                return false;
+            }
             await this.swapLocalVideoTrack(nextTrack, currentVideoTrack);
+            // Post-attachment fence: undo the attach if a hold latched during the
+            // per-peer `replaceTrack` await.
+            if (this.isCaptureStale(gen)) {
+                await this.releaseVideoTrack();
+                return false;
+            }
             this.logger?.log('info', 'WebRTC', `Refreshed local video track (${reason})`);
             return true;
+        })();
+        this.cameraRecoveryPromise = work.then(() => undefined, () => undefined);
+        try {
+            return await work;
         } catch (err) {
             this.logger?.log('error', 'WebRTC', `Failed to refresh local video track (${reason}): ${formatError(err)}`);
             return false;
         } finally {
             this.cameraRecoveryInFlight = false;
+            this.cameraRecoveryPromise = null;
         }
     }
 

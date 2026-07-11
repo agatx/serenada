@@ -39,6 +39,12 @@ internal class PeerConnectionSlot(
     private val applyAudioSenderParameters: (PeerConnection) -> Unit,
     private val currentVideoSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy,
     private val isRemoteBlackFrameAnalysisEnabled: () -> Boolean,
+    // Multi-call hold (contract §5 / Core Invariant 3): when this returns true the
+    // slot creates SEND_RECV (send-capable) audio + legacy-video transceivers even
+    // with no local track, so a session joined `held` has stable senders ready for
+    // a renegotiation-free resume. Defaults false ⇒ today's RECV_ONLY receive
+    // transceivers, byte-identical to the single-call path.
+    private val heldSendersMode: () -> Boolean = { false },
     private val peerConnectionDisposeQueue: PeerConnectionDisposeQueue,
     // Independent-content gate for THIS peer (per-peer). False ⇒ legacy
     // single-video path, byte-identical to today. See [attachLocalTracks].
@@ -171,6 +177,22 @@ internal class PeerConnectionSlot(
     // content by the session based on content_state, not by a separate track.
     @Volatile private var remoteContentVideoTrack: VideoTrack? = null
     @Volatile private var playbackDucked = false
+    // Sticky remote-deafen state (multi-call hold). Held calls set this false; it
+    // must apply to remote AudioTracks created AFTER hold (a peer that joins or
+    // renegotiates while held), so it is re-applied in [onTrack]. Orthogonal to
+    // [playbackDucked] (volume duck) — both compose; resume re-enables without
+    // clobbering an active duck.
+    @Volatile private var remotePlaybackEnabled = true
+    // Sticky remote-rendering suppression (multi-call hold). Held calls set this
+    // true so this peer's visible camera/content sinks are detached from the
+    // remote tracks — the decoder no longer delivers frames to a hidden renderer.
+    // Like the deafen above it is sticky: a remote video track delivered to
+    // [onTrack] AFTER hold (a peer that renegotiates while held) must NOT get the
+    // visible sinks re-attached in [attachRemoteCameraTrack]/[attachRemoteContentTrack].
+    // Resume ([reattachRemoteRenderersAfterResume]) clears it and re-attaches.
+    // The internal [remoteVideoStateSink] (connection-health analyzer, not a
+    // visible renderer) stays attached throughout.
+    @Volatile private var remoteRenderingSuppressed = false
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private val remoteSinks = LinkedHashSet<VideoSink>()
@@ -243,6 +265,10 @@ internal class PeerConnectionSlot(
                     // Audio routing is independent of camera/content video
                     // classification (pitfall #4): never disturb the audio sink.
                     track.setVolume(if (playbackDucked) 0.15 else 1.0)
+                    // Sticky deafen: a track created while held must inherit the
+                    // current deafen state, else a peer that joins/renegotiates
+                    // during hold becomes audible. Composes with the duck above.
+                    track.setEnabled(remotePlaybackEnabled)
                 }
                 if (track is VideoTrack) {
                     if (!videoReceiveEnabled) {
@@ -555,6 +581,30 @@ internal class PeerConnectionSlot(
         )
     }
 
+    override fun clearLocalVideoTracks() {
+        if (isClosing) return
+        localVideoTrack = null
+        localContentTrack = null
+        val pc = peerConnection ?: return
+        if (supportsIndependentContentVideo) {
+            // Null the bound camera + content senders directly (no renegotiation).
+            // Reconcile-by-track-field is handled by [attachBoundVideoTracks]; null
+            // both fields above first so a re-entry stays a no-op.
+            runCatching { cameraTransceiver?.sender?.setTrack(null, false) }
+            runCatching { contentTransceiver?.sender?.setTrack(null, false) }
+            return
+        }
+        // Legacy single video transceiver: drop its track only. Direction stays
+        // as-is (no recv-only flip) so this does not trigger a renegotiation,
+        // matching [attachTrackToTransceiver]'s null-track handling.
+        attachTrackToTransceiver(
+            pc = pc,
+            track = null,
+            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+            onAttached = { },
+        )
+    }
+
     // Look up the transceiver by its stable mediaType (Unified Plan) instead of
     // sender.track?.kind. The latter mis-reports when the sender's track is null
     // (e.g. the recv-only transceiver created by ensureReceiveTransceivers), which
@@ -571,13 +621,16 @@ internal class PeerConnectionSlot(
             if (sender.track() !== track) {
                 sender.setTrack(track, false)
             }
-            val targetDirection = if (track != null) {
-                RtpTransceiver.RtpTransceiverDirection.SEND_RECV
-            } else {
-                RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
-            }
-            if (transceiver.direction != targetDirection) {
-                transceiver.direction = targetDirection
+            // Only ensure SEND_RECV when ATTACHING a track. Detaching (track == null,
+            // e.g. hold or legacy clearLocalVideoTracks) must leave the direction
+            // untouched: flipping to RECV_ONLY fires OnRenegotiationNeeded and would
+            // force a renegotiation per hold + per resume, violating the multi-call
+            // "no renegotiation" contract (§5 / Core Invariant 3). Matches the web
+            // baseline (MediaEngine.ts replaceTrack(null) without a direction flip).
+            if (track != null &&
+                transceiver.direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+            ) {
+                transceiver.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
             }
             onAttached(sender)
         } else if (track != null) {
@@ -594,7 +647,11 @@ internal class PeerConnectionSlot(
         remoteVideoTrack = track
         remoteBlackFrameAnalyzer.onTrackAttached()
         track.addSink(remoteVideoStateSink)
-        remoteSinks.forEach { sink -> track.addSink(sink) }
+        // Sticky hold suppression: a track arriving while held stays free of the
+        // visible sinks until resume re-attaches them.
+        if (!remoteRenderingSuppressed) {
+            remoteSinks.forEach { sink -> track.addSink(sink) }
+        }
         onRemoteVideoTrack(remoteCid, track)
     }
 
@@ -603,12 +660,15 @@ internal class PeerConnectionSlot(
         if (track === remoteContentVideoTrack) return
         remoteContentSinks.forEach { sink -> remoteContentVideoTrack?.removeSink(sink) }
         remoteContentVideoTrack = track
-        remoteContentSinks.forEach { sink -> track.addSink(sink) }
+        if (!remoteRenderingSuppressed) {
+            remoteContentSinks.forEach { sink -> track.addSink(sink) }
+        }
     }
 
     override fun attachRemoteContentSink(sink: VideoSink) {
         if (isClosing) return
         if (!remoteContentSinks.add(sink)) return
+        if (remoteRenderingSuppressed) return
         remoteContentVideoTrack?.addSink(sink)
     }
 
@@ -847,6 +907,7 @@ internal class PeerConnectionSlot(
     override fun attachRemoteSink(sink: VideoSink) {
         if (isClosing) return
         if (!remoteSinks.add(sink)) return
+        if (remoteRenderingSuppressed) return
         remoteVideoTrack?.addSink(sink)
     }
 
@@ -894,9 +955,21 @@ internal class PeerConnectionSlot(
         // trackIdentifier is absent so content stats are not mis-attributed as
         // camera. Null for legacy peers and the flag-off path, so every video
         // stat falls through to the camera bucket.
-        val contentTrackId = contentTransceiver?.receiver?.track()?.id()
-            ?.takeIf { it.isNotEmpty() }
-        val contentMid = contentTransceiver?.mid?.takeIf { it.isNotEmpty() }
+        // A held/switching call (or a peer that just stopped sharing) can dispose
+        // the inbound content track between liveness ticks. `MediaStreamTrack.id()`
+        // — and any access — throws `IllegalStateException` once the track is
+        // disposed, and that disposal races this sample on another thread. Guard
+        // it: a disposed track means "no content track" for this tick, not a
+        // crashed liveness timer. (The liveness timer keeps ticking for held calls,
+        // so this path is reachable during a multi-call hold/switch.)
+        val (contentTrackId, contentMid) = try {
+            Pair(
+                contentTransceiver?.receiver?.track()?.id()?.takeIf { it.isNotEmpty() },
+                contentTransceiver?.mid?.takeIf { it.isNotEmpty() },
+            )
+        } catch (e: IllegalStateException) {
+            Pair(null, null)
+        }
         pc.getStats { report ->
             var bytes = 0L
             var cameraBytes = 0L
@@ -1043,6 +1116,50 @@ internal class PeerConnectionSlot(
         }
     }
 
+    override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        // Remember the state so receivers/tracks created AFTER this (a peer that
+        // joins or renegotiates while held) inherit it in [onTrack] (sticky
+        // deafen). Resume re-enables; the duck volume is untouched (orthogonal).
+        remotePlaybackEnabled = enabled
+        val pc = peerConnection ?: return
+        for (receiver in pc.receivers) {
+            val track = receiver.track()
+            if (track is AudioTrack) {
+                track.setEnabled(enabled)
+            }
+        }
+    }
+
+    override fun detachRemoteRenderersForHold() {
+        // Detach every registered visible sink (camera + content) from the remote
+        // tracks so the decoder stops delivering frames to hidden renderers, while
+        // the peer connection, tracks, and sink REGISTRATIONS are preserved for a
+        // renegotiation-free resume. Sticky: also suppress re-attach for tracks
+        // that arrive while held ([attachRemoteCameraTrack]/[attachRemoteContentTrack]).
+        remoteRenderingSuppressed = true
+        remoteSinks.forEach { sink -> remoteVideoTrack?.removeSink(sink) }
+        remoteContentSinks.forEach { sink -> remoteContentVideoTrack?.removeSink(sink) }
+    }
+
+    override fun reattachRemoteRenderersAfterResume() {
+        // Clear suppression and re-attach exactly the registered visible sinks.
+        // remove-then-add is idempotent: repeated hold/resume cycles never
+        // accumulate duplicate sinks on a track.
+        remoteRenderingSuppressed = false
+        remoteVideoTrack?.let { track ->
+            remoteSinks.forEach { sink ->
+                track.removeSink(sink)
+                track.addSink(sink)
+            }
+        }
+        remoteContentVideoTrack?.let { track ->
+            remoteContentSinks.forEach { sink ->
+                track.removeSink(sink)
+                track.addSink(sink)
+            }
+        }
+    }
+
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {
         if (isClosing) return
         val pc = peerConnection ?: return
@@ -1106,10 +1223,19 @@ internal class PeerConnectionSlot(
     }
 
     private fun ensureReceiveTransceivers(pc: PeerConnection) {
+        // Held-senders mode (multi-call hold): create SEND_RECV transceivers so the
+        // senders are send-capable up front for a renegotiation-free resume
+        // (contract §5 / Core Invariant 3). Otherwise create RECV_ONLY receive
+        // transceivers exactly as today (single-call path unchanged).
+        val direction = if (heldSendersMode()) {
+            RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+        } else {
+            RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+        }
         if (localAudioTrack == null) {
             pc.addTransceiver(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
-                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+                RtpTransceiver.RtpTransceiverInit(direction)
             )
         }
         // Capable peers manage their own video m-lines: the owner pre-creates the
@@ -1120,9 +1246,27 @@ internal class PeerConnectionSlot(
         if (videoReceiveEnabled && localVideoTrack == null) {
             pc.addTransceiver(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+                RtpTransceiver.RtpTransceiverInit(direction)
             )
         }
+    }
+
+    /**
+     * Promote this slot's audio + legacy-video transceivers to SEND_RECV without
+     * attaching a track (multi-call held join, contract §5). Idempotent: an
+     * already send-capable transceiver is left untouched. Used when the engine
+     * enters held-senders mode for a slot whose peer connection already exists.
+     */
+    fun ensureSendCapableTransceiversForHold() {
+        if (isClosing) return
+        val pc = peerConnection ?: return
+        pc.transceivers
+            .filter {
+                (it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO ||
+                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) &&
+                    it.currentDirection != RtpTransceiver.RtpTransceiverDirection.STOPPED
+            }
+            .forEach { ensureRoleSendCapable(it) }
     }
 
     private fun flushPendingIceCandidates() {

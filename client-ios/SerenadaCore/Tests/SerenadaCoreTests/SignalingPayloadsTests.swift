@@ -331,6 +331,21 @@ final class SignalingPayloadsTests: XCTestCase {
         XCTAssertEqual(parsed?.first?.contentState?.revision, 3)
     }
 
+    func testParseParticipantsParsesHeldFromSnapshot() {
+        // The server persists `held` in joined/room_state snapshots so a late
+        // joiner / reconnecting client can render a held peer that cannot
+        // re-broadcast its live media state. Additive; absent stays nil.
+        let value: [JSONValue] = [
+            .object(["cid": .string("C-1"), "held": .bool(true)]),
+            .object(["cid": .string("C-2"), "held": .bool(false)]),
+            .object(["cid": .string("C-3")]),
+        ]
+        let parsed = parseParticipants(from: value)
+        XCTAssertEqual(parsed?[0].held, true)
+        XCTAssertEqual(parsed?[1].held, false)
+        XCTAssertNil(parsed?[2].held)
+    }
+
     func testParseCapabilitiesAbsentObjectReturnsNil() {
         XCTAssertNil(parseCapabilities(from: nil))
         XCTAssertNil(parseMediaPolicy(from: nil))

@@ -1,4 +1,4 @@
-import type { CallState, CallStats, ConnectionEvent, SerenadaConfig } from '../../src/types.js';
+import type { CallMediaRole, CallState, CallStats, ConnectionEvent, SerenadaConfig } from '../../src/types.js';
 import type { RoomParticipant, RoomState } from '../../src/signaling/types.js';
 import type { MediaEngine } from '../../src/media/MediaEngine.js';
 import type { CallStatsCollector } from '../../src/media/callStats.js';
@@ -41,6 +41,10 @@ export interface TestSessionOptions {
     handlesReconnection?: boolean;
     autoStart?: boolean;
     displayName?: string;
+    /** Multi-call session initial media role (Phase 2). Defaults to `'foreground'`. */
+    initialMediaRole?: CallMediaRole;
+    /** When true, the session acquires the process-wide foreground lease (mode `direct`). */
+    acquireForegroundLease?: boolean;
 }
 
 /**
@@ -77,6 +81,8 @@ export class TestSessionHarness {
             statsCollector: this.statsCollector as unknown as CallStatsCollector,
             autoStart: options.autoStart ?? false,
             displayName: options.displayName,
+            initialMediaRole: options.initialMediaRole,
+            acquireForegroundLease: options.acquireForegroundLease,
         });
 
         this.unsubscribe = this.session.subscribe((state) => {

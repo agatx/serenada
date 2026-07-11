@@ -20,6 +20,7 @@ A simple, privacy-focused video calling application built with WebRTC. No accoun
 - **Android HD video toggle (experimental)** – Settings include an `HD Video (experimental)` switch for higher camera/composite quality; default mode keeps legacy `640x480` camera constraints for stability
 - **iOS native client (SwiftUI)** – Native iOS app in `client-ios/` mirrors Android parity flow: saved rooms + recents ordering, structured deep-link parsing, invite push toggle, encrypted push snapshots, waiting-room invite action, adaptive multi-party layout with local PIP, diagnostics screen, mode-based camera cycle with composite fallback, world/composite pinch zoom, ReplayKit screen share toggle, and in-call realtime stats/debug panel
 - **Snapshot capture (all platforms)** – `SerenadaSession.captureSnapshot(source)` returns the current frame at full intrinsic resolution as a JPEG/Blob; the call UI can show an opt-in shutter button anchored to the short edge of the large preview (bottom in portrait, right in landscape)
+- **Multi-call sessions (SDK)** – `SerenadaCallRegistry` lets a host app keep several calls joined at once and switch the foreground media owner between them; one call owns mic/camera/screen share/audio routing while the rest stay held and connected (see [docs/multi-call-session.md](docs/multi-call-session.md))
 - **Self-hostable** – Run your own instance with full control
 - **Optional join alerts** – Encrypted push notifications with snapshot previews (web + native Android + native iOS)
 - **Room invite push** – In waiting state you can explicitly invite subscribers of the room; Android and iOS show these only for saved rooms and have a Settings toggle to disable invite notifications
@@ -311,6 +312,7 @@ When the coordinator publishes an `audioSessionInterrupted` event (e.g., due to 
 - [SDK API Reference](https://agatx.github.io/serenada/) – Generated API docs for all platforms (Web, Android, iOS)
 - [Deployment Guide](DEPLOY.md) – Self-hosting instructions
 - [Protocol Specification](docs/serenada_protocol_v1.md) – Signaling protocol (WebSocket + SSE)
+- [Multi-Call Sessions](docs/multi-call-session.md) – `SerenadaCallRegistry` integration guide (hold/resume, switch, held signaling)
 - [Push Notifications](docs/push-notifications.md) – Encrypted snapshot notifications
 - [Snapshot Capture](docs/snapshot-capture.md) – `SerenadaSession.captureSnapshot` API and call-UI shutter button
 - [Android Client README](client-android/README.md) – Kotlin native app setup and build notes

@@ -219,6 +219,34 @@ Provider callbacks may be invoked from any thread. The SDK marshals them onto th
 
 If your provider already owns reconnect logic, set `ProviderCapabilities(handlesReconnection = true)`. Otherwise leave it at the default `false` and let the session rejoin with `reconnectPeerId`.
 
+### Multiple concurrent sessions
+
+A `SignalingProvider` is **single-session**: one `listener` slot and room-less ops (`leaveRoom`/`endRoom`/`disconnect`). At most one live session may bind a given v1 provider object at a time. A second **concurrent** join that would bind it fails with a typed error rather than silently sharing it (which would cross-wire the two sessions):
+
+- A registry join returns `JoinResult.Failed(CallRegistryError.JoinFailed(...))` (or the `JoinAndSwitchResult.Failed` equivalent).
+- A direct `SerenadaCore.join(...)` throws `SingleSessionProviderInUseException` (carrying `CallError.ProviderUnavailable`).
+
+Sequential reuse still works: once a session has fully closed, the next join may reuse the same v1 provider. Direct single-call integrations are unchanged.
+
+To run **multiple concurrent** sessions (multi-call), implement `MultiSessionSignalingProvider` instead. It is an app-global service that vends one signaling channel per session through `openSession(roomId)`, so concurrent sessions never share a listener or cross-wire their rooms:
+
+```kotlin
+class DemoMultiProvider : MultiSessionSignalingProvider {
+    // openSession is called once per session join with the canonical room id.
+    override fun openSession(roomId: String): SignalingProvider = DemoChannel(roomId)
+
+    // ICE servers WITHOUT an active call (diagnostics/preflight).
+    override suspend fun getIceServers(): List<PeerConnection.IceServer> = emptyList()
+}
+
+val serenada = SerenadaCore(
+    config = SerenadaConfig(multiSessionSignalingProvider = DemoMultiProvider()),
+    context = applicationContext,
+)
+```
+
+Provide exactly one of `serverHost`, `signalingProvider`, or `multiSessionSignalingProvider`; setting both provider fields is a configuration error. Each vended channel is permanently bound to its room, and the SDK calls its `disconnect()` exactly once at session teardown. Your service owns the physical transport: closing one channel must not disconnect the others, and it should tear the transport down only after the last channel closes and drop events queued for a channel once it has closed.
+
 ## Core-Only Integration (No UI)
 
 Use `SerenadaCore` directly for a fully custom UI:

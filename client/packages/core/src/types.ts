@@ -1,4 +1,4 @@
-import type { SignalingProvider, PeerMessage } from './SignalingProvider.js';
+import type { AnySignalingProvider, PeerMessage } from './SignalingProvider.js';
 import type { TransportKind } from './signaling/transports/types.js';
 import type { RoomStatus, RoomStatuses } from './signaling/roomStatuses.js';
 
@@ -16,6 +16,198 @@ export type CameraMode = 'selfie' | 'world' | 'composite' | 'screenShare';
 
 /** Subset of {@link CameraMode} that can be configured via {@link SerenadaConfig.cameraModes}. */
 export type ConfigurableCameraMode = Exclude<CameraMode, 'screenShare'>;
+
+/**
+ * Desired camera intent for a managed call, used by the multi-call session
+ * primitives (hold/resume). `'off'` means no camera capture; the other values
+ * reuse {@link ConfigurableCameraMode}. Distinct from {@link CameraMode} (which
+ * also carries the transient `'screenShare'` presentation state). The session's
+ * `desiredVideoMode` survives a hold so resume can restore the user's intent.
+ */
+export type VideoMode = 'off' | ConfigurableCameraMode;
+
+/**
+ * Which foreground-media lease a call holds (multi-call session model).
+ * `'foreground'` calls own local capture, screen share, and audible remote
+ * playout; `'held'` calls stay signaled but own none of those. A normally-joined
+ * single call is always `'foreground'`, preserving existing behavior.
+ */
+export type CallMediaRole = 'foreground' | 'held';
+
+/**
+ * Progress of foreground-media activation for the call being foregrounded. Only
+ * meaningful for the call holding (or attempting) the foreground lease; held
+ * calls sit at `'inactive'`. A normally-joined single call is `'active'`.
+ */
+export type MediaActivationState = 'inactive' | 'activating' | 'active' | 'needsPermission' | 'failed';
+
+/**
+ * Owning mode of the process-wide foreground media arbiter (Core Invariant 6).
+ * The first user claims the mode: a direct `SerenadaCore.join()` claims
+ * `'direct'`; the (Phase 3) registry claims `'registry'`. While one mode has any
+ * live session/call, the other mode's lease acquisition fails with
+ * {@link ForegroundLeaseUnavailable}. Cleared when the owning side has none.
+ */
+export type ForegroundArbiterMode = 'direct' | 'registry';
+
+/**
+ * Opaque, branded token proving ownership of the single process-wide foreground
+ * media lease (multi-call session model, contract §2). Minted only by the
+ * arbiter's `acquireForeground`; the session and registry pass it back to fence
+ * late callbacks and to release the lease. The brand field is never read — it
+ * exists purely to make the type non-forgeable from outside the arbiter.
+ */
+export interface ForegroundOwnerToken {
+    /** Call/owner id this lease was granted for; diagnostic only. */
+    readonly ownerId: string;
+    /** Internal brand so callers cannot fabricate a token literal. */
+    readonly __foregroundOwnerToken: unique symbol;
+}
+
+/**
+ * Thrown by the foreground media arbiter when a foreground lease cannot be
+ * granted: a lease is already live, a prior owner's release is pending/failed,
+ * or there is a cross-mode conflict (Core Invariant 6 — a `direct` join while a
+ * `registry` owns the process, or vice versa). Callers (the registry switch
+ * path, the public single-call join) surface this as a recoverable failure.
+ */
+export class ForegroundLeaseUnavailable extends Error {
+    readonly code = 'foregroundLeaseUnavailable' as const;
+    constructor(message: string) {
+        super(message);
+        this.name = 'ForegroundLeaseUnavailable';
+    }
+}
+
+/**
+ * Thrown when a second concurrent session would bind a single-session v1
+ * `SignalingProvider` that another live session already holds (multi-call
+ * session, contract §F2). A v1 provider owns one listener slot and one
+ * `disconnect()`, so it cannot back two sessions at once; the SDK fails fast
+ * instead of cross-wiring them. Sequential reuse (after the first session tears
+ * down) works. For concurrent multi-call, configure a version-2
+ * `MultiSessionSignalingProvider`, which vends one channel per session. Surfaced
+ * on a direct join as an error `CallState` (code `'providerUnavailable'`) and on
+ * a registry join as `{ kind: 'failed' }`.
+ */
+export class ProviderUnavailableError extends Error {
+    readonly code = 'providerUnavailable' as const;
+    constructor(message: string) {
+        super(message);
+        this.name = 'ProviderUnavailableError';
+    }
+}
+
+// --- Multi-call session registry (Phase 3, contract §7 / §11) ---
+
+/** Registry-generated stable identifier for a managed call (one per call). */
+export type CallId = string;
+
+/**
+ * A room a host wants the registry to join: either a full room URL or a bare
+ * room id. The registry canonicalizes both to one `roomId` (the `/call/<token>`
+ * segment) before dedup, so `serenada.app` and `serenada-app.ru` URLs for the
+ * same token collapse to one live call.
+ */
+export type RoomRef = { url: string } | { roomId: string };
+
+/**
+ * Why a managed call's foreground activation could not complete, surfaced per
+ * call (contract §11) so a host with multiple calls knows which one is degraded
+ * — the registry-level {@link CallRegistryState.lastError} is not enough once
+ * several calls exist.
+ *
+ * - `'needsPermission'`: preflight found the target's desired media needs a
+ *   device grant the host has not yet obtained. The host prompts, then retries.
+ * - `'activationFailed'`: foreground activation threw or timed out.
+ * - `'releaseFailed'`: draining the old foreground call timed out, so the switch
+ *   aborted and the old call kept the lease (Core Invariant 1).
+ * - `'joinFailed'`: the held room join failed or timed out.
+ */
+export interface CallActivationError {
+    kind: 'needsPermission' | 'activationFailed' | 'releaseFailed' | 'joinFailed';
+    message: string;
+}
+
+/**
+ * Published, value-type view of one managed call (contract §11). Plain data so
+ * it can be compared/snapshotted; the live {@link SerenadaSession} is exposed
+ * separately via {@link SerenadaCallRegistry.activeCall} so a host can render it
+ * (`<SerenadaCallFlow session={registry.activeCall?.session} />`) — the registry
+ * does NOT hide the underlying session.
+ */
+export interface ManagedCallState {
+    id: CallId;
+    /** Canonical room token (the dedup key). */
+    roomId: string;
+    /** Original room URL the call was joined with, when one was supplied. */
+    roomUrl: string | null;
+    membershipPhase: CallPhase;
+    mediaRole: CallMediaRole;
+    mediaActivationState: MediaActivationState;
+    /** User audio intent; survives hold (only explicit user action changes it). */
+    desiredAudioEnabled: boolean;
+    /** User camera intent; survives hold. */
+    desiredVideoMode: VideoMode;
+    /** What peers observe now; always false while held. */
+    actualAudioPublished: boolean;
+    actualVideoPublished: boolean;
+    participantCount: number;
+    /** Local per-call CID once joined, else `null`. */
+    localCid: string | null;
+    /** Convenience flag: `mediaRole === 'held'`. */
+    held: boolean;
+    displayName: string | null;
+    /** Per-call activation/release/join error or needed permission, else `null`. */
+    activationError: CallActivationError | null;
+    /** Finalized call-quality summary, available after the call ends. */
+    qualitySummary: CallQualitySummary | null;
+}
+
+/**
+ * Aggregate observable state published by {@link SerenadaCallRegistry}
+ * (contract §11). Subscribe to it the same way as {@link CallState}
+ * (useSyncExternalStore-compatible: stable snapshot + change callback).
+ */
+export interface CallRegistryState {
+    calls: ManagedCallState[];
+    /** The single foreground call's id, or `null` when none is foregrounded. */
+    activeCallId: CallId | null;
+    /** True while a queued registry operation is mutating the lease/call map. */
+    registryOperationInProgress: boolean;
+    /** Most recent registry-level failure (per-call detail lives on the call). */
+    lastError: CallActivationError | null;
+}
+
+/**
+ * Result of a registry-internal background join ({@link
+ * SerenadaCallRegistry.joinHeld}). On `'joined'` the call exists and is held; on
+ * `'failed'` the room join failed/timed out (a `callId` is present when the call
+ * was registered before the join failed).
+ */
+export type JoinResult =
+    | { kind: 'joined'; callId: CallId }
+    | { kind: 'failed'; callId?: CallId; error: CallActivationError };
+
+/**
+ * Result of {@link SerenadaCallRegistry.switchTo}. `'needsPermission'` leaves
+ * the previous foreground call fully active (preflight runs before the old call
+ * is touched; Core Invariant 4).
+ */
+export type SwitchResult =
+    | { kind: 'active' }
+    | { kind: 'needsPermission' }
+    | { kind: 'failed'; error: CallActivationError };
+
+/**
+ * Result of {@link SerenadaCallRegistry.joinAndSwitch}. `'needsPermission'`
+ * carries the `callId` of the now-held call so the host can prompt and then
+ * retry `switchTo(callId)` (contract §7).
+ */
+export type JoinAndSwitchResult =
+    | { kind: 'active'; callId: CallId }
+    | { kind: 'needsPermission'; callId: CallId }
+    | { kind: 'failed'; callId?: CallId; error: CallActivationError };
 
 /** Default preference order for camera modes when {@link SerenadaConfig.cameraModes} is unset. */
 export const DEFAULT_CAMERA_MODES: readonly ConfigurableCameraMode[] = ['selfie', 'world', 'composite'];
@@ -75,6 +267,16 @@ export interface Participant {
      */
     cameraEnabled: boolean;
     videoEnabled: boolean;
+    /**
+     * `true` when this participant has put this call on hold (multi-call
+     * session model): their local capture is released and they own no audible
+     * playout, so a held participant always also reports `audioEnabled:false`
+     * and `videoEnabled:false`. Absent/`false` for participants that are not
+     * held or that run an older client (which never sends the `held` field).
+     * Surfaced so call UIs can render an "on hold" state distinct from a plain
+     * muted/camera-off participant.
+     */
+    held?: boolean;
     /**
      * Active content (screen share) presentation state, or absent when the
      * participant is not currently sharing content. Driven by received
@@ -155,6 +357,7 @@ export type CallErrorCode =
     | 'serverError'
     | 'webrtcUnavailable'
     | 'mediaUnavailable'
+    | 'providerUnavailable'
     | 'unknown';
 
 /** Error with a machine-readable code and human-readable message. */
@@ -247,8 +450,13 @@ export interface CallState {
 export interface SerenadaConfig {
     /** Bare host or full origin, e.g. `serenada.app` or `http://qa-box:8080`. */
     serverHost?: string;
-    /** Custom signaling provider. Provide exactly one of `serverHost` or `signalingProvider`. */
-    signalingProvider?: SignalingProvider;
+    /**
+     * Custom signaling provider. Provide exactly one of `serverHost` or
+     * `signalingProvider`. Accepts a single-session v1 `SignalingProvider` or an
+     * app-global v2 `MultiSessionSignalingProvider` (required for multi-call:
+     * a v1 provider is single-session, see {@link ProviderUnavailableError}).
+     */
+    signalingProvider?: AnySignalingProvider;
     /** Whether the microphone is enabled when joining. Defaults to `true`. */
     defaultAudioEnabled?: boolean;
     /** Whether the camera is enabled when joining. Defaults to `true`. */

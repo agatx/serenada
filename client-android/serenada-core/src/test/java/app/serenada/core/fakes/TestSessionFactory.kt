@@ -1,7 +1,9 @@
 package app.serenada.core.fakes
 
+import app.serenada.core.ForegroundMediaArbiter
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaSession
+import app.serenada.core.call.CallMediaRole
 import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.call.SessionClock
@@ -30,7 +32,24 @@ internal class TestSessionFactory(
     audioCoordinator: SerenadaAudioCoordinator? = null,
     config: SerenadaConfig? = null,
     delegate: app.serenada.core.SerenadaCoreDelegate? = null,
+    // Multi-call session (Phase 2). A HELD initial role creates a held call that
+    // owns no capture/lease (registry-internal join). acquireForegroundLease
+    // routes the foreground join through the process-wide arbiter (mode DIRECT),
+    // mirroring the public SerenadaCore.join() path.
+    initialMediaRole: CallMediaRole = CallMediaRole.FOREGROUND,
+    acquireForegroundLease: Boolean = false,
+    // Reset the process-global arbiter on construction (default). A test that needs
+    // TWO coexisting sessions (e.g. a second direct join failing while the first is
+    // live) opts OUT so the first session's lease survives the second's construction.
+    resetArbiterOnInit: Boolean = true,
 ) {
+    init {
+        // Reset the PROCESS-GLOBAL arbiter before each session is built so a
+        // lease/mode held by a prior (sequential) Robolectric test session cannot
+        // make this one fail to acquire (contract §2 / Phase 2 green-gate note).
+        if (resetArbiterOnInit) ForegroundMediaArbiter.resetForTests()
+    }
+
     val fakeProvider = FakeSignalingProvider(handlesReconnection = handlesReconnection)
     val fakeAudio = FakeAudioController()
     val fakeMedia = FakeMediaEngine()
@@ -55,6 +74,8 @@ internal class TestSessionFactory(
         audioController = fakeAudio,
         mediaEngine = fakeMedia,
         clock = fakeClock,
+        initialMediaRole = initialMediaRole,
+        acquireForegroundLease = acquireForegroundLease,
     )
 
     fun startSession() {
@@ -81,6 +102,8 @@ internal class TestSessionFactory(
         cid: String = "local-cid-1",
         participants: List<Pair<String, Long>> = emptyList(),
         hostCid: String? = null,
+        reconnectToken: String? = null,
+        reconnectTokenTTLMs: Long? = null,
     ) {
         val resolvedHost = hostCid ?: cid
         val resolvedParticipants = if (participants.isEmpty()) {
@@ -92,6 +115,8 @@ internal class TestSessionFactory(
             peerId = cid,
             participants = resolvedParticipants,
             hostPeerId = resolvedHost,
+            reconnectToken = reconnectToken,
+            reconnectTokenTTLMs = reconnectTokenTTLMs,
         )
         ShadowLooper.idleMainLooper()
     }
@@ -158,6 +183,8 @@ internal class TestSessionFactory(
         localJoinedAt: Long = 1L,
         remoteJoinedAt: Long = 2L,
         hostCid: String = minOf(localCid, remoteCid),
+        reconnectToken: String? = null,
+        reconnectTokenTTLMs: Long? = null,
         iceServers: List<PeerConnection.IceServer> = listOf(
             PeerConnection.IceServer.builder("turn:turn.example.com:3478")
                 .setUsername("user")
@@ -172,6 +199,43 @@ internal class TestSessionFactory(
             cid = localCid,
             participants = listOf(localCid to localJoinedAt, remoteCid to remoteJoinedAt),
             hostCid = hostCid,
+            reconnectToken = reconnectToken,
+            reconnectTokenTTLMs = reconnectTokenTTLMs,
+        )
+    }
+
+    /**
+     * Drive a HELD-initial session to in-call (multi-call session, Phase 2). The
+     * session was constructed with `initialMediaRole = HELD`: it owns no capture
+     * and never activates the audio coordinator. Mirrors [advanceToInCallWithTurn]
+     * but does NOT depend on permission grants (the held path skips the permission
+     * gate). Use to assert held-without-capture invariants.
+     */
+    fun advanceToHeldInCall(
+        localCid: String = "local-cid-1",
+        remoteCid: String = "remote-cid-1",
+        localJoinedAt: Long = 1L,
+        remoteJoinedAt: Long = 2L,
+        hostCid: String = minOf(localCid, remoteCid),
+        reconnectToken: String? = null,
+        reconnectTokenTTLMs: Long? = null,
+        iceServers: List<PeerConnection.IceServer> = listOf(
+            PeerConnection.IceServer.builder("turn:turn.example.com:3478")
+                .setUsername("user")
+                .setPassword("pass")
+                .createIceServer()
+        ),
+    ) {
+        fakeProvider.enqueueIceServers(Result.success(iceServers))
+        session.start()
+        ShadowLooper.idleMainLooper()
+        openSignaling()
+        simulateJoinedResponse(
+            cid = localCid,
+            participants = listOf(localCid to localJoinedAt, remoteCid to remoteJoinedAt),
+            hostCid = hostCid,
+            reconnectToken = reconnectToken,
+            reconnectTokenTTLMs = reconnectTokenTTLMs,
         )
     }
 
@@ -236,5 +300,8 @@ internal class TestSessionFactory(
     fun tearDown() {
         session.close()
         ShadowLooper.idleMainLooper()
+        // Drop any lease/mode this session still held so the next sequential test
+        // starts with a clean process-global arbiter.
+        ForegroundMediaArbiter.resetForTests()
     }
 }

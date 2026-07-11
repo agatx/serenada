@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		15234E95EF0EBE0CA8E9B2CF /* MultiCallSampleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7554D48FF81C713318F61C0 /* MultiCallSampleView.swift */; };
 		2BE5A3862FB89D3FBF7F6323 /* SampleAudioCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFBB2B6613452F9D67A76644 /* SampleAudioCoordinator.swift */; };
 		6CF3476877DA3857617F7F09 /* SampleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFE5658C05C260B3C738673F /* SampleApp.swift */; };
 		88754D97CAA579CA6F653BE9 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 2BE6A6A228FF7E4499A7B690 /* SerenadaCallUI */; };
@@ -18,6 +19,7 @@
 		6C3B2CD2AC43B90853AD6422 /* SerenadaCallUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCallUI; path = "../../client-ios/SerenadaCallUI"; sourceTree = SOURCE_ROOT; };
 		95A490328968D50CBBB2BCFF /* SerenadaCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCore; path = "../../client-ios/SerenadaCore"; sourceTree = SOURCE_ROOT; };
 		EFE5658C05C260B3C738673F /* SampleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleApp.swift; sourceTree = "<group>"; };
+		F7554D48FF81C713318F61C0 /* MultiCallSampleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiCallSampleView.swift; sourceTree = "<group>"; };
 		FFBB2B6613452F9D67A76644 /* SampleAudioCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleAudioCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -37,6 +39,7 @@
 		49F4281E8C3E547DB2A0CBEF /* SampleApp */ = {
 			isa = PBXGroup;
 			children = (
+				F7554D48FF81C713318F61C0 /* MultiCallSampleView.swift */,
 				EFE5658C05C260B3C738673F /* SampleApp.swift */,
 				FFBB2B6613452F9D67A76644 /* SampleAudioCoordinator.swift */,
 			);
@@ -143,6 +146,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				15234E95EF0EBE0CA8E9B2CF /* MultiCallSampleView.swift in Sources */,
 				6CF3476877DA3857617F7F09 /* SampleApp.swift in Sources */,
 				2BE5A3862FB89D3FBF7F6323 /* SampleAudioCoordinator.swift in Sources */,
 			);

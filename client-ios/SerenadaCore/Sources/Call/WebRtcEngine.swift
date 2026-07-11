@@ -166,6 +166,18 @@ internal final class WebRtcEngine: SessionMediaEngine {
     private var localContentVideoSource: RTCVideoSource?
     private var localContentVideoTrack: RTCVideoTrack?
     private var previousUseManualAudio: Bool?
+    // Sticky remote-playout deafen state. Held sessions set this `false`; a slot
+    // created AFTER hold (peer joins / renegotiates while held) must inherit it so
+    // its remote audio is deafened too — otherwise the deafen leaks. Mirrors how
+    // the session re-applies the volume duck to newly created slots.
+    private var remotePlaybackEnabled = true
+    // Held-senders mode (multi-call held join, contract §5 / Core Invariant 3).
+    // While true, a slot created during negotiation materializes SEND-capable
+    // (`.sendRecv`) audio + legacy-video transceivers with NIL tracks so a later
+    // resume attaches fresh tracks via `replaceTrack` with no renegotiation.
+    // Set by `createSendersForHold`; cleared by `startLocalMedia` (foreground
+    // capture is starting, so new slots return to the normal track-driven path).
+    private var heldSendersMode = false
 
     private var localRenderers: [WeakAnyBox] = []
     private var localContentRenderers: [WeakAnyBox] = []
@@ -298,10 +310,27 @@ internal final class WebRtcEngine: SessionMediaEngine {
     public func setOnDebugTrace(_ handler: ((String) -> Void)?) {
     }
 
+    public func createSendersForHold() {
+#if canImport(WebRTC)
+        // Mark held-senders mode so any slot built while held creates send-capable
+        // (`.sendRecv`) transceivers despite carrying no track. Resume later
+        // attaches fresh tracks to these senders via `replaceTrack` (no
+        // renegotiation). No capture is acquired here; the OS never reports a held
+        // session as capturing.
+        heldSendersMode = true
+        // Promote any slots that already exist (none on the common held-join path,
+        // where slots are created lazily as peers arrive, but kept idempotent).
+        peerSlots.forEach { $0.ensureSendCapableTransceiversForHold() }
+#endif
+    }
+
     public func startLocalMedia(preferVideo: Bool = true) {
 #if canImport(WebRTC)
         guard let factory = peerConnectionFactory else { return }
         guard localAudioTrack == nil && localVideoTrack == nil else { return }
+        // Foreground capture is starting; leave held-senders mode so new slots
+        // follow the normal (track-driven) transceiver path again.
+        heldSendersMode = false
 
         let audioSession = RTCAudioSession.sharedInstance()
         do {
@@ -325,7 +354,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
 
             let videoCaptureSupported = !cameraController.availableCameraModes.isEmpty
             if preferVideo && videoCaptureSupported {
-                let started = cameraController.restartVideoCapturerFromAvailableModes()
+                // Prefer the controller's current mode (parity with Android's
+                // startLocalMedia); falls back to the available-modes scan on failure.
+                let started = cameraController.restartVideoCapturer(preferring: cameraController.currentMode())
                 localVideoTrack?.isEnabled = started
             } else {
                 localVideoTrack?.isEnabled = false
@@ -477,6 +508,139 @@ internal final class WebRtcEngine: SessionMediaEngine {
         peerSlots.removeAll()
     }
 
+    /// Suspend local foreground media for a HELD role. Stops screen share and
+    /// the camera capturer, RELEASES the mic capture, and replaces the audio +
+    /// camera sender tracks with `nil` so the OS stops reporting capture, while
+    /// keeping the peer connections and their stable senders intact for resume.
+    /// Also deafens remote audio playout (`RTCAudioTrack.isEnabled = false`).
+    /// Idempotent: a second call with media already released is a no-op.
+    public func suspendLocalMediaForHold() {
+#if canImport(WebRTC)
+        // Screen share is foreground-only — stop it first (independent stop
+        // also tears down + detaches the content track via onStateChanged).
+        screenShareController.stopAllCapturers()
+        cameraController.stopAllCapturers()
+        detachTracksFromRegisteredRenderers()
+
+        localVideoTrack?.isEnabled = false
+        localContentVideoTrack?.isEnabled = false
+        localAudioTrack?.isEnabled = false
+
+        // Tear down the primer before releasing its audio track reference so the
+        // OS no longer sees a live capture pipeline.
+        audioPipelinePrimer?.stop()
+
+        // RELEASE the mic + camera capture tracks. Unlike a mute (isEnabled =
+        // false), dropping the source/track makes the OS stop reporting capture.
+        localVideoTrack = nil
+        localVideoSource = nil
+        disposeLocalContentVideoTrack()
+        cameraController.updateLocalVideoSource(nil)
+        localAudioTrack = nil
+        localAudioSource = nil
+
+        // Replace the now-nil tracks onto the EXISTING senders (no
+        // renegotiation): sender.track = nil. Identity/transceivers preserved.
+        peerSlots.forEach { attachLocalTracksToSlot($0) }
+
+        // Deafen audible remote playout (distinct from the volume duck).
+        setRemotePlaybackEnabled(false)
+
+        let audioSession = RTCAudioSession.sharedInstance()
+        do {
+            audioSession.lockForConfiguration()
+            defer { audioSession.unlockForConfiguration() }
+            audioSession.isAudioEnabled = false
+            if let previousUseManualAudio {
+                audioSession.useManualAudio = previousUseManualAudio
+                self.previousUseManualAudio = nil
+            }
+        }
+#endif
+    }
+
+    /// Resume local foreground media after a hold. Reacquires mic capture (when
+    /// `audioEnabled`) and the camera (when `videoMode != nil`), attaches the
+    /// fresh tracks to the existing senders, and re-enables remote playout.
+    /// Idempotent: when tracks already exist this updates enablement only.
+    public func resumeLocalMediaFromHold(audioEnabled: Bool, videoMode: LocalCameraMode?) {
+#if canImport(WebRTC)
+        guard let factory = peerConnectionFactory else { return }
+
+        let audioSession = RTCAudioSession.sharedInstance()
+        do {
+            audioSession.lockForConfiguration()
+            defer { audioSession.unlockForConfiguration() }
+            if previousUseManualAudio == nil {
+                previousUseManualAudio = audioSession.useManualAudio
+            }
+            audioSession.useManualAudio = true
+            audioSession.isAudioEnabled = true
+        }
+
+        // Reacquire the mic track ONLY when audio is desired. A muted held call
+        // must resume muted: recreating the source would put the OS mic indicator
+        // back on even though the user is muted. When audio is not desired we keep
+        // the audio sender track nil (the held state) so no capture starts.
+        if audioEnabled {
+            if localAudioTrack == nil {
+                localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+                localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
+            }
+            localAudioTrack?.isEnabled = true
+        }
+
+        // Reacquire the camera track when video is desired, PREFERRING the desired
+        // mode (which may have been chosen while held) so resume honors it instead
+        // of snapping to the first available mode; fall back only if it fails.
+        if videoMediaEnabled, let videoMode {
+            if localVideoTrack == nil {
+                localVideoSource = factory.videoSource()
+                localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
+                cameraController.updateLocalVideoSource(localVideoSource)
+            }
+            let videoCaptureSupported = !cameraController.availableCameraModes.isEmpty
+            if videoCaptureSupported {
+                let started = cameraController.restartVideoCapturer(preferring: videoMode)
+                localVideoTrack?.isEnabled = started
+            } else {
+                localVideoTrack?.isEnabled = false
+            }
+            attachTrackToRegisteredRenderers()
+        } else {
+            cameraController.notifyCameraModeAndFlash()
+        }
+
+        if let localAudioTrack {
+            audioPipelinePrimer?.start(localAudioTrack: localAudioTrack)
+        }
+
+        // Attach the fresh tracks to the existing senders (no renegotiation).
+        peerSlots.forEach { attachLocalTracksToSlot($0) }
+
+        // Re-enable audible remote playout.
+        setRemotePlaybackEnabled(true)
+#endif
+    }
+
+    /// Gate audible remote playout on every peer by toggling the remote
+    /// `RTCAudioTrack.isEnabled`. This is a real deafen path, distinct from the
+    /// 0.15 volume duck used during external audio (`duckPlayback`).
+    public func setRemotePlaybackEnabled(_ enabled: Bool) {
+#if canImport(WebRTC)
+        remotePlaybackEnabled = enabled
+        peerSlots.forEach { $0.setRemotePlaybackEnabled(enabled) }
+#endif
+    }
+
+    /// Detach the registered local renderers for a hold so held-call preview
+    /// surfaces stop receiving frames.
+    public func detachRenderersForHold() {
+#if canImport(WebRTC)
+        detachTracksFromRegisteredRenderers()
+#endif
+    }
+
     public func collectLocalAudioLevel(_ onComplete: @escaping @Sendable (Float?) -> Void) {
         guard let audioPipelinePrimer else {
             onComplete(nil)
@@ -519,6 +683,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
             localVideoTrack: localVideoTrack,
             videoReceiveEnabled: videoMediaEnabled,
             supportsIndependentContentVideo: independentRouted,
+            heldSendersMode: { [weak self] in self?.heldSendersMode ?? false },
             isOfferOwner: isOfferOwner,
             onLocalIceCandidate: onLocalIceCandidate,
             onRemoteVideoTrack: { remoteCid, track in
@@ -531,6 +696,12 @@ internal final class WebRtcEngine: SessionMediaEngine {
             logger: logger
         )
         peerSlots.append(slot)
+        // Sticky deafen: a peer that joins/renegotiates while this session is held
+        // must inherit the deafen so its remote audio is silenced too. The slot
+        // defaults to enabled, so only push the disabled state down.
+        if !remotePlaybackEnabled {
+            slot.setRemotePlaybackEnabled(false)
+        }
         // A peer created mid-share must pick up the active content: capable peers
         // via the content sender / pending-track mechanism, legacy peers via the
         // single-sender swap (pitfall #5). attachLocalTracksToSlot routes both.
@@ -549,11 +720,59 @@ internal final class WebRtcEngine: SessionMediaEngine {
 #endif
     }
 
-    public func toggleAudio(_ enabled: Bool) {
+    @discardableResult
+    public func toggleAudio(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)
+        // ENABLE with no live mic track: a held call resumed MUTED owns no audio
+        // track (resumeLocalMediaFromHold deferred the acquire). A later
+        // foreground unmute must recreate + attach the track before reporting
+        // enabled, otherwise peers see "audio on" with silence. Mirror
+        // resumeLocalMediaFromHold's audio acquire. CRITICAL: when the track
+        // already exists this path is NOT taken — a normal foreground
+        // mute/unmute just flips `isEnabled` (single-call behavior unchanged).
+        if enabled, localAudioTrack == nil {
+            ensureLocalAudioTrack()
+        }
         localAudioTrack?.isEnabled = enabled
+        // Effective state is track-backed: true only when a track exists AND is
+        // enabled. The session publishes exactly what this returns.
+        return localAudioTrack?.isEnabled ?? false
+#else
+        return false
 #endif
     }
+
+#if canImport(WebRTC)
+    /// Recreate + attach the local mic capture track when none exists, mirroring
+    /// `resumeLocalMediaFromHold`'s audio acquire. Used by `toggleAudio(true)` to
+    /// repair the "resumed-muted then unmuted" case where the foreground call has
+    /// no audio track. No-op when a track already exists.
+    private func ensureLocalAudioTrack() {
+        guard localAudioTrack == nil, let factory = peerConnectionFactory else { return }
+        localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+        localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
+        if let localAudioTrack {
+            audioPipelinePrimer?.start(localAudioTrack: localAudioTrack)
+        }
+        // Swap the fresh track onto the existing senders (no renegotiation).
+        peerSlots.forEach { attachLocalTracksToSlot($0) }
+    }
+
+    /// Recreate + attach the local camera track (and source) when none exists,
+    /// mirroring `resumeLocalMediaFromHold`'s video acquire. Used by
+    /// `toggleVideo(true)` to repair the "resumed camera-off then video-on" case
+    /// where the foreground call has no video track. Gated on `videoMediaEnabled`;
+    /// no-op when a track already exists. The capturer restart + renderer
+    /// attachment that follow in `toggleVideo` make the track actually flow.
+    private func ensureLocalVideoTrack() {
+        guard videoMediaEnabled, localVideoTrack == nil, let factory = peerConnectionFactory else { return }
+        localVideoSource = factory.videoSource()
+        localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
+        cameraController.updateLocalVideoSource(localVideoSource)
+        attachTrackToRegisteredRenderers()
+        peerSlots.forEach { attachLocalTracksToSlot($0) }
+    }
+#endif
 
     /// Restarts the audio unit by bouncing `RTCAudioSession.isAudioEnabled`, mirroring the
     /// media-services-reset recovery in `DefaultAudioCoordinator`. Needed after a same-app audio
@@ -589,8 +808,20 @@ internal final class WebRtcEngine: SessionMediaEngine {
             localVideoTrack?.isEnabled = false
             return false
         }
+        // ENABLE with no live camera track: a held call resumed CAMERA-OFF owns no
+        // video track (resumeLocalMediaFromHold deferred the acquire). A later
+        // foreground video-on must recreate + attach the track before reporting
+        // enabled, otherwise we'd restart the capturer and publish "video on" with
+        // no track for peers. Mirror resumeLocalMediaFromHold's video acquire.
+        // CRITICAL: when the track already exists this is a no-op — normal
+        // foreground video toggling is unchanged (single-call behavior preserved).
+        if enabled && !isLegacyScreenSharing {
+            ensureLocalVideoTrack()
+        }
         if enabled && !cameraController.hasActiveCapturer() && !isLegacyScreenSharing {
-            let started = cameraController.restartVideoCapturerFromAvailableModes()
+            // Honor the controller's current mode (parity with Android); falls back
+            // to the available-modes scan only if that source fails.
+            let started = cameraController.restartVideoCapturer(preferring: cameraController.currentMode())
             if !started {
                 localVideoTrack?.isEnabled = false
                 return false

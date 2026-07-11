@@ -1,11 +1,15 @@
-import type { SignalingProvider } from './SignalingProvider.js';
+import type { AnySignalingProvider } from './SignalingProvider.js';
 import type { SerenadaConfig } from './types.js';
 
-export const SUPPORTED_SIGNALING_PROVIDER_VERSION = 1;
+/**
+ * Signaling-provider versions the SDK understands: `1` (single-session
+ * `SignalingProvider`) and `2` (app-global `MultiSessionSignalingProvider`).
+ */
+export const SUPPORTED_SIGNALING_PROVIDER_VERSIONS: readonly number[] = [1, 2];
 
 export interface ResolvedSerenadaConfig {
     serverHost: string | null;
-    signalingProvider: SignalingProvider | null;
+    signalingProvider: AnySignalingProvider | null;
 }
 
 export function resolveSerenadaConfig(config: SerenadaConfig): ResolvedSerenadaConfig {
@@ -19,8 +23,11 @@ export function resolveSerenadaConfig(config: SerenadaConfig): ResolvedSerenadaC
     if (!serverHost && !signalingProvider) {
         throw new Error('Provide exactly one of serverHost or signalingProvider');
     }
-    if (signalingProvider && signalingProvider.version !== SUPPORTED_SIGNALING_PROVIDER_VERSION) {
-        throw new Error(`Unsupported signalingProvider version: ${signalingProvider.version}`);
+    if (signalingProvider && !SUPPORTED_SIGNALING_PROVIDER_VERSIONS.includes(signalingProvider.version)) {
+        throw new Error(
+            `Unsupported signalingProvider version: ${signalingProvider.version} `
+            + `(supported: ${SUPPORTED_SIGNALING_PROVIDER_VERSIONS.join(', ')})`,
+        );
     }
 
     return { serverHost, signalingProvider };

@@ -79,9 +79,51 @@ export type {
     SignalingProviderEventMap,
     SignalingProviderEventName,
     SignalingProvider,
+    MultiSessionSignalingProvider,
+    AnySignalingProvider,
 } from './SignalingProvider.js';
+export { isMultiSessionSignalingProvider } from './SignalingProvider.js';
+export { ProviderUnavailableError } from './types.js';
 
 export { ConsoleSerenadaLogger } from './ConsoleLogger.js';
+
+/** @internal Multi-call session: media-role + foreground arbiter types/singleton */
+export type {
+    CallMediaRole,
+    MediaActivationState,
+    VideoMode,
+    ForegroundArbiterMode,
+    ForegroundOwnerToken,
+} from './types.js';
+export { ForegroundLeaseUnavailable } from './types.js';
+// The process-wide foreground media arbiter singleton and its test-reset are
+// intentionally NOT re-exported from the public entry point: they are internal
+// (no `stripInternal` is configured, so a re-export would land in the published
+// .d.ts AND the JS bundle). Tests import them directly from './foregroundArbiter.js'.
+
+/** Multi-call session registry (Phase 3) */
+export { SerenadaCallRegistry } from './SerenadaCallRegistry.js';
+export type {
+    SerenadaCallRegistryOptions,
+    RegistrySessionFactory,
+} from './SerenadaCallRegistry.js';
+export type {
+    CallId,
+    RoomRef,
+    CallActivationError,
+    ManagedCallState,
+    CallRegistryState,
+    JoinResult,
+    SwitchResult,
+    JoinAndSwitchResult,
+} from './types.js';
+/** Canonical room-token extraction shared with the registry's call identity */
+export { canonicalizeRoomId } from './roomIdentity.js';
+export {
+    FOREGROUND_RELEASE_TIMEOUT_MS,
+    FOREGROUND_ACTIVATE_TIMEOUT_MS,
+    HELD_JOIN_TIMEOUT_MS,
+} from './constants.js';
 
 // Public utilities
 export {

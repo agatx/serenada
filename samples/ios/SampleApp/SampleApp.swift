@@ -25,13 +25,22 @@ struct SerenadaiOSSampleApp: App {
     @State private var activeCall: ActiveCall?
     @State private var activeProviderDemo: ProviderDemoSession?
     @State private var lastCreatedRoomURL: URL?
+    @State private var showMultiCall = false
 
     private let serenada = SerenadaCore(config: .init(serverHost: sampleServerHost))
 
     var body: some Scene {
         WindowGroup {
             Group {
-                if let activeCall {
+                if showMultiCall {
+                    // The multi-call demo owns its own SerenadaCallRegistry over a
+                    // dedicated SerenadaCore. Only one registry / direct join may own
+                    // the process at a time, so this screen runs in isolation.
+                    MultiCallSampleView(
+                        core: SerenadaCore(config: .init(serverHost: sampleServerHost)),
+                        onDismiss: { showMultiCall = false }
+                    )
+                } else if let activeCall {
                     callFlow(for: activeCall)
                 } else if let activeProviderDemo {
                     ProviderDemoView(
@@ -48,6 +57,7 @@ struct SerenadaiOSSampleApp: App {
                         serenada: serenada,
                         lastCreatedRoomURL: $lastCreatedRoomURL,
                         onStartCall: { activeCall = $0 },
+                        onStartMultiCall: { showMultiCall = true },
                         onStartProviderDemo: {
                             let provider = SampleMockSignalingProvider()
                             let coordinator = SampleAudioCoordinator()
@@ -85,6 +95,7 @@ private struct HomeView: View {
     let serenada: SerenadaCore
     @Binding var lastCreatedRoomURL: URL?
     let onStartCall: (ActiveCall) -> Void
+    let onStartMultiCall: () -> Void
     let onStartProviderDemo: () -> Void
 
     @State private var urlText = ""
@@ -131,6 +142,18 @@ private struct HomeView: View {
                         Button("Start Mock Provider Demo") {
                             errorMessage = nil
                             onStartProviderDemo()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    sampleCard(title: "Multiple Calls") {
+                        Text("Manage several concurrent calls with `SerenadaCallRegistry`: join held or foreground, switch, hold, leave, and end. Exactly one call is foreground at a time.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        Button("Open Multi-Call Demo") {
+                            errorMessage = nil
+                            onStartMultiCall()
                         }
                         .buttonStyle(.borderedProminent)
                     }

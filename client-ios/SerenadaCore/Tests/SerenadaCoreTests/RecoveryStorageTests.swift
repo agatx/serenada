@@ -81,4 +81,33 @@ final class RecoveryStorageTests: XCTestCase {
         defaults.set(Data("not json".utf8), forKey: "serenada.recovery.record_v1")
         XCTAssertNil(storage.load())
     }
+
+    func testClearIfOwnedRemovesMatchingRecord() {
+        let record = RecoveryRecord(
+            roomId: "room-1", cid: "C-abc", reconnectToken: "tok",
+            lastEpoch: 1, sessionStartTs: nowMs, expiresAtMs: nowMs + 60_000
+        )
+        storage.save(record)
+        storage.clearIfOwned(roomId: "room-1", cid: "C-abc")
+        XCTAssertNil(storage.load())
+    }
+
+    func testClearIfOwnedKeepsRecordOwnedByAnotherCall() {
+        let record = RecoveryRecord(
+            roomId: "room-B", cid: "C-bbb", reconnectToken: "tok-B",
+            lastEpoch: 1, sessionStartTs: nowMs, expiresAtMs: nowMs + 60_000
+        )
+        storage.save(record)
+        // A DIFFERENT call (room-A / C-aaa) tearing down must not clear B's record.
+        storage.clearIfOwned(roomId: "room-A", cid: "C-aaa")
+        XCTAssertEqual(storage.load(), record)
+        // Same room, different cid: still not owned.
+        storage.clearIfOwned(roomId: "room-B", cid: "C-aaa")
+        XCTAssertEqual(storage.load(), record)
+    }
+
+    func testClearIfOwnedIsNoOpWhenNothingStored() {
+        storage.clearIfOwned(roomId: "room-1", cid: "C-abc")
+        XCTAssertNil(storage.load())
+    }
 }

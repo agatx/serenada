@@ -18,6 +18,22 @@ export const JOIN_CONNECT_KICKSTART_MS = 1200;
 export const JOIN_RECOVERY_MS = 4000;
 export const JOIN_HARD_TIMEOUT_MS = 15000;
 
+// Multi-call session registry (Phase 3). Bound each foreground media transition
+// and the held room join so a stuck session cannot freeze the serialized
+// operation queue forever (multi-call session contract §9). Cross-platform
+// parity is enforced by `scripts/check-resilience-constants.mjs`.
+//
+// Bounds draining the old foreground session's resources (suspend/replace
+// senders, mute playout) before a switch releases its lease.
+export const FOREGROUND_RELEASE_TIMEOUT_MS = 5000;
+// Bounds a new foreground activation. Deliberately greater than
+// `AUDIO_COORDINATOR_TIMEOUT_MS` (10000) so the inner audio-coordinator timeout
+// fires first and the activation surfaces that as the cause.
+export const FOREGROUND_ACTIVATE_TIMEOUT_MS = 12000;
+// Bounds a held room join performed outside the operation queue; mirrors
+// `JOIN_HARD_TIMEOUT_MS`.
+export const HELD_JOIN_TIMEOUT_MS = 15000;
+
 // Peer Connection
 export const OFFER_TIMEOUT_MS = 8000;
 export const ICE_RESTART_COOLDOWN_MS = 10000;

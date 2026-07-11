@@ -30,6 +30,7 @@ class FakeStream {
     private tracks: MediaStreamTrack[];
     constructor(tracks: MediaStreamTrack[] = []) { this.tracks = [...tracks]; }
     addTrack(t: MediaStreamTrack): void { this.tracks.push(t); }
+    removeTrack(t: MediaStreamTrack): void { this.tracks = this.tracks.filter(x => x !== t); }
     getAudioTracks(): MediaStreamTrack[] { return this.tracks.filter(t => t.kind === 'audio'); }
     getVideoTracks(): MediaStreamTrack[] { return this.tracks.filter(t => t.kind === 'video'); }
     getTracks(): MediaStreamTrack[] { return [...this.tracks]; }
@@ -39,14 +40,36 @@ class FakeSender {
     readonly replaceTrackCalls: Array<MediaStreamTrack | null> = [];
     failNextReplace = false;
     private params: RTCRtpSendParameters = { encodings: [{}] } as RTCRtpSendParameters;
+    // Opt-in gating for the capture-generation ATTACHMENT-await race tests. When a
+    // track is registered as deferred, `replaceTrack(track)` parks until
+    // `releaseParked()` and only sets `this.track` once released — modelling a
+    // `replaceTrack` promise that resolves LATE (after a concurrent hold). Inert by
+    // default (empty set), so every other test is unaffected.
+    static deferredTracks = new Set<MediaStreamTrack>();
+    static parked: Array<() => void> = [];
+    static releaseParked(): void {
+        const pending = [...FakeSender.parked];
+        FakeSender.parked.length = 0;
+        pending.forEach(apply => apply());
+    }
+    static resetGating(): void {
+        FakeSender.deferredTracks.clear();
+        FakeSender.parked.length = 0;
+    }
     constructor(public track: MediaStreamTrack | null) {}
     async replaceTrack(track: MediaStreamTrack | null): Promise<void> {
         if (this.failNextReplace) {
             this.failNextReplace = false;
             throw new Error('replaceTrack rejected');
         }
-        this.track = track;
         this.replaceTrackCalls.push(track);
+        if (track && FakeSender.deferredTracks.has(track)) {
+            await new Promise<void>((resolve) => {
+                FakeSender.parked.push(() => { this.track = track; resolve(); });
+            });
+            return;
+        }
+        this.track = track;
     }
     getParameters(): RTCRtpSendParameters { return this.params; }
     async setParameters(p: RTCRtpSendParameters): Promise<void> { this.params = p; }
@@ -115,6 +138,7 @@ class FakePeerConnection {
     }
     getSenders(): RTCRtpSender[] { return this.senders as unknown as RTCRtpSender[]; }
     getTransceivers(): RTCRtpTransceiver[] { return this.transceivers as unknown as RTCRtpTransceiver[]; }
+    getReceivers(): RTCRtpReceiver[] { return this.transceivers.map(t => t.receiver); }
     /**
      * Injectable stats report. Tests push `inbound-rtp` entries (keyed by the
      * receiver track identity) to drive per-role liveness sampling. Defaults to
@@ -314,6 +338,7 @@ describe('MediaEngine independent content', () => {
 
     afterEach(() => {
         vi.useRealTimers();
+        FakeSender.resetGating();
         Object.defineProperty(globalThis, 'navigator', { value: originalNavigator, configurable: true });
         Object.defineProperty(globalThis, 'document', { value: originalDocument, configurable: true });
         (globalThis as Record<string, unknown>).window = originalWindow;
@@ -500,6 +525,409 @@ describe('MediaEngine independent content', () => {
         const states = h.sent.filter(m => m.type === 'content_state');
         expect(states).toHaveLength(0);
         expect(h.engine.isScreenSharing).toBe(false);
+    });
+
+    it('drops an independent screen share whose picker resolves after the call goes held', async () => {
+        // Race regression (independent path): getDisplayMedia resolves only AFTER a
+        // hold latches mid-picker. A held call must not attach the content track or
+        // broadcast content_state {active:true} (Core Invariant 2).
+        const sent: Sent[] = [];
+        let resolveDisplay!: (stream: MediaStream) => void;
+        const displayTrack = makeTrack('video', 'display');
+        const getDisplayMedia = vi.fn().mockReturnValue(
+            new Promise<MediaStream>((resolve) => { resolveDisplay = resolve; }),
+        );
+        setupNavigator({ getDisplayMedia });
+        const engine = new MediaEngine(
+            { enableIndependentContentVideo: true },
+            (type, payload, to) => sent.push({ type, payload, to }),
+        );
+        engine.updateSignalingConnected(true);
+        await engine.startLocalMedia();
+
+        const share = engine.startScreenShare();   // picker pending
+        await engine.suspendLocalMediaForHold();    // hold latches mid-picker
+        resolveDisplay(new FakeStream([displayTrack]) as unknown as MediaStream);
+        await share;
+
+        expect(getDisplayMedia).toHaveBeenCalledTimes(1);
+        expect(displayTrack.readyState).toBe('ended');   // freshly captured surface released
+        expect(engine.isScreenSharing).toBe(false);
+        expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+    });
+
+    it('drops an independent screen share whose picker resolves AFTER hold+resume (ABA)', async () => {
+        // ABA: the picker resolves only after a hold latches AND a resume clears
+        // it again. `heldNoCapture` is false by then, so only the capture
+        // generation catches the stale surface — it must not attach or broadcast.
+        const sent: Sent[] = [];
+        let resolveDisplay!: (stream: MediaStream) => void;
+        const displayTrack = makeTrack('video', 'display');
+        const getDisplayMedia = vi.fn().mockReturnValue(
+            new Promise<MediaStream>((resolve) => { resolveDisplay = resolve; }),
+        );
+        setupNavigator({ getDisplayMedia });
+        const engine = new MediaEngine(
+            { enableIndependentContentVideo: true },
+            (type, payload, to) => sent.push({ type, payload, to }),
+        );
+        const h: Harness = { engine, sent, getDisplayMedia, pcOptions };
+        const peer = await joinAsOwnerCapable(h);
+
+        sent.length = 0;
+        const share = engine.startScreenShare();       // picker pending (gen G)
+        await engine.suspendLocalMediaForHold();         // gen -> G+1, held
+        await engine.resumeLocalMediaFromHold(false, 'off'); // clears held (ABA)
+        resolveDisplay(new FakeStream([displayTrack]) as unknown as MediaStream);
+        await share;
+
+        expect(displayTrack.readyState).toBe('ended');
+        expect(engine.isScreenSharing).toBe(false);
+        expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+        expect(peer.senders.some(s => s.track === displayTrack)).toBe(false);
+    });
+
+    it('detaches the content track and does not re-broadcast active:true when a hold latches while the content attach replaceTrack is in flight', async () => {
+        // Residual race regression (independent path): the picker resolves (post-picker
+        // guard passes) and isScreenSharing is set, but a hold latches WHILE the content
+        // track's `replaceTrack` is still UNRESOLVED. The gating below parks that
+        // `replaceTrack` across the hold and releases it afterwards, so the stale
+        // completion lands on the held call. The start path must (a) not re-broadcast
+        // active:true (a higher revision), and (b) leave the content sender NOT carrying
+        // the stale display track (Core Invariant 2). The prior version of this test
+        // awaited the original replacement BEFORE holding, so it never exercised an
+        // unresolved `replaceTrack` nor asserted the sender's final track.
+        const displayTrack = makeTrack('video', 'display');
+        const getDisplayMedia = vi.fn().mockResolvedValue(new FakeStream([displayTrack]) as unknown as MediaStream);
+        const sent: Sent[] = [];
+        setupNavigator({ getDisplayMedia });
+        const engine = new MediaEngine(
+            { enableIndependentContentVideo: true },
+            (type, payload, to) => sent.push({ type, payload, to }),
+        );
+        const h: Harness = { engine, sent, getDisplayMedia, pcOptions };
+        const peer = await joinAsOwnerCapable(h);
+        const contentSender = peer.transceivers
+            .filter(t => t.kind === 'video')
+            .sort((a, b) => Number(a.mid) - Number(b.mid))[1].sender;
+
+        // Park the content `replaceTrack(displayTrack)` so it stays UNRESOLVED across
+        // the hold, then release it so the stale completion lands afterwards.
+        FakeSender.deferredTracks.add(displayTrack);
+        sent.length = 0;
+        const share = engine.startScreenShare();
+        await vi.waitFor(() => expect(FakeSender.parked.length).toBeGreaterThan(0));
+        await engine.suspendLocalMediaForHold();       // hold latches mid-attach
+        FakeSender.releaseParked();                    // stale replaceTrack lands after hold
+        await share;
+
+        expect(engine.isScreenSharing).toBe(false);
+        expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+        expect(contentSender.track).not.toBe(displayTrack);   // stale content track detached
+        expect(peer.senders.some(s => s.track === displayTrack)).toBe(false);
+        expect(displayTrack.readyState).toBe('ended');        // freshly captured surface released
+    });
+
+    it('fences the independent-peer initial-media attach so a hold cannot strip in a late stopped track', async () => {
+        // Finding 2: `attachLocalTracksToIndependentPeer` used to launch its
+        // audio/camera `replaceTrack` ops fire-and-forget, so the initial-media
+        // post-attachment fence could pass BEFORE they settled. A later hold then
+        // detached the senders and the late replacement installed the stopped
+        // pre-hold track with no continuation left to undo it. The fenced attach
+        // must be AWAITED so the post-attach fence catches the stale generation and
+        // the sender never ends carrying the stopped pre-hold track.
+        const micA = makeTrack('audio', 'micA');
+        const camA = makeTrack('video', 'camA');
+        const getUserMedia = vi.fn().mockResolvedValue(new FakeStream([micA, camA]) as unknown as MediaStream);
+        setupNavigator();
+        (globalThis.navigator.mediaDevices as { getUserMedia: unknown }).getUserMedia = getUserMedia;
+        const sent: Sent[] = [];
+        const engine = new MediaEngine(
+            { enableIndependentContentVideo: true },
+            (type, payload, to) => sent.push({ type, payload, to }),
+        );
+        engine.updateSignalingConnected(true);
+        // Bring up the capable peer BEFORE media starts, so the initial-media attach
+        // routes through the independent-peer path (audio + camera replaceTrack).
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [
+                { cid: 'alpha' },
+                { cid: 'zeta', capabilities: { independentContentVideo: true }, mediaPolicy: { videoMediaEnabled: true } },
+            ],
+        }, 'alpha');
+        const peer = engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+
+        // Park the initial audio + camera attaches so they resolve LATE (after a
+        // hold), exactly the fire-and-forget race Finding 2 describes.
+        FakeSender.deferredTracks.add(micA);
+        FakeSender.deferredTracks.add(camA);
+        const start = engine.startLocalMedia();
+        await vi.waitFor(() => expect(FakeSender.parked.length).toBeGreaterThan(0));
+        await engine.suspendLocalMediaForHold();       // gen bump + release capture, held
+        FakeSender.releaseParked();                    // stale attaches land after the hold
+        const result = await start;
+
+        expect(result).toBeNull();                     // fenced: initial media publishes nothing
+        const audioSender = peer.senders.find(s => s.replaceTrackCalls.includes(micA));
+        const cameraSender = peer.senders.find(s => s.replaceTrackCalls.includes(camA));
+        expect(audioSender).toBeTruthy();
+        expect(cameraSender).toBeTruthy();
+        // Held call owns no capture: each sender ends null, never the stale stopped track.
+        expect(audioSender!.track).toBeNull();
+        expect(cameraSender!.track).toBeNull();
+        expect(peer.senders.some(s => s.track === micA || s.track === camA)).toBe(false);
+        expect(micA.readyState).toBe('ended');
+        expect(camA.readyState).toBe('ended');
+    });
+
+    it('independent-peer initial-media attach restores the RESUMED tracks when hold+resume interleaves before the attach settles', async () => {
+        // Finding 1 (role-mapped restore) + Finding 2 (fence) together: the parked
+        // initial attaches land AFTER a resume repointed the audio/camera senders to
+        // fresh tracks. The stale undo must restore the CURRENT (resumed) tracks on
+        // those role senders, not null them, so the resumed foreground call keeps
+        // its mic/camera.
+        const micA = makeTrack('audio', 'micA');
+        const camA = makeTrack('video', 'camA');
+        const getUserMedia = vi.fn()
+            .mockResolvedValueOnce(new FakeStream([micA, camA]) as unknown as MediaStream)
+            .mockImplementation(async (constraints: MediaStreamConstraints) => {
+                const tracks: MediaStreamTrack[] = [makeTrack('audio', 'micB')];
+                if (constraints.video) tracks.push(makeTrack('video', 'camB'));
+                return new FakeStream(tracks) as unknown as MediaStream;
+            });
+        setupNavigator();
+        (globalThis.navigator.mediaDevices as { getUserMedia: unknown }).getUserMedia = getUserMedia;
+        const sent: Sent[] = [];
+        const engine = new MediaEngine(
+            { enableIndependentContentVideo: true },
+            (type, payload, to) => sent.push({ type, payload, to }),
+        );
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [
+                { cid: 'alpha' },
+                { cid: 'zeta', capabilities: { independentContentVideo: true }, mediaPolicy: { videoMediaEnabled: true } },
+            ],
+        }, 'alpha');
+        const peer = engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+
+        FakeSender.deferredTracks.add(micA);
+        FakeSender.deferredTracks.add(camA);
+        const start = engine.startLocalMedia();
+        await vi.waitFor(() => expect(FakeSender.parked.length).toBeGreaterThan(0));
+        await engine.suspendLocalMediaForHold();               // gen bump, release capture
+        await engine.resumeLocalMediaFromHold(true, 'selfie'); // attaches fresh (resumed) tracks
+        FakeSender.releaseParked();                            // stale attaches land last
+        const result = await start;
+
+        expect(result).toBeNull();
+        const resumedMic = engine.localStream?.getAudioTracks()[0];
+        const resumedCam = engine.localStream?.getVideoTracks()[0];
+        expect(resumedMic).toBeTruthy();
+        expect(resumedCam).toBeTruthy();
+        expect(resumedMic).not.toBe(micA);
+        expect(resumedCam).not.toBe(camA);
+        const audioSender = peer.senders.find(s => s.replaceTrackCalls.includes(micA));
+        const cameraSender = peer.senders.find(s => s.replaceTrackCalls.includes(camA));
+        expect(audioSender!.track).toBe(resumedMic);
+        expect(cameraSender!.track).toBe(resumedCam);
+        expect(peer.senders.some(s => s.track === micA || s.track === camA)).toBe(false);
+    });
+
+    describe('negotiation-time independent-peer attach fences (Finding P1)', () => {
+        // The four fire-and-forget attach launchers (applyRemoteOffer audio,
+        // assignRemoteVideoRoles role-binding, handleAnswerFrom post-answer, and the
+        // replaceVideoTrackOnAllPeers missing-role branch) all funnel through the two
+        // shared helpers (attachAudioTrackToIndependentPeer / attachPendingLocalTracks),
+        // which snapshot the capture generation and undo a stale replaceTrack. Each
+        // test parks the helper's replaceTrack across a hold (± resume) and asserts the
+        // sender ends at the current-generation track or null, never the stopped
+        // pre-hold track.
+
+        /** Bring an ANSWERER engine (local 'zeta') to a created — but not yet
+         * offer-bound — capable peer 'alpha'. The answerer pre-creates no
+         * transceivers, so local tracks first attach when a remote offer arrives. */
+        async function joinAsAnswererCapable(
+            getUserMedia: ReturnType<typeof vi.fn>,
+        ): Promise<{ engine: MediaEngine; peer: FakePeerConnection; sent: Sent[] }> {
+            setupNavigator();
+            (globalThis.navigator.mediaDevices as { getUserMedia: unknown }).getUserMedia = getUserMedia;
+            const sent: Sent[] = [];
+            const engine = new MediaEngine(
+                { enableIndependentContentVideo: true },
+                (type, payload, to) => sent.push({ type, payload, to }),
+            );
+            engine.updateSignalingConnected(true);
+            await engine.startLocalMedia();
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [
+                    { cid: 'alpha', capabilities: { independentContentVideo: true }, mediaPolicy: { videoMediaEnabled: true } },
+                    { cid: 'zeta' },
+                ],
+            }, 'zeta');
+            await flush();
+            const peer = engine.getPeerConnectionsMap().get('alpha') as unknown as FakePeerConnection;
+            return { engine, peer, sent };
+        }
+
+        it('(a) applyRemoteOffer audio attach: a parked mic replaceTrack that lands after hold+resume ends at the resumed mic', async () => {
+            // applyRemoteOffer launches attachAudioTrackToIndependentPeer fire-and-forget
+            // when localStream already exists. Parking that replaceTrack across a
+            // hold+resume must restore the resumed mic on the audio sender.
+            const micA = makeTrack('audio', 'micA');
+            const camA = makeTrack('video', 'camA');
+            const getUserMedia = vi.fn()
+                .mockResolvedValueOnce(new FakeStream([micA, camA]) as unknown as MediaStream)
+                .mockImplementation(async (constraints: MediaStreamConstraints) => {
+                    const tracks: MediaStreamTrack[] = [makeTrack('audio', 'micB')];
+                    if (constraints.video) tracks.push(makeTrack('video', 'camB'));
+                    return new FakeStream(tracks) as unknown as MediaStream;
+                });
+            const { engine, peer } = await joinAsAnswererCapable(getUserMedia);
+
+            // Park the mic attach so applyRemoteOffer's replaceTrack(micA) stays
+            // unresolved across the hold+resume.
+            FakeSender.deferredTracks.add(micA);
+            engine.processSignalingMessage({ v: 1, type: 'offer', payload: { from: 'alpha', sdp: 'remote-offer', offerId: 'o1' } });
+            await vi.waitFor(() => expect(FakeSender.parked.length).toBeGreaterThan(0));
+            await engine.suspendLocalMediaForHold();               // detach + stop micA, gen bump
+            await engine.resumeLocalMediaFromHold(true, 'off');    // reacquire micB onto the audio sender
+            FakeSender.releaseParked();                            // stale replaceTrack(micA) lands last
+            await flush();
+
+            const resumedMic = engine.localStream?.getAudioTracks()[0];
+            expect(resumedMic).toBeTruthy();
+            expect(resumedMic).not.toBe(micA);
+            const audioSender = peer.senders.find(s => s.replaceTrackCalls.includes(micA));
+            expect(audioSender).toBeTruthy();
+            await vi.waitFor(() => expect(audioSender!.track).toBe(resumedMic));
+            expect(peer.senders.some(s => s.track === micA)).toBe(false);
+            expect(micA.readyState).toBe('ended');
+        });
+
+        it('(d) role-binding attach: a parked camera replaceTrack that lands after hold+resume ends at the resumed camera', async () => {
+            // assignRemoteVideoRoles binds the answerer's camera role from the remote
+            // offer, then launches attachPendingLocalTracks fire-and-forget. Parking the
+            // camera replaceTrack across a hold+resume must restore the resumed camera.
+            const micA = makeTrack('audio', 'micA');
+            const camA = makeTrack('video', 'camA');
+            const getUserMedia = vi.fn()
+                .mockResolvedValueOnce(new FakeStream([micA, camA]) as unknown as MediaStream)
+                .mockImplementation(async (constraints: MediaStreamConstraints) => {
+                    const tracks: MediaStreamTrack[] = [makeTrack('audio', 'micB')];
+                    if (constraints.video) tracks.push(makeTrack('video', 'camB'));
+                    return new FakeStream(tracks) as unknown as MediaStream;
+                });
+            const { engine, peer } = await joinAsAnswererCapable(getUserMedia);
+
+            // Park only the camera attach; the mic attaches normally.
+            FakeSender.deferredTracks.add(camA);
+            engine.processSignalingMessage({ v: 1, type: 'offer', payload: { from: 'alpha', sdp: 'remote-offer', offerId: 'o1' } });
+            await vi.waitFor(() => expect(FakeSender.parked.length).toBeGreaterThan(0));
+            await engine.suspendLocalMediaForHold();                 // detach + stop camA, gen bump
+            await engine.resumeLocalMediaFromHold(true, 'selfie');   // reacquire camB onto the camera sender
+            FakeSender.releaseParked();                              // stale replaceTrack(camA) lands last
+            await flush();
+
+            const resumedCam = engine.localStream?.getVideoTracks()[0];
+            expect(resumedCam).toBeTruthy();
+            expect(resumedCam).not.toBe(camA);
+            const cameraSender = peer.senders.find(s => s.replaceTrackCalls.includes(camA));
+            expect(cameraSender).toBeTruthy();
+            await vi.waitFor(() => expect(cameraSender!.track).toBe(resumedCam));
+            expect(peer.senders.some(s => s.track === camA)).toBe(false);
+            expect(camA.readyState).toBe('ended');
+        });
+
+        it('(b) handleAnswerFrom post-answer attach: a parked content re-attach that lands after a hold detaches the stopped content track', async () => {
+            // A replaceTrack-reject forces renegotiation; the owner's handleAnswerFrom
+            // re-attaches the pending content track fire-and-forget. Parking that
+            // re-attach across a hold (which stops the share) must leave the content
+            // sender null, never carrying the stopped display track.
+            const displayTrack = makeTrack('video', 'display');
+            const getDisplayMedia = vi.fn().mockResolvedValue(new FakeStream([displayTrack]) as unknown as MediaStream);
+            const sent: Sent[] = [];
+            setupNavigator({ getDisplayMedia });
+            const engine = new MediaEngine(
+                { enableIndependentContentVideo: true },
+                (type, payload, to) => sent.push({ type, payload, to }),
+            );
+            const h: Harness = { engine, sent, getDisplayMedia, pcOptions };
+            const peer = await joinAsOwnerCapable(h);
+            const contentSender = peer.transceivers
+                .filter(t => t.kind === 'video')
+                .sort((a, b) => Number(a.mid) - Number(b.mid))[1].sender;
+
+            // First content attach rejects → forces renegotiation, sets pendingContentAttach.
+            contentSender.failNextReplace = true;
+            sent.length = 0;
+            await engine.startScreenShare();
+            await flush();
+            expect(engine.isScreenSharing).toBe(true);
+            expect(contentSender.track).toBeNull();
+
+            // Park the reneg-answer re-attach so replaceTrack(displayTrack) stays
+            // unresolved across the hold.
+            FakeSender.deferredTracks.add(displayTrack);
+            const renegOfferId = sent.filter(m => m.type === 'offer').at(-1)?.payload?.offerId;
+            expect(renegOfferId).toBeDefined();
+            engine.processSignalingMessage({ v: 1, type: 'answer', payload: { from: 'zeta', sdp: 'reneg-answer', offerId: renegOfferId } });
+            await vi.waitFor(() => expect(FakeSender.parked.length).toBeGreaterThan(0));
+            await engine.suspendLocalMediaForHold();     // stops share + display track, gen bump
+            FakeSender.releaseParked();                  // stale replaceTrack(displayTrack) lands
+            await flush();
+
+            await vi.waitFor(() => expect(contentSender.track).toBeNull());
+            expect(peer.senders.some(s => s.track === displayTrack)).toBe(false);
+            expect(displayTrack.readyState).toBe('ended');
+        });
+
+        it('(c) missing-role branch: a parked content attach launched by ensureOwnerVideoTransceivers is undone by the hold', async () => {
+            // The "owner not yet set up" branch in replaceVideoTrackOnAllPeers launches
+            // ensureOwnerVideoTransceivers fire-and-forget, which re-pends the active
+            // content attach. Reproduce the missing-role precondition (no bound video
+            // roles), park the content replaceTrack across a hold, and assert the stale
+            // display track is detached.
+            const displayTrack = makeTrack('video', 'display');
+            const getDisplayMedia = vi.fn().mockResolvedValue(new FakeStream([displayTrack]) as unknown as MediaStream);
+            const sent: Sent[] = [];
+            setupNavigator({ getDisplayMedia });
+            const engine = new MediaEngine(
+                { enableIndependentContentVideo: true },
+                (type, payload, to) => sent.push({ type, payload, to }),
+            );
+            const h: Harness = { engine, sent, getDisplayMedia, pcOptions };
+            const peer = await joinAsOwnerCapable(h);
+            await engine.startScreenShare();
+            await flush();
+            expect(engine.isScreenSharing).toBe(true);
+
+            // Reach the missing-role branch (site 4): clear the bound video roles so
+            // ensureOwnerVideoTransceivers recreates them and re-pends the active
+            // content attach (a parkable replaceTrack).
+            const internals = engine as unknown as {
+                peers: Map<string, { mediaRoles: { camera?: unknown; content?: unknown } }>;
+                replaceVideoTrackOnAllPeers: (t: MediaStreamTrack | null, s: MediaStream | null) => Promise<void>;
+            };
+            const peerState = internals.peers.get('zeta')!;
+            peerState.mediaRoles.camera = undefined;
+            peerState.mediaRoles.content = undefined;
+
+            FakeSender.deferredTracks.add(displayTrack);
+            const newCam = makeTrack('video', 'newCam');
+            const swap = internals.replaceVideoTrackOnAllPeers(newCam, new FakeStream([newCam]) as unknown as MediaStream);
+            await vi.waitFor(() => expect(FakeSender.parked.length).toBeGreaterThan(0));
+            await engine.suspendLocalMediaForHold();     // stops share + display track, gen bump
+            FakeSender.releaseParked();                  // stale replaceTrack(displayTrack) lands
+            await swap;
+            await flush();
+
+            await vi.waitFor(() => expect(peer.senders.some(s => s.track === displayTrack)).toBe(false));
+            expect(displayTrack.readyState).toBe('ended');
+        });
     });
 
     it('replaceTrack rejection falls back to renegotiation instead of failing the share', async () => {
@@ -1570,6 +1998,101 @@ describe('MediaEngine independent content', () => {
             await flush();
             await h.engine.sampleInboundRoleLiveness();
             expect(h.engine.getRoleLiveness('zeta')).toEqual({ camera: false, content: false });
+        });
+    });
+
+    // --- Q4: held-without-capture reserves SEND-capable audio (+ legacy video)
+    // transceivers so resume attaches via replaceTrack with no renegotiation
+    // (Core Invariant 3 / contract §5; parity with Android SEND_RECV+null-track).
+    describe('held-without-capture reserves send-capable senders (Q4)', () => {
+        function audioTransceiver(peer: FakePeerConnection): FakeTransceiver | undefined {
+            return peer.transceivers.find(t => t.kind === 'audio');
+        }
+
+        it('independent offer-owner reserves the held audio transceiver sendrecv with a null track', async () => {
+            // local 'alpha' < 'zeta' → alpha is the offer owner (independent path).
+            const h = makeEngine({ enableIndependentContentVideo: true, videoMediaEnabled: true, videoCaptureSupported: true });
+            h.engine.initializeHeldWithoutCapture();
+            h.engine.updateSignalingConnected(true);
+            // No startLocalMedia: a held-initial session owns no capture.
+            h.engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [
+                    { cid: 'alpha' },
+                    { cid: 'zeta', capabilities: { independentContentVideo: true }, mediaPolicy: { videoMediaEnabled: true } },
+                ],
+            }, 'alpha');
+            await flush();
+            const peer = h.engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+            const audio = audioTransceiver(peer);
+            expect(audio).toBeDefined();
+            // SEND-capable (not recvonly) with no capture attached yet.
+            expect(audio?.direction).toBe('sendrecv');
+            expect(audio?.sender.track).toBeNull();
+        });
+
+        it('legacy peer reserves held audio (and video) transceivers sendrecv with null tracks', async () => {
+            // Non-capable peer → ensureMediaTransceivers legacy path.
+            const h = makeEngine({ enableIndependentContentVideo: true, videoMediaEnabled: true, videoCaptureSupported: true });
+            h.engine.initializeHeldWithoutCapture();
+            h.engine.updateSignalingConnected(true);
+            h.engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await flush();
+            const peer = h.engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+            const audio = audioTransceiver(peer);
+            expect(audio?.direction).toBe('sendrecv');
+            expect(audio?.sender.track).toBeNull();
+            const video = peer.transceivers.find(t => t.kind === 'video');
+            expect(video?.direction).toBe('sendrecv');
+            expect(video?.sender.track).toBeNull();
+        });
+
+        it('legacy held audio (videoCaptureSupported=false) is still sendrecv so resume needs no renegotiation', async () => {
+            // Even with video capture unsupported, held audio is reserved sendrecv:
+            // the held-no-capture branch overrides the normal recvonly reservation.
+            const h = makeEngine({ enableIndependentContentVideo: true, videoMediaEnabled: true, videoCaptureSupported: false });
+            h.engine.initializeHeldWithoutCapture();
+            h.engine.updateSignalingConnected(true);
+            h.engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await flush();
+            const peer = h.engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+            expect(audioTransceiver(peer)?.direction).toBe('sendrecv');
+        });
+
+        it('resume attaches a fresh mic via replaceTrack with no direction flip and no offer (no renegotiation)', async () => {
+            const h = makeEngine({ enableIndependentContentVideo: true, videoMediaEnabled: true, videoCaptureSupported: true });
+            h.engine.initializeHeldWithoutCapture();
+            h.engine.updateSignalingConnected(true);
+            h.engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await flush();
+            const peer = h.engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+            const audio = audioTransceiver(peer);
+            // Reserved sendrecv before resume.
+            expect(audio?.direction).toBe('sendrecv');
+            const offersBefore = h.sent.filter(m => m.type === 'offer').length;
+
+            // Resume audio-only (camera off): reacquires the mic and attaches it.
+            await h.engine.resumeLocalMediaFromHold(true, 'off');
+            await flush();
+
+            // The fresh mic landed on the EXISTING sender via replaceTrack...
+            expect(audio?.sender.replaceTrackCalls.length).toBeGreaterThan(0);
+            expect(audio?.sender.track).not.toBeNull();
+            expect(audio?.sender.track?.kind).toBe('audio');
+            // ...and the direction was already send-capable, so it was never flipped
+            // (the recvonly→sendrecv flip is what would force renegotiation) and no
+            // new offer was emitted: resume attached with NO renegotiation.
+            expect(audio?.direction).toBe('sendrecv');
+            expect(h.sent.filter(m => m.type === 'offer').length).toBe(offersBefore);
         });
     });
 });

@@ -658,9 +658,28 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         if (savedRoomStore.markRoomJoined(roomId)) {
             refreshSavedRooms()
         }
+        // Switching rooms (e.g. a deep link to a DIFFERENT room while already in a
+        // call): leave the previous session FIRST. start() takes the process
+        // foreground lease synchronously inside join() below, so an un-left previous
+        // call would still hold it and this join would fail.
+        leavePreviousSessionForSwitch()
         val resolvedHost = normalizeHostValue(oneOffHost) ?: serverHost.value
         val session = createSdkCore(resolvedHost).join(roomId, resolvedHost, displayName = resolvedDisplayName)
         beginSdkSession(session, hostOverride = oneOffHost)
+    }
+
+    /**
+     * Tear down the active session before joining a different room, so its
+     * foreground lease is released before the new session acquires it. Mirrors the
+     * iOS CallManager switch teardown.
+     */
+    private fun leavePreviousSessionForSwitch() {
+        val previous = activeSession ?: return
+        when (previous.state.value.phase) {
+            CallPhase.AwaitingPermissions -> previous.cancelJoin()
+            CallPhase.Joining, CallPhase.Waiting, CallPhase.InCall -> previous.leave()
+            else -> {}
+        }
     }
 
     fun leaveCall() {

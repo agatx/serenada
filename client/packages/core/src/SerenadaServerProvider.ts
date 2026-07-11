@@ -122,6 +122,20 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
         this.signaling.setTurnRefreshGate(gate);
     }
 
+    /**
+     * Gate the durable recovery record write on the session's foreground role.
+     * A held call keeps its in-memory + in-tab reconnect identity but does not
+     * own the single durable record (design §5).
+     */
+    setDurableRecoveryGate(gate: (() => boolean) | null): void {
+        this.signaling.setDurableRecoveryGate(gate);
+    }
+
+    /** Persist the durable recovery record now (resume-to-foreground). */
+    persistDurableRecoveryNow(): void {
+        this.signaling.persistDurableRecoveryNow();
+    }
+
     async getIceServers(): Promise<RTCIceServer[]> {
         const token = this.currentTurnToken?.trim();
         if (!token) {
@@ -364,6 +378,7 @@ function mapParticipant(participant: RoomParticipant): SignalingProviderParticip
         appPeerId: participant.peerId,
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
+        held: participant.held,
         connectionStatus: participant.connectionStatus,
         capabilities: participant.capabilities,
         mediaPolicy: participant.mediaPolicy,

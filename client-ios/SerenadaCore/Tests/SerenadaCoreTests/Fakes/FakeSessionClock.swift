@@ -12,6 +12,12 @@ final class FakeSessionClock: SessionClock {
         pendingSleeps.count
     }
 
+    /// Live repeating timers (poller schedules). Lets tests assert which
+    /// foreground-only pollers are running across hold/resume.
+    var repeatingTimerCount: Int {
+        repeatingEntries.count
+    }
+
     func nowMs() -> Int64 {
         currentTimeMs
     }

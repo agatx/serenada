@@ -40,9 +40,11 @@ import app.serenada.core.call.SignalingMessageRouter
 import app.serenada.core.call.AudioLevelPoller
 import app.serenada.core.call.StatsPoller
 import app.serenada.core.call.DefaultAudioCoordinator
+import app.serenada.core.call.CallMediaRole
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.ContentTypeWire
+import app.serenada.core.call.MediaActivationState
 import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.LocalFrameSnapshotCapture
 import app.serenada.core.call.ParticipantCapabilities
@@ -112,6 +114,25 @@ class SerenadaSession internal constructor(
     private val logger: SerenadaLogger? = null,
     private val displayName: String? = null,
     private val peerId: String? = null,
+    /**
+     * Initial foreground-media role (multi-call session, Phase 2). The public
+     * [SerenadaCore.join] always passes [CallMediaRole.FOREGROUND]; the (Phase 3)
+     * registry passes [CallMediaRole.HELD] to create a held call that owns no
+     * capture and holds no lease. A HELD initial role does NOT activate the audio
+     * coordinator/controller and does NOT start capture — it only creates stable
+     * senders (contract §5) and connects signaling. Defaults to FOREGROUND so
+     * existing construction is unchanged.
+     */
+    private val initialMediaRole: CallMediaRole = CallMediaRole.FOREGROUND,
+    /**
+     * When true, acquire the process-wide foreground lease (mode
+     * [ForegroundArbiterMode.DIRECT]) before activating media — the route for a
+     * public single-call [SerenadaCore.join]. A second concurrent direct join
+     * while one is live throws [ForegroundLeaseUnavailable]. Held-initial joins
+     * never acquire the lease; the (Phase 3) registry manages the lease itself and
+     * leaves this false.
+     */
+    private val acquireForegroundLease: Boolean = false,
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -358,6 +379,16 @@ class SerenadaSession internal constructor(
             if (roomState != null) {
                 currentRoomState = roomState
                 hostCid = roomState.hostCid
+                // Drop the live-relay media-state cache: this `joined` snapshot
+                // carries the server's LATEST per-participant audio/video/held
+                // (stored by the same handler that relays them), so it is at least
+                // as fresh as any relay seen before a disconnect. Without this, a
+                // stale cached `held:true` from before a reconnect outranks the
+                // snapshot in the `peerState?.held ?: participant?.held` merge and
+                // a peer that resumed while this client was detached stays rendered
+                // "on hold" until its next broadcast. Fresh joins have an empty
+                // cache (reattach-only in effect).
+                remoteMediaStates.clear()
                 updateParticipants(roomState)
             }
             persistRecoveryRecord()
@@ -387,11 +418,12 @@ class SerenadaSession internal constructor(
         onContentStateReceived = { fromCid, active, contentType, revision ->
             handleRemoteContentState(fromCid, active, contentType, revision)
         },
-        onMediaStateReceived = { fromCid, audioEnabled, videoEnabled ->
+        onMediaStateReceived = { fromCid, audioEnabled, videoEnabled, held ->
             val existing = remoteMediaStates[fromCid]
             remoteMediaStates[fromCid] = RemoteMediaState(
                 audioEnabled = audioEnabled ?: existing?.audioEnabled,
                 videoEnabled = videoEnabled ?: existing?.videoEnabled,
+                held = held ?: existing?.held,
             )
             refreshRemoteParticipants()
         },
@@ -511,6 +543,124 @@ class SerenadaSession internal constructor(
     private val videoCaptureSupported: Boolean = videoMediaEnabled && availableCameraModes.isNotEmpty()
     private var userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
     private var isVideoPausedByProximity = false
+
+    // --- Multi-call session primitives (Phase 1) ---
+    // mediaRole + mediaActivationState are two of the three orthogonal axes
+    // (membership phase is the existing CallPhase). A single-call session is
+    // FOREGROUND/ACTIVE for its whole life; hold/resume toggle these. desired*
+    // are the single source of user intent and survive hold; actual* reflect
+    // what peers observe now (a held call always publishes false/false).
+    // Seed from the requested initial role (Phase 2). A FOREGROUND single-call
+    // session is FOREGROUND/ACTIVE for its whole life; a HELD-initial session
+    // (registry, Phase 3) starts HELD/INACTIVE and owns no capture or lease.
+    private var mediaRole: CallMediaRole = initialMediaRole
+    private var mediaActivationState: MediaActivationState =
+        if (initialMediaRole == CallMediaRole.HELD) MediaActivationState.INACTIVE else MediaActivationState.ACTIVE
+    private var desiredAudioEnabled: Boolean = config.defaultAudioEnabled
+    private var desiredVideoMode: LocalCameraMode? =
+        if (videoCaptureSupported && config.defaultVideoEnabled) {
+            availableCameraModes.firstOrNull()
+        } else {
+            null
+        }
+    private var actualAudioPublished: Boolean = false
+    private var actualVideoPublished: Boolean = false
+
+    // Monotonic generation bumped for every hold/resume role transition (FIX N2).
+    // A resume captures the generation at its start; if a concurrent hold runs
+    // while resume awaits the (async) audio coordinator, the hold bumps this
+    // counter so the resume re-check detects it was superseded and rolls back to
+    // held instead of committing foreground (stale-activation race fence).
+    // Phase 2 feeds this from the arbiter operation generation via the token-gated
+    // activateForeground; the un-gated Phase-1 hold/resume primitives keep
+    // self-incrementing it for the local suspend/resume race.
+    private var mediaOpGeneration: Long = 0
+
+    /**
+     * The arbiter-minted lease owner token while this call holds (or is
+     * activating) the foreground media lease, else null. It is the SECOND fence
+     * (alongside [mediaOpGeneration]) for a late activation callback: an
+     * [activateForeground] result is honored only if BOTH the current generation
+     * AND this token still match (contract §3 fencing). For a single-call
+     * [SerenadaCore.join] (direct mode) the session acquires + releases its own
+     * lease; for a held-initial join it stays null until the (Phase 3) registry
+     * activates it via [activateForeground].
+     */
+    private var foregroundOwnerToken: ForegroundOwnerToken? = null
+
+    /**
+     * The lease token this session acquired for ITS OWN account via a direct
+     * single-call [SerenadaCore.join] (mode DIRECT), or null. DISTINCT from
+     * [foregroundOwnerToken] (the registry-issued fence token): this is the only
+     * lease the session self-releases, and it does so in [resetResources] /
+     * [close]. A registry-activated session never sets this, so teardown never
+     * frees a registry-owned lease (parity with iOS `directLeaseToken`). Without
+     * the split, teardown of a registry-activated session would call
+     * [ForegroundMediaArbiter.releaseLease] on a lease the registry owns.
+     */
+    private var directLeaseToken: ForegroundOwnerToken? = null
+
+    // True only during the media-apply phase of a resume (FIX M3). While set,
+    // broadcastLocalMediaState() is suppressed so the intermediate updates from
+    // updateEffectiveMicState()/applyLocalVideoPreference() do not emit redundant
+    // participant_media_state messages. Resume commits FOREGROUND first, applies
+    // media silently, then emits exactly one final held=false.
+    private var suppressMediaStateBroadcast: Boolean = false
+
+    /**
+     * True while this session owns no foreground media (Core Invariant 2: a held
+     * call owns NO capture). User media toggles consult this to update `desired*`
+     * intent ONLY — no capture, no camera restart, no broadcast — while held.
+     */
+    private val isHeld: Boolean
+        get() = mediaRole == CallMediaRole.HELD
+
+    /** Test-only accessor: current media role. */
+    internal fun mediaRoleForTest(): CallMediaRole = mediaRole
+
+    /** Test-only accessor: current media activation state. */
+    internal fun mediaActivationStateForTest(): MediaActivationState = mediaActivationState
+
+    /** Test-only accessor: desired audio intent (survives hold). */
+    internal fun desiredAudioEnabledForTest(): Boolean = desiredAudioEnabled
+
+    /** Test-only accessor: desired video mode (null = off). */
+    internal fun desiredVideoModeForTest(): LocalCameraMode? = desiredVideoMode
+
+    /** Test-only accessor: actual published audio (false while held). */
+    internal fun actualAudioPublishedForTest(): Boolean = actualAudioPublished
+
+    /** Test-only accessor: actual published video (false while held). */
+    internal fun actualVideoPublishedForTest(): Boolean = actualVideoPublished
+
+    /** Test-only accessor: current foreground lease owner token (null = none). */
+    internal fun foregroundOwnerTokenForTest(): ForegroundOwnerToken? = foregroundOwnerToken
+
+    /**
+     * Test-only: overwrite the lease owner token mid-flight to model a
+     * superseding op (e.g. a switch rollback that re-activates the old call under
+     * a fresh token while a stuck activation callback from the failed new call is
+     * still in flight). Lets a test exercise the token fence independently of the
+     * generation fence (contract §3 double-fence).
+     */
+    internal fun setForegroundOwnerTokenForTest(token: ForegroundOwnerToken?) {
+        foregroundOwnerToken = token
+    }
+
+    /**
+     * Test-only: invoke the video sink the audio-environment callbacks (proximity
+     * / route change) reach. Lets a test assert the held SINK guard refuses to
+     * restart camera capture via the indirect path (FIX A-2), independent of how
+     * the real coordinator fires the callback.
+     */
+    internal fun applyLocalVideoPreferenceForTest() = applyLocalVideoPreference()
+
+    /**
+     * Test-only: invoke the mic sink the audio-environment callbacks reach. Lets a
+     * test assert a held call cannot re-enable mic capture via an audio-environment
+     * callback (FIX A-2 audit).
+     */
+    internal fun updateEffectiveMicStateForTest() = updateEffectiveMicState()
     private val isMediaEngineInjected = mediaEngine != null
     // Owned at the session level so that engine recreation (or release on call end) does not
     // invalidate the EglBase.Context handed to Compose AndroidView factories. Releasing the
@@ -891,19 +1041,46 @@ class SerenadaSession internal constructor(
     /** Toggle local audio on or off. */
     fun toggleAudio() {
         assertMainThread()
-        setMicMuted(!userMuted)
+        // While held, `userMuted` is frozen (no capture); toggle relative to the
+        // desired intent so a held toggle flips the intent applied on resume.
+        val currentlyEnabled = if (isHeld) desiredAudioEnabled else !userMuted
+        setMicMuted(currentlyEnabled)
     }
 
     /** Toggle local video on or off. */
     fun toggleVideo() {
         assertMainThread()
         if (!videoCaptureSupported) return
-        val requestedEnabled = !_state.value.localVideoEnabled
+        // While held, `localVideoEnabled` is false (no capture); toggle relative to
+        // the desired intent so a held toggle flips the intent applied on resume.
+        val requestedEnabled = if (isHeld) desiredVideoMode == null else !_state.value.localVideoEnabled
+        // While held this session owns no capture (Core Invariant 2): handle held
+        // FIRST — record the desired intent ONLY, with NO permission prompt, NO
+        // camera restart, NO broadcast. Resume applies the latest intent (and
+        // prompts for camera permission then if still needed). Requesting
+        // permission here would surface a prompt for a call that owns no media and
+        // could return before recording the user's intent (FIX A-1).
+        if (isHeld) {
+            userPreferredVideoEnabled = requestedEnabled
+            desiredVideoMode = if (requestedEnabled) {
+                webRtcEngine.activeCameraMode() ?: _state.value.localCameraMode
+            } else {
+                null
+            }
+            return
+        }
         if (requestedEnabled && !hasCameraPermission() && !_diagnostics.value.isScreenSharing) {
             requestPermissions(listOf(MediaCapability.CAMERA))
             return
         }
         userPreferredVideoEnabled = requestedEnabled
+        // Track user intent for hold/resume (Phase 1): off when disabled, else
+        // the active camera mode.
+        desiredVideoMode = if (requestedEnabled) {
+            webRtcEngine.activeCameraMode() ?: _state.value.localCameraMode
+        } else {
+            null
+        }
         applyLocalVideoPreference()
         broadcastLocalMediaState()
     }
@@ -912,6 +1089,16 @@ class SerenadaSession internal constructor(
     fun flipCamera() {
         assertMainThread()
         if (availableCameraModes.size <= 1) return
+        // While held this session owns no camera (Core Invariant 2): advance the
+        // desired camera mode ONLY (no capture, no broadcast) so resume restores
+        // the framing. A held flip with video off is a no-op.
+        if (isHeld) {
+            val current = desiredVideoMode ?: return
+            val idx = availableCameraModes.indexOf(current)
+            if (idx < 0) return
+            desiredVideoMode = availableCameraModes[(idx + 1) % availableCameraModes.size]
+            return
+        }
         val sharing = _diagnostics.value.isScreenSharing
         if (config.enableIndependentContentVideo) {
             // Independent mode: the camera is a separate track, so flipping it
@@ -934,6 +1121,13 @@ class SerenadaSession internal constructor(
     fun setCameraMode(mode: LocalCameraMode) {
         assertMainThread()
         if (mode !in availableCameraModes) return
+        // While held this session owns no camera (Core Invariant 2): record the
+        // desired camera mode ONLY (no capture, no broadcast) so resume restores
+        // it. A held setCameraMode with video off is a no-op (intent stays off).
+        if (isHeld) {
+            if (desiredVideoMode != null) desiredVideoMode = mode
+            return
+        }
         // The session's state copy of the camera mode is posted asynchronously,
         // so flipping in a loop must read the engine-side mode, which flipCamera
         // updates synchronously.
@@ -947,6 +1141,14 @@ class SerenadaSession internal constructor(
     /** Start screen sharing using the given media projection intent. */
     fun startScreenShare(intent: Intent) {
         assertMainThread()
+        // Held media owns no screen share (Core Invariant 2): refuse while held so
+        // a held session never starts MediaProjection capture or broadcasts a
+        // content/participant_media_state. Screen share is foreground-only and is
+        // NOT auto-restored on resume — the user must restart it.
+        if (isHeld) {
+            logger?.log(SerenadaLogLevel.INFO, "Session", "Ignoring startScreenShare while held")
+            return
+        }
         if (!videoMediaEnabled) return
         if (_diagnostics.value.isScreenSharing) return
         if (config.enableIndependentContentVideo) {
@@ -1259,7 +1461,12 @@ class SerenadaSession internal constructor(
 
     internal fun start() {
         assertMainThread()
-        joinFlowCoordinator.start(hasRequiredPermissions())
+        // A held-initial join (registry, Phase 2) owns no capture and must NOT
+        // request camera/mic permissions — permission prompts belong to the call
+        // being foregrounded. Skip the permission gate so it goes straight to the
+        // held join path (createSendersForHold, no capture).
+        val hasPermissions = initialMediaRole == CallMediaRole.HELD || hasRequiredPermissions()
+        joinFlowCoordinator.start(hasPermissions)
     }
 
     private fun startJoinInternal() {
@@ -1303,11 +1510,46 @@ class SerenadaSession internal constructor(
         )
         updateDiagnostics(CallDiagnostics())
 
+        if (initialMediaRole == CallMediaRole.HELD) {
+            startHeldJoinInternal(joinAttemptId)
+            return
+        }
+
+        // Foreground single-call join. Route through the process-wide arbiter
+        // (mode DIRECT) BEFORE activating any media so a second concurrent direct
+        // join fails fast with ForegroundLeaseUnavailable and only one call ever
+        // owns capture/audio (contract §2; Core Invariant 1). Held-initial joins
+        // and the registry leave acquireForegroundLease false (the registry owns
+        // the lease itself in Phase 3). This is the session's OWN lease, stored in
+        // directLeaseToken (NOT foregroundOwnerToken, which is the registry-issued
+        // fence token); it is the only lease the session self-releases, in
+        // resetResources.
+        if (acquireForegroundLease && directLeaseToken == null) {
+            try {
+                directLeaseToken = ForegroundMediaArbiter.acquireForeground(
+                    ownerId = roomId,
+                    mode = ForegroundArbiterMode.DIRECT,
+                    modeOwnerRef = this,
+                )
+            } catch (e: ForegroundLeaseUnavailable) {
+                logger?.log(SerenadaLogLevel.ERROR, "Media", "Foreground lease unavailable: ${e.message}")
+                handleError(CallError.Unknown(e.message ?: "Foreground media is owned by another call"))
+                return
+            }
+        }
+
         acquirePerformanceLocks()
         providerScope.launch {
             try {
                 withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
                     audioCoordinatorMutex.withLock {
+                        // Bind the DIRECT single-call lease (if any) so the default
+                        // coordinator self-fences (Phase 4, contract §6). On the
+                        // single-call path this session is always the lease owner, so
+                        // nothing is ever dropped; binding only matters once a second
+                        // call can supersede it. directLeaseToken is null on the
+                        // no-arbiter / fake path, leaving the fence in pass-through.
+                        bindDefaultCoordinatorLease(directLeaseToken, mediaOpGeneration)
                         audioCoordinator.activateCallSession(config.audioIntent)
                     }
                 }
@@ -1329,8 +1571,15 @@ class SerenadaSession internal constructor(
                 localMediaReadyForNegotiation = true
                 userMuted = !config.defaultAudioEnabled
                 sessionActivated = true
+                // Single-call start: this session owns foreground media and is
+                // fully active (Phase 1). actual* track updateEffectiveMicState /
+                // applyLocalVideoPreference below.
+                mediaRole = CallMediaRole.FOREGROUND
+                mediaActivationState = MediaActivationState.ACTIVE
                 updateEffectiveMicState()
                 applyLocalVideoPreference()
+                actualAudioPublished = _state.value.localAudioEnabled
+                actualVideoPublished = _state.value.localVideoEnabled
                 startRemoteVideoStatePolling()
                 peerNegotiationEngine.onLocalMediaReady()
                 joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
@@ -1340,6 +1589,60 @@ class SerenadaSession internal constructor(
                 logger?.log(SerenadaLogLevel.ERROR, "Media", "Failed to start local media: ${e.message}")
                 handleError(CallError.Unknown(e.message ?: "Local media startup failed"))
             }
+        }
+    }
+
+    /**
+     * Held-initial join (multi-call session, Phase 2; registry-internal). Unlike
+     * the foreground path this:
+     * - activates NO audio coordinator and NO audio controller (held calls own no
+     *   audio routing/focus; Core Invariant 2),
+     * - starts NO mic/camera capture (the OS never reports a held session
+     *   capturing),
+     * - creates stable audio + video transceivers/senders with a null track
+     *   ([SessionMediaEngine.createSendersForHold]) so a later resume attaches
+     *   fresh tracks with no SDP renegotiation (contract §5 / Core Invariant 3),
+     * - deafens remote playout, and broadcasts `held=true` after senders exist,
+     * - still connects signaling and preserves peer-connection identity.
+     * The session sits HELD/INACTIVE until the registry foregrounds it via
+     * [activateForeground].
+     */
+    private fun startHeldJoinInternal(joinAttemptId: Long) {
+        joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
+        try {
+            // Create stable senders without capture. A held call publishes
+            // nothing (actual* stay false); desired* survive for resume.
+            webRtcEngine.createSendersForHold()
+            // Remote playout is silenced while held (defense in depth: a peer that
+            // joins/renegotiates during hold inherits the deafen at slot creation).
+            webRtcEngine.setRemotePlaybackEnabled(false)
+            localMediaReadyForNegotiation = true
+            userMuted = !config.defaultAudioEnabled
+            // Held: no capture, no audio session — but signaling/negotiation run.
+            sessionActivated = false
+            mediaRole = CallMediaRole.HELD
+            mediaActivationState = MediaActivationState.INACTIVE
+            actualAudioPublished = false
+            actualVideoPublished = false
+            // Reflect held in published local state so peers and UI converge.
+            updateState(
+                _state.value.copy(
+                    localAudioEnabled = false,
+                    localVideoEnabled = false,
+                    localCameraEnabled = false,
+                )
+            )
+            peerNegotiationEngine.onLocalMediaReady()
+            joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
+            joinFlowCoordinator.ensureSignalingConnection()
+            // Broadcast held AFTER senders exist (local-state-then-broadcast). The
+            // builder forces audio=false/video=false so an old peer degrades to
+            // muted/camera-off, never a wrong "live" state.
+            runCatching { broadcastLocalMediaState(held = true) }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            logger?.log(SerenadaLogLevel.ERROR, "Media", "Failed to start held media: ${e.message}")
+            handleError(CallError.Unknown(e.message ?: "Held media startup failed"))
         }
     }
 
@@ -1355,6 +1658,520 @@ class SerenadaSession internal constructor(
             )
         )
         requestPermissions(permissions)
+    }
+
+    // --- Internal: Multi-call hold / resume (Phase 1) ---
+    //
+    // These are the session-internal mechanics behind the eventual token-gated
+    // releaseForeground / activateForeground (Phase 2). They take no token this
+    // phase. Both run on the main thread. They preserve signaling, reconnect
+    // identity, and peer-connection identity; only foreground media ownership is
+    // suspended/restored. desired* are preserved.
+
+    /**
+     * Drive this session to a fully-held media state: stop screen share, release
+     * local capture (mic + camera), deafen remote audio, deactivate the audio
+     * controller + coordinator, release foreground-media wake locks, and
+     * broadcast `held=true` AFTER capture has stopped.
+     *
+     * Idempotent: a second call is a no-op. Must not throw after partial release.
+     */
+    internal suspend fun applyHeldRoleInternal() {
+        assertMainThread()
+        // Bump the op generation FIRST so an in-flight resume that awaits the
+        // async audio coordinator detects supersession on its post-await fence
+        // and rolls back instead of committing foreground (FIX N2).
+        mediaOpGeneration += 1
+        // Idempotent no-op only when fully held AND no resume is mid-flight. While
+        // a resume is ACTIVATING the role is still HELD but foreground resources
+        // are (being) re-acquired, so we must still drive them back down.
+        if (mediaRole == CallMediaRole.HELD && mediaActivationState != MediaActivationState.ACTIVATING) return
+        mediaRole = CallMediaRole.HELD
+        mediaActivationState = MediaActivationState.INACTIVE
+        suspendForegroundMediaResources()
+        // Broadcast held AFTER capture has stopped (local-stop-then-broadcast).
+        runCatching { broadcastLocalMediaState(held = true) }
+    }
+
+    /**
+     * Tear down all foreground media resources to the fully-held state: stop
+     * screen share, release local capture, deafen remote audio, detach renderers,
+     * deactivate the audio controller + coordinator, release wake locks, pause
+     * pollers, and reflect held in published local state. Does NOT broadcast — the
+     * caller controls broadcast ordering (hold broadcasts held=true; a resume
+     * rollback stays silent). Each step is best-effort (must not throw after a
+     * partial release).
+     */
+    private suspend fun suspendForegroundMediaResources() {
+        // 1. Stop screen share first (foreground-only; not restored on resume).
+        //    Broadcast content_state:false after the engine stop succeeds so peers
+        //    don't retain stale active content while we go held — the normal
+        //    stopScreenShare() path does the same (FIX A-3).
+        runCatching {
+            if (_diagnostics.value.isScreenSharing) {
+                webRtcEngine.stopScreenShare()
+                updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
+                broadcastLocalContentState(false)
+            }
+        }
+        // 2. Release local capture (mic + camera) — capture actually stops.
+        runCatching { webRtcEngine.suspendLocalMediaForHold() }
+        // 3. Deafen remote audio playout.
+        runCatching { webRtcEngine.setRemotePlaybackEnabled(false) }
+        // 4. Detach/pause visible renderers.
+        runCatching { webRtcEngine.detachRenderersForHold() }
+        // 5. Deactivate the audio controller, then the coordinator (mirror the
+        //    teardown ordering used in resetResources). The coordinator op is the
+        //    awaited async boundary; a cancellation here MUST propagate (FIX N3).
+        runCatching { callAudioSessionController.deactivate() }
+        runIgnoringNonCancellation { deactivateAudioCoordinatorForHold() }
+        // 6. Release foreground-media wake locks.
+        runCatching { releasePerformanceLocks() }
+        // 7. Pause foreground-only pollers.
+        runCatching { stopRemoteVideoStatePolling() }
+
+        sessionActivated = false
+        actualAudioPublished = false
+        actualVideoPublished = false
+        // Reflect held in published local state so peers and UI converge.
+        updateState(_state.value.copy(localAudioEnabled = false, localVideoEnabled = false, localCameraEnabled = false))
+    }
+
+    /**
+     * Drive this session back to foreground: activate the audio coordinator +
+     * controller, resume local capture per desired intent, re-enable remote
+     * playout, restart foreground pollers, and broadcast `held=false` AFTER
+     * media is flowing.
+     *
+     * Idempotent: a second call while already foreground is a no-op.
+     */
+    internal suspend fun applyForegroundRoleInternal(
+        // Phase 2 token-gated fence (contract §3). When non-null, the post-await
+        // result is honored only if BOTH the current generation AND this token
+        // still match. Null on the Phase-1 un-gated path, where only the
+        // self-incrementing generation fences a local hold/resume race.
+        expectedToken: ForegroundOwnerToken? = null,
+        expectedGeneration: Long? = null,
+    ) {
+        assertMainThread()
+        if (mediaRole == CallMediaRole.FOREGROUND) return
+        // Capture the op generation for this resume. A concurrent hold that lands
+        // while we await the async audio coordinator bumps the generation; the
+        // post-await fence below detects it and rolls back to held instead of
+        // committing foreground (FIX N2). On the token-gated path the caller has
+        // already seeded mediaOpGeneration with the arbiter generation; on the
+        // un-gated path we self-increment.
+        if (expectedGeneration == null) {
+            mediaOpGeneration += 1
+        }
+        val gen = expectedGeneration ?: mediaOpGeneration
+        mediaActivationState = MediaActivationState.ACTIVATING
+
+        // 1. Activate the coordinator, then the controller (mirror start order).
+        //    The coordinator activation is the awaited async boundary; a cancellation
+        //    here MUST propagate (FIX N3: do not swallow CancellationException).
+        //    Unlike the (best-effort, no-throw) hold/deactivate op, a resume's
+        //    coordinator activation FAILURE/timeout must NOT be swallowed (FIX A):
+        //    if it failed, this session never took process audio, so committing
+        //    foreground/active would leave an orphaned (silent) call holding the
+        //    lease. Capture the outcome and fail the activation when it didn't
+        //    succeed, so the registry's withTimeout/catch rolls back to the
+        //    previous call.
+        val coordinatorActivated = activateAudioCoordinatorForResume()
+        // FENCE (double-fence; contract §3): if a hold superseded this resume while
+        // we awaited the coordinator, roll back to fully-held and bail — do NOT
+        // commit foreground or broadcast held=false. The hold that superseded us
+        // already broadcast held=true. A late callback is honored only if BOTH the
+        // generation AND (when token-gated) the lease owner token still match;
+        // generation alone is insufficient because a rollback re-activates the old
+        // call under a fresh generation while a stuck callback could match it.
+        val supersededByGeneration = gen != mediaOpGeneration
+        // The arbiter is the source of truth for who currently owns the lease, not
+        // the session's local field: after a rollback the local field can still
+        // equal a stale token, so fence against the arbiter's live owner (parity
+        // with web `foregroundArbiter.isCurrentOwner(token)`).
+        val supersededByToken = expectedToken != null && !ForegroundMediaArbiter.isCurrentOwner(expectedToken)
+        if (supersededByGeneration || supersededByToken) {
+            mediaRole = CallMediaRole.HELD
+            mediaActivationState = MediaActivationState.INACTIVE
+            suspendForegroundMediaResources()
+            return
+        }
+        // FIX A: the coordinator activation actually failed/timed out (and we are
+        // still the current op + owner). Do NOT commit foreground. Tear back down
+        // to fully-held, mark the activation FAILED, and surface the failure so the
+        // token-gated activateForeground throws and the registry rolls back to the
+        // previous call (no orphaned lease holder, single-lease invariant kept).
+        if (!coordinatorActivated) {
+            suspendForegroundMediaResources()
+            mediaRole = CallMediaRole.HELD
+            mediaActivationState = MediaActivationState.FAILED
+            return
+        }
+        runCatching { callAudioSessionController.activate() }
+        // Re-acquire the CPU partial wake lock that suspendForegroundMediaResources
+        // released (step 6). The only other acquire site is startJoinInternal's
+        // foreground join path, which registry-managed (held-initial) sessions never
+        // run — without this, a call foregrounded via the registry (or any call
+        // after its first hold/resume cycle) runs unlocked and screen-off audio can
+        // die when the CPU dozes. acquirePerformanceLocks is idempotent (isHeld).
+        runCatching { acquirePerformanceLocks() }
+        // 2. Resume local capture per desired intent (no renegotiation).
+        runCatching { webRtcEngine.resumeLocalMediaFromHold(desiredAudioEnabled, desiredVideoMode) }
+        // 3. Re-enable remote playout.
+        runCatching { webRtcEngine.setRemotePlaybackEnabled(true) }
+        // 3b. Re-attach the visible renderers detached on hold (local preview +
+        //     remote camera/content sinks).
+        runCatching { webRtcEngine.reattachRenderersAfterResume() }
+        // 4. Restart foreground-only pollers.
+        runCatching { startRemoteVideoStatePolling() }
+
+        // 5. Commit the FOREGROUND role BEFORE applying media (FIX M3). Restoring
+        //    intent calls updateEffectiveMicState()/applyLocalVideoPreference(),
+        //    which broadcast on change; were the role still HELD they would emit
+        //    redundant held=true messages before the final held=false. Commit the
+        //    role first AND suppress the intermediate broadcasts so exactly one
+        //    held=false is sent once media is flowing.
+        mediaRole = CallMediaRole.FOREGROUND
+        mediaActivationState = MediaActivationState.ACTIVE
+        sessionActivated = true
+        userMuted = !desiredAudioEnabled
+        userPreferredVideoEnabled = desiredVideoMode != null
+        suppressMediaStateBroadcast = true
+        try {
+            updateEffectiveMicState()
+            applyLocalVideoPreference()
+        } finally {
+            suppressMediaStateBroadcast = false
+        }
+
+        actualAudioPublished = _state.value.localAudioEnabled
+        actualVideoPublished = _state.value.localVideoEnabled
+
+        // 6. Broadcast exactly one held=false AFTER media is flowing
+        //    (attach-then-broadcast).
+        runCatching { broadcastLocalMediaState(held = false) }
+
+        // 7. Now foreground: persist the durable recovery record from the in-memory
+        //    reconnect credentials the held session kept but did NOT write (recovery
+        //    is foreground-only; multi-call-session-design ~966-985). Persisting on
+        //    the role flip closes the gap so the stored record describes the call the
+        //    user is actually on. No-op if the join handshake never produced a token.
+        persistRecoveryRecord()
+    }
+
+    /**
+     * Like [runCatching] but NEVER swallows [CancellationException] (FIX N3):
+     * structured-concurrency cancellation must propagate so an aborted hold/resume
+     * does not silently continue to (de)activate media. All other failures are
+     * absorbed (hold/resume steps are best-effort).
+     */
+    private suspend fun runIgnoringNonCancellation(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold/resume step failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Deactivate the audio coordinator for hold (awaited; mirrors [resetResources]).
+     * Best-effort/no-throw: hold MUST NOT throw after a partial release, so a
+     * timeout/failure here is logged at WARNING and swallowed (a CancellationException
+     * still propagates so an aborted hold stops cleanly).
+     */
+    private suspend fun deactivateAudioCoordinatorForHold() {
+        // Capture the fence generation at REQUEST time (Phase 4; contract §6) so a
+        // re-activation that runs while this hold awaits the mutex/coordinator cannot
+        // let the restore decision read a refreshed generation and clobber the newer
+        // attempt's OS audio.
+        val fenceGeneration = defaultCoordinatorGenerationSnapshot()
+        try {
+            withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                audioCoordinatorMutex.withLock { deactivateDefaultCoordinatorFenced(fenceGeneration) }
+            }
+        } catch (e: TimeoutCancellationException) {
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: audio coordinator deactivation timed out")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: audio coordinator deactivation failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Thread the foreground-lease [token] + operation [generation] into the
+     * default audio coordinator so its delayed/async callbacks fence against the
+     * arbiter's live owner (Phase 4; contract §6). No-op for a host-supplied custom
+     * coordinator: it owns its own audio policy and the SDK does not reach into it
+     * (this keeps [SerenadaAudioCoordinator]'s public contract intact and the
+     * custom-coordinator adapter working). Called inside [audioCoordinatorMutex],
+     * immediately before each `activateCallSession`, so the binding is in place
+     * before any callback the coordinator could schedule.
+     */
+    private fun bindDefaultCoordinatorLease(token: ForegroundOwnerToken?, generation: Long) {
+        (audioCoordinator as? DefaultAudioCoordinator)?.bindForegroundLease(token, generation)
+    }
+
+    /**
+     * Snapshot the default coordinator's CURRENT operation generation at REQUEST time
+     * (Phase 4; contract §6). The caller captures this synchronously BEFORE launching
+     * an async deactivation Job (or before awaiting the mutex), then passes it to
+     * [deactivateDefaultCoordinatorFenced] so the restore decision fences against the
+     * generation in effect when the deactivation was ASKED FOR — not the value the
+     * coordinator holds when the Job finally runs, which a same-coordinator
+     * re-activation may have advanced. Returns 0L for a host-supplied custom
+     * coordinator (it owns its own audio policy; the fence is a no-op there). Mirrors
+     * iOS's request-time `installedLeaseSnapshot()`.
+     */
+    private fun defaultCoordinatorGenerationSnapshot(): Long =
+        (audioCoordinator as? DefaultAudioCoordinator)?.leaseGenerationSnapshot() ?: 0L
+
+    /**
+     * Deactivate the audio coordinator, fencing the default coordinator's OS-audio
+     * restore against [requestGeneration] captured at REQUEST time (Phase 4; contract
+     * §6). A host-supplied custom coordinator owns its own policy, so it gets the
+     * plain [SerenadaAudioCoordinator.deactivateCallSession] (the SDK does not reach
+     * into it; parity with [bindDefaultCoordinatorLease]).
+     */
+    private suspend fun deactivateDefaultCoordinatorFenced(requestGeneration: Long) {
+        val defaultCoordinator = audioCoordinator as? DefaultAudioCoordinator
+        if (defaultCoordinator != null) {
+            defaultCoordinator.deactivateCallSession(requestGeneration)
+        } else {
+            audioCoordinator.deactivateCallSession()
+        }
+    }
+
+    /**
+     * Activate the audio coordinator for resume (mirrors [startJoinInternal]).
+     * Returns true iff the coordinator activation actually completed; false on
+     * timeout/failure (FIX A). A CancellationException still propagates (FIX N3: an
+     * aborted resume must stop cleanly). Unlike the hold/deactivate path, the
+     * outcome is NOT swallowed: the caller fails the foreground activation when this
+     * returns false so no session commits foreground without owning process audio.
+     */
+    private suspend fun activateAudioCoordinatorForResume(): Boolean {
+        return try {
+            withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                audioCoordinatorMutex.withLock {
+                    // Bind the lease this resume is activating under so the default
+                    // coordinator's delayed/async callbacks fence against it (Phase 4,
+                    // contract §6): a switch that hands the foreground to a newer call
+                    // makes this (now-superseded) session's stale route/ducking/route-
+                    // monitor/proximity callbacks no-ops.
+                    bindDefaultCoordinatorLease(foregroundOwnerToken, mediaOpGeneration)
+                    audioCoordinator.activateCallSession(config.audioIntent)
+                }
+            }
+            true
+        } catch (e: TimeoutCancellationException) {
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Resume: audio coordinator activation timed out")
+            false
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Resume: audio coordinator activation failed: ${e.message}")
+            false
+        }
+    }
+
+    // --- Internal: Token-gated foreground contract (Phase 2; contract §3) ---
+    //
+    // Registry-owned, token-gated wrappers around the Phase-1 hold/resume
+    // mechanics. The (Phase 3) registry calls these with an arbiter-minted owner
+    // token + operation generation; public single-call integrations never see
+    // them (they keep using join()/leave() + the audio/video toggles).
+
+    /** Result of [preflightForeground]: a pure permission/precondition check. */
+    enum class ForegroundPreflight {
+        /** Desired media can be foregrounded with no prompt. */
+        OK,
+
+        /** A required mic/camera grant for the desired media is missing. */
+        NEEDS_PERMISSION,
+
+        /** A non-permission precondition failed (e.g. session torn down). */
+        FAILED,
+    }
+
+    /**
+     * PURE preflight check (contract §3): can this call activate foreground media
+     * with its DESIRED media WITHOUT prompting or capturing? Opens NO permission
+     * prompt and starts NO capture — the host owns the prompt.
+     *
+     * - [ForegroundPreflight.OK] when the desired media needs no permission: if
+     *   `desiredAudioEnabled == false` AND `desiredVideoMode == off`, a fully
+     *   muted, camera-off call can foreground with no prompt.
+     * - [ForegroundPreflight.NEEDS_PERMISSION] when a required grant (RECORD_AUDIO
+     *   for desired audio, CAMERA for a desired camera mode) is not already
+     *   granted.
+     * - [ForegroundPreflight.FAILED] for non-permission preconditions.
+     */
+    fun preflightForeground(): ForegroundPreflight {
+        assertMainThread()
+        if (isInactiveForForeground()) return ForegroundPreflight.FAILED
+        // A fully muted, camera-off call requires no device permission.
+        val needsMic = desiredAudioEnabled
+        val needsCamera = desiredVideoMode != null &&
+            desiredVideoMode != LocalCameraMode.SCREEN_SHARE &&
+            videoCaptureSupported
+        if (!needsMic && !needsCamera) return ForegroundPreflight.OK
+        val required = buildList {
+            if (needsMic) add(android.Manifest.permission.RECORD_AUDIO)
+            if (needsCamera) add(android.Manifest.permission.CAMERA)
+        }
+        val allGranted = required.all { permission ->
+            appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        }
+        return if (allGranted) ForegroundPreflight.OK else ForegroundPreflight.NEEDS_PERMISSION
+    }
+
+    private fun isInactiveForForeground(): Boolean = closed || _state.value.phase == CallPhase.Idle
+
+    /**
+     * Token-gated foreground activation (contract §3; wraps the Phase-1
+     * [applyForegroundRoleInternal]). The registry passes the arbiter-minted owner
+     * token it just acquired plus the arbiter operation generation. The awaited
+     * coordinator activation result is honored ONLY if BOTH the current
+     * [mediaOpGeneration] AND the current lease owner token still match (the
+     * double fence; contract §3): generation alone is insufficient because a
+     * rollback re-activates the old call under a fresh generation, and a stuck
+     * callback from the failed new activation could otherwise still match.
+     *
+     * Throws on failure so the registry can run its rollback path.
+     */
+    suspend fun activateForeground(ownerToken: ForegroundOwnerToken, generation: Long) {
+        assertMainThread()
+        // Test-only injection (see [failNextForegroundActivationForTest]): model an
+        // activation that fails so the registry rollback path can be exercised
+        // deterministically without a real media/coordinator failure.
+        if (failNextForegroundActivationForTest) {
+            failNextForegroundActivationForTest = false
+            foregroundOwnerToken = ownerToken
+            mediaActivationState = MediaActivationState.FAILED
+            throw IllegalStateException("test-injected activation failure")
+        }
+        // Test-only injection (see [activateForegroundGateForTest]): suspend on a gate
+        // the test controls so it can cancel the registry's switch WHILE activation is
+        // in flight (after the lease was acquired), exercising the cancellation-cleanup
+        // path deterministically.
+        activateForegroundGateForTest?.let {
+            activateForegroundGateForTest = null
+            it.await()
+        }
+        // Seed the lease token + generation BEFORE awaiting so the post-await
+        // fences inside applyForegroundRoleInternal see them. The session keeps
+        // mediaOpGeneration wired to the passed generation (the arbiter's
+        // monotonic counter) and uses foregroundOwnerToken as the 2nd fence.
+        foregroundOwnerToken = ownerToken
+        mediaOpGeneration = generation
+        applyForegroundRoleInternal(expectedToken = ownerToken, expectedGeneration = generation)
+        if (mediaRole != CallMediaRole.FOREGROUND) {
+            throw IllegalStateException("activateForeground did not reach FOREGROUND (superseded or failed)")
+        }
+    }
+
+    /**
+     * Test-only: when true, the NEXT [activateForeground] throws instead of
+     * activating (and clears itself). Lets a registry test drive the
+     * switch-failure rollback path deterministically (the new call's activation
+     * fails; the registry must restore the old call to foreground). NOT a public
+     * API.
+     */
+    internal var failNextForegroundActivationForTest: Boolean = false
+
+    /**
+     * Test-only: when true, [releaseForeground] suspends forever so the registry's
+     * `withTimeout(FOREGROUND_RELEASE_TIMEOUT_MS)` drain fires (Core Invariant 1:
+     * the old call keeps its lease, the next lease is never acquired). NOT a public
+     * API.
+     */
+    internal var hangNextForegroundReleaseForTest: Boolean = false
+
+    /**
+     * Test-only: when set, [releaseForeground] suspends on this gate before draining.
+     * Unlike [hangNextForegroundReleaseForTest] (which awaits cancellation forever),
+     * completing the gate lets the release finish NORMALLY. Lets a registry test
+     * cancel the outer op mid-drain and then complete the gate to prove the drain
+     * still finishes (lease released, releasePending cleared) under NonCancellable.
+     * NOT a public API.
+     */
+    internal var releaseForegroundGateForTest: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    /**
+     * Test-only: when set, [activateForeground] suspends on this gate before applying
+     * the foreground role. Lets a registry test cancel the switch while activation is
+     * in flight (after the lease was acquired) to exercise the cancellation-cleanup
+     * path deterministically. NOT a public API.
+     */
+    internal var activateForegroundGateForTest: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    /**
+     * Token-gated release (contract §3; wraps the Phase-1
+     * [applyHeldRoleInternal]). Idempotent and MUST NOT throw after a partial
+     * release. Uses the token ONLY to fence (it proves the caller is draining the
+     * current owner) and does NOT call [ForegroundMediaArbiter.releaseLease] — the
+     * registry releases the lease after this confirms fully-held.
+     */
+    suspend fun releaseForeground(ownerToken: ForegroundOwnerToken) {
+        assertMainThread()
+        // Test-only injection (see [hangNextForegroundReleaseForTest]): suspend
+        // forever so the registry's bounded drain times out (Invariant 1 path).
+        if (hangNextForegroundReleaseForTest) {
+            kotlinx.coroutines.awaitCancellation()
+        }
+        // Test-only gate (see [releaseForegroundGateForTest]): suspend until the test
+        // completes it, so a cancellation of the outer op can land mid-drain.
+        releaseForegroundGateForTest?.let {
+            releaseForegroundGateForTest = null
+            it.await()
+        }
+        // A release for a token that is not ours is a no-op (already drained / the
+        // lease moved on); never throw.
+        if (foregroundOwnerToken != null && foregroundOwnerToken !== ownerToken) return
+        applyHeldRoleInternal()
+        // The session no longer owns the lease conceptually; the registry frees it.
+        foregroundOwnerToken = null
+    }
+
+    /**
+     * Undo a partial/failed foreground activation, driving the session back to
+     * fully-held (contract §3). Idempotent and must not throw. Like
+     * [releaseForeground] it does NOT touch the arbiter lease (registry-owned).
+     */
+    suspend fun abortForegroundActivation(ownerToken: ForegroundOwnerToken) {
+        assertMainThread()
+        if (foregroundOwnerToken != null && foregroundOwnerToken !== ownerToken) return
+        applyHeldRoleInternal()
+        foregroundOwnerToken = null
+    }
+
+    /**
+     * Release the DIRECT single-call arbiter lease + mode claim this session held
+     * (single-call teardown). Idempotent. The session owns a lease ONLY on the
+     * direct [SerenadaCore.join] path (stored in [directLeaseToken]); a
+     * registry-activated session's [foregroundOwnerToken] is a registry-issued
+     * fence token, never released here (the registry owns and releases its own
+     * lease). Releasing only [directLeaseToken] prevents teardown from
+     * self-releasing a registry-owned lease (parity with iOS).
+     *
+     * Release only when this session is STILL the arbiter's current owner: guards
+     * the (test-only) case where the singleton was reset out from under a live
+     * session, so a stale release never touches another owner's lease.
+     */
+    private fun releaseForegroundLeaseAndMode() {
+        val token = directLeaseToken
+        if (token != null) {
+            if (ForegroundMediaArbiter.isCurrentOwner(token)) {
+                runCatching { ForegroundMediaArbiter.releaseLease(token) }
+            }
+            directLeaseToken = null
+        }
+        // Drop the DIRECT mode claim keyed by this session (no-op if never claimed
+        // or already released). This clears process mode when the last direct
+        // session ends so the registry can later claim REGISTRY mode.
+        runCatching { ForegroundMediaArbiter.releaseMode(this) }
     }
 
     // --- Internal: WebRTC Engine ---
@@ -1375,6 +2192,12 @@ class SerenadaSession internal constructor(
                 handler.post {
                     val previousMode = _state.value.localCameraMode
                     updateState(_state.value.copy(localCameraMode = mode))
+                    // Keep desired video mode in sync with the active camera mode
+                    // while video is on, so a hold/resume cycle restores framing
+                    // (Phase 1). Screen-share mode is not a camera intent.
+                    if (userPreferredVideoEnabled && mode != LocalCameraMode.SCREEN_SHARE) {
+                        desiredVideoMode = mode
+                    }
                     if (config.enableIndependentContentVideo) {
                         // Independent mode: the camera mode never represents screen
                         // share (isScreenSharing is owned by start/stopScreenShare,
@@ -1673,6 +2496,7 @@ class SerenadaSession internal constructor(
                 signalingStatus = signalingStatus,
                 presumedLost = signalingStatus == ParticipantSignalingStatus.SUSPENDED && cid in presumedLostRemoteCids,
                 audioLevel = if (audioEnabled) previousLevels[cid] ?: 0f else 0f,
+                held = peerState?.held ?: participant?.held ?: false,
             )
         }
         val currentState = _state.value
@@ -1779,10 +2603,17 @@ class SerenadaSession internal constructor(
         )
     }
 
-    private fun broadcastLocalMediaState() {
+    private fun broadcastLocalMediaState(held: Boolean = mediaRole == CallMediaRole.HELD) {
+        // During a resume's media-apply phase, suppress intermediate broadcasts so
+        // exactly one held=false is emitted once media is flowing (FIX M3).
+        if (suppressMediaStateBroadcast) return
+        // A held call owns no capture (Core Invariant 2): peers must always see
+        // audio=false/video=false while held, regardless of the (possibly stale)
+        // local state snapshot. Resume broadcasts held=false with live values.
         signalingMessageRouter.broadcastMediaState(
-            audioEnabled = _state.value.localAudioEnabled,
-            videoEnabled = _state.value.localVideoEnabled,
+            audioEnabled = !held && _state.value.localAudioEnabled,
+            videoEnabled = !held && _state.value.localVideoEnabled,
+            held = held,
         )
     }
 
@@ -2186,6 +3017,9 @@ class SerenadaSession internal constructor(
         }
         iceRestartCallsFromGate += 1
         peerNegotiationEngine.handleSignalingReconnect()
+        // Re-broadcast current media state (incl. held) so peers that missed the
+        // original message converge after a reconnect (multi-call Phase 1).
+        if (sessionActivated || mediaRole == CallMediaRole.HELD) broadcastLocalMediaState()
     }
 
     private fun cancelPostReconnectResync() {
@@ -2232,15 +3066,29 @@ class SerenadaSession internal constructor(
     }
 
     private fun resetResources(clearRecovery: Boolean = false): Job {
+        // Capture THIS session's recovery identity BEFORE the teardown nulls clientId
+        // below: the durable record is cleared only if it still belongs to this
+        // session (roomId + cid match). A stale/held call tearing down must not clear
+        // the record a DIFFERENT foreground call wrote (multi-call ownership check).
+        val ownedCid = clientId
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
+        // Capture the deactivation's fence generation SYNCHRONOUSLY at REQUEST time
+        // (Phase 4; contract §6), before launching the async Job. A later
+        // same-coordinator re-activation can advance the coordinator's live
+        // generation between this enqueue and when the Job runs; fencing the restore
+        // against the request-time snapshot means a stale deactivation never restores
+        // MODE_NORMAL over the newer attempt. Mirrors iOS's request-time
+        // installedLeaseSnapshot(). The synchronous deactivate() below captures "now"
+        // (inline, no chained Job), which equals request time for that path.
+        val deactivationFenceGeneration = defaultCoordinatorGenerationSnapshot()
         callAudioSessionController.deactivate()
         val deactivationJob = audioCoordinatorScope.launch {
             try {
                 withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
                     audioCoordinatorMutex.withLock {
-                        audioCoordinator.deactivateCallSession()
+                        deactivateDefaultCoordinatorFenced(deactivationFenceGeneration)
                     }
                 }
             } catch (e: TimeoutCancellationException) {
@@ -2280,10 +3128,22 @@ class SerenadaSession internal constructor(
         sessionStartTs = null
         sessionActivated = false
         localMediaReadyForNegotiation = false
+        // Release the process-wide foreground lease (and DIRECT mode claim) this
+        // session held, so a subsequent direct join can acquire it (single-call
+        // join/leave round-trips through the arbiter). Idempotent: a null token or
+        // an already-released token is a safe no-op. resetResources runs on the
+        // main thread, so the arbiter's main-thread assert holds.
+        releaseForegroundLeaseAndMode()
+        // Reset multi-call role/activation/actual to defaults for a fresh start
+        // (desired* survive into the next start as user intent defaults).
+        mediaRole = CallMediaRole.FOREGROUND
+        mediaActivationState = MediaActivationState.ACTIVE
+        actualAudioPublished = false
+        actualVideoPublished = false
         playbackDuckingActive = false
         externalAudioMuted = false
         routeInputAvailable = true
-        if (clearRecovery) recoveryStorage.clear()
+        if (clearRecovery) recoveryStorage.clearIfOwned(roomId, ownedCid)
         providerScope.coroutineContext.cancelChildren()
         updateDiagnostics(CallDiagnostics())
         return deactivationJob
@@ -2318,6 +3178,12 @@ class SerenadaSession internal constructor(
      * prompt. No-op until the join handshake has produced a CID + token.
      */
     private fun persistRecoveryRecord() {
+        // Durable recovery is FOREGROUND-only (multi-call-session-design ~966-985): a
+        // HELD session keeps its reconnect identity in memory ONLY, so a relaunched
+        // process offers to rejoin the call the user was actually ON — not a
+        // background held one, and never a record that lies about the foreground call.
+        // The foreground call (re)writes its record on resume (applyForegroundRoleInternal).
+        if (isHeld) return
         val cid = clientId ?: return
         val token = reconnectToken ?: return
         if (sessionStartTs == null) sessionStartTs = clock.nowMs()
@@ -2334,10 +3200,27 @@ class SerenadaSession internal constructor(
     }
 
     private fun applyLocalVideoPreference() {
+        // Core Invariant 2: a held call owns NO capture via ANY path. This sink is
+        // reachable from the audio-environment callbacks (proximity / route
+        // changes) which fire independently of the user-toggle guards, so guard
+        // HERE (the media-applying sink), not only at the toggle entry points. Keep
+        // the desired intent (set by the toggles), force local/actual video false,
+        // and return WITHOUT calling the engine or broadcasting. Resume
+        // (applyForegroundRoleInternal) reacquires per the desired mode (FIX A-2).
+        if (isHeld) {
+            actualVideoPublished = false
+            if (_state.value.localVideoEnabled || _state.value.localCameraEnabled) {
+                updateState(_state.value.copy(localVideoEnabled = false, localCameraEnabled = false))
+            }
+            return
+        }
         val shouldPause = callAudioSessionController.shouldPauseVideoForProximity(_diagnostics.value.isScreenSharing)
         isVideoPausedByProximity = shouldPause
         val requestedEnabled = userPreferredVideoEnabled && !shouldPause
         val effectiveEnabled = webRtcEngine.toggleVideo(requestedEnabled)
+        // Foreground actual reflects the effective capture state (FIX A-4: keep
+        // actual* in sync on foreground toggles, not only at start/resume/hold).
+        actualVideoPublished = effectiveEnabled
         if (_state.value.localVideoEnabled != effectiveEnabled) {
             // `localVideoEnabled` remains the camera-specific public signal in
             // independent mode; `localContent` carries screen-share state.
@@ -2444,6 +3327,12 @@ class SerenadaSession internal constructor(
      */
     fun setMicMuted(muted: Boolean) {
         assertMainThread()
+        // Track user intent so a hold/resume cycle restores it (Phase 1).
+        desiredAudioEnabled = !muted
+        // While held this session owns no capture (Core Invariant 2): record the
+        // desired intent ONLY — no capture, no coordinator call, no broadcast.
+        // Resume (applyForegroundRoleInternal) applies the latest desired intent.
+        if (isHeld) return
         userMuted = muted
         updateEffectiveMicState()
         providerScope.launch {
@@ -2459,11 +3348,33 @@ class SerenadaSession internal constructor(
     }
 
     private fun updateEffectiveMicState() {
-        val effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
-        if (sessionActivated) {
-            webRtcEngine.toggleAudio(effectiveEnabled)
+        // Core Invariant 2: a held call owns NO mic capture via ANY path. This sink
+        // is reachable from the audio-environment callbacks (route loss / external
+        // audio), so guard HERE — a held call's `sessionActivated` is already false
+        // (capture stays released, no broadcast), and this explicit branch also
+        // forces `actualAudioPublished` false and keeps the public mute flags in
+        // sync without ever re-enabling capture (FIX A-2 audit). Resume re-derives
+        // the effective state once foreground.
+        if (isHeld) {
+            actualAudioPublished = false
+            _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
+            _isMicMutedByExternalAudio.value = externalAudioMuted
+            return
         }
-        updateState(_state.value.copy(localAudioEnabled = effectiveEnabled))
+        val effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
+        // The engine ENSURES a mic track exists when enabling (e.g. unmuting after
+        // a muted hold was resumed muted, which left the mic released) and reports
+        // the EFFECTIVE publish state — a live track backing the broadcast. Publish
+        // only that, never a live audio state backed by a null track (FIX P5).
+        val enginePublishedAudio = if (sessionActivated) {
+            webRtcEngine.toggleAudio(effectiveEnabled)
+        } else {
+            false
+        }
+        // Foreground actual reflects the effective publish state (FIX A-4: keep
+        // actual* in sync on foreground toggles, not only at start/resume/hold).
+        actualAudioPublished = enginePublishedAudio
+        updateState(_state.value.copy(localAudioEnabled = enginePublishedAudio))
         _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
         _isMicMutedByExternalAudio.value = externalAudioMuted
         if (sessionActivated) {

@@ -84,6 +84,23 @@ internal class WebRtcEngine(
     private val peerConnectionDisposeQueue = PeerConnectionDisposeQueue()
 
     private var iceServers: List<PeerConnection.IceServer>? = null
+    // Sticky remote-deafen state shared across slots (multi-call hold). Held while
+    // false so a peer that joins/renegotiates during hold inherits the deafen at
+    // slot creation (FIX A3). Resume sets it back to true.
+    private var remotePlaybackEnabled = true
+    // Sticky remote-rendering suppression shared across slots (multi-call hold).
+    // True while held so a slot created for a peer that joins/renegotiates during
+    // hold (participant churn) inherits the suppression at slot creation — mirrors
+    // the deafen above. Without this a brand-new slot starts with rendering
+    // suppression off and would deliver visible frames while the session is held.
+    // Resume sets it back to false.
+    private var remoteRenderingSuppressed = false
+    // Multi-call hold: when true, slots create SEND_RECV (send-capable) audio +
+    // legacy-video transceivers even though no local capture track exists, so a
+    // session joined `held` has stable senders ready for a renegotiation-free
+    // resume (contract §5 / Core Invariant 3). Set by [createSendersForHold] and
+    // cleared once capture starts ([startLocalMedia]/[resumeLocalMediaFromHold]).
+    private var heldSendersMode = false
     private val initializedRenderers =
         Collections.newSetFromMap(WeakHashMap<SurfaceViewRenderer, Boolean>())
 
@@ -232,9 +249,24 @@ internal class WebRtcEngine(
         audioPipelinePrimer.collectAudioLevel(onComplete)
     }
 
+    override fun createSendersForHold() {
+        if (released) return
+        // Mark held-senders mode so any slot built while held creates send-capable
+        // (SEND_RECV) transceivers despite carrying no track. Resume later attaches
+        // fresh tracks to these senders via setTrack (no renegotiation). No capture
+        // is acquired here; the OS never reports a held session as capturing.
+        heldSendersMode = true
+        // Apply to any slots that already exist (none on the common held-join path,
+        // where slots are created lazily as peers arrive, but kept idempotent).
+        peerSlots.forEach { it.ensureSendCapableTransceiversForHold() }
+    }
+
     override fun startLocalMedia(startVideoCapture: Boolean) {
         if (released) return
         if (localAudioTrack != null || localVideoTrack != null) return
+        // Foreground capture is starting; leave held-senders mode so new slots
+        // follow the normal (track-driven) transceiver path again.
+        heldSendersMode = false
         cameraController.resetCameraState()
         val audioConstraints = MediaConstraints()
         audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
@@ -367,6 +399,138 @@ internal class WebRtcEngine(
         localAudioTrack = null
     }
 
+    override fun suspendLocalMediaForHold() {
+        if (released) return
+        // Camera/content: null the video SENDER tracks on every slot first
+        // (setTrack(null, false)) so no sender keeps a reference to a track we are
+        // about to dispose (FIX A2 — mirrors the audio sender nulling below).
+        peerSlots.forEach { slot -> slot.clearLocalVideoTracks() }
+        // Then stop the capturer and dispose the video track/source so the OS
+        // camera indicator clears. Mirrors video-off, plus a track dispose.
+        cameraController.disposeVideoCapturer()
+        disposeLocalVideoTrack()
+        disposeLocalContentVideoTrack()
+        // Microphone: RELEASE capture (do not just flip enabled). Null the audio
+        // sender on every slot first so the sender drops its track reference,
+        // then tear down the primer and dispose the track/source. After this the
+        // OS no longer reports this session as capturing audio.
+        peerSlots.forEach { slot -> slot.setAudioTrack(null) }
+        audioPipelinePrimer.stop()
+        localAudioTrack?.dispose()
+        audioSource?.dispose()
+        audioSource = null
+        localAudioTrack = null
+    }
+
+    override fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {
+        if (released) return
+        // Capture is being (re)acquired; leave held-senders mode.
+        heldSendersMode = false
+        // Microphone: recreate capture ONLY when audio is desired. A held call
+        // that was MUTED must resume muted with NO mic recreate (FIX A1): leaving
+        // the audio source/track null keeps the OS mic indicator off and the
+        // sender carries a null track. When audio IS desired, recreate capture and
+        // re-attach to the existing senders via setTrack (no renegotiation).
+        if (audioEnabled) {
+            if (localAudioTrack == null) {
+                acquireLocalAudioTrack()
+            } else {
+                localAudioTrack?.setEnabled(true)
+            }
+        } else if (localAudioTrack != null) {
+            // Defensive: if a track somehow survived hold, mute it without keeping
+            // capture live (suspend already disposed it on the normal path).
+            localAudioTrack?.setEnabled(false)
+        }
+
+        // Camera: reacquire only when a camera mode is desired (off = leave
+        // camera released). Re-attach the camera track to existing senders.
+        val cameraMode = videoMode?.takeIf {
+            it != LocalCameraMode.SCREEN_SHARE &&
+                videoMediaEnabled &&
+                cameraController.availableCameraModes.isNotEmpty()
+        }
+        if (cameraMode != null) {
+            ensureVideoSource()
+            val startedVideo = restartVideoCapturerWithFallback(cameraSourceFromMode(cameraMode))
+            ensureLocalVideoTrack(enabled = startedVideo)
+        }
+        // Re-attach local tracks to existing senders (no renegotiation). Runs in
+        // both branches to keep audio-only sender wiring consistent with
+        // startLocalMedia's no-video branch.
+        peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
+    }
+
+    /**
+     * (Re)acquire the mic capture and attach it to every slot's audio sender,
+     * enabled. Mirrors [startLocalMedia] / [resumeLocalMediaFromHold]'s audio
+     * acquire (no renegotiation). Caller must ensure [localAudioTrack] is null.
+     */
+    private fun acquireLocalAudioTrack() {
+        val audioConstraints = MediaConstraints()
+        audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
+        localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
+        applyAudioTrackHints()
+        localAudioTrack?.let { audioPipelinePrimer.start(it) }
+        localAudioTrack?.setEnabled(true)
+        peerSlots.forEach { slot -> slot.setAudioTrack(localAudioTrack) }
+    }
+
+    override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        if (released) return
+        remotePlaybackEnabled = enabled
+        peerSlots.forEach { slot -> slot.setRemotePlaybackEnabled(enabled) }
+    }
+
+    override fun detachRenderersForHold() {
+        if (released) return
+        // Contract: a fully-held call renders no frames and wastes no
+        // decode-to-sink delivery (docs/multi-call-session-contract.md
+        // `detachOrPauseRenderersForHold`). Detach the visible sinks; KEEP the
+        // registrations so [reattachRenderersAfterResume] can replay them.
+        //  - LOCAL: on the normal path [suspendLocalMediaForHold] already disposed
+        //    the camera/content tracks (which removes their sinks), but detach
+        //    explicitly so the seam is correct regardless of call order. The sink
+        //    SETS ([localSinks]/[localContentSinks]) are preserved.
+        localVideoTrack?.let { track -> localSinks.forEach { sink -> track.removeSink(sink) } }
+        localContentVideoTrack?.let { track -> localContentSinks.forEach { sink -> track.removeSink(sink) } }
+        //  - REMOTE: the peer connections and remote tracks stay alive while held
+        //    (identity preserved), so their visible camera/content sinks keep
+        //    receiving decoded frames unless we detach them here. Each slot detaches
+        //    its own remote sinks and stays sticky so a track renegotiated in while
+        //    held does not silently re-attach.
+        // Mark suppression sticky at the engine level too, so a slot created for a
+        // peer that joins/renegotiates while held (participant churn) inherits it in
+        // [createSlot] — otherwise the new slot would render visible frames.
+        remoteRenderingSuppressed = true
+        peerSlots.forEach { slot -> slot.detachRemoteRenderersForHold() }
+    }
+
+    override fun reattachRenderersAfterResume() {
+        if (released) return
+        // Undo [detachRenderersForHold]. Local tracks recreated by
+        // [resumeLocalMediaFromHold] already re-add their sinks via
+        // [ensureLocalVideoTrack]; remove-then-add here is idempotent and also
+        // covers a local track that survived hold. Remote sinks were only detached
+        // (tracks preserved), so the slots must re-attach them.
+        localVideoTrack?.let { track ->
+            localSinks.forEach { sink ->
+                track.removeSink(sink)
+                track.addSink(sink)
+            }
+        }
+        localContentVideoTrack?.let { track ->
+            localContentSinks.forEach { sink ->
+                track.removeSink(sink)
+                track.addSink(sink)
+            }
+        }
+        // Lift engine-level suppression so slots created after resume render
+        // normally, then re-attach the visible sinks on every existing slot.
+        remoteRenderingSuppressed = false
+        peerSlots.forEach { slot -> slot.reattachRemoteRenderersAfterResume() }
+    }
+
     override fun release() {
         if (released) return
         released = true
@@ -405,8 +569,19 @@ internal class WebRtcEngine(
         return cameraController.adjustWorldCameraZoom(scaleFactor)
     }
 
-    override fun toggleAudio(enabled: Boolean) {
+    override fun toggleAudio(enabled: Boolean): Boolean {
+        if (released) return false
+        // FOREGROUND-path enable with no live mic track (e.g. a muted hold was
+        // resumed muted, leaving the mic released): (re)acquire + attach the mic
+        // before publishing, so the session never broadcasts a live audio state
+        // backed by a null track. When the track already exists this only flips
+        // setEnabled — normal foreground mute/unmute, single-call behavior intact.
+        if (enabled && localAudioTrack == null) {
+            acquireLocalAudioTrack()
+            return localAudioTrack != null
+        }
         localAudioTrack?.setEnabled(enabled)
+        return enabled && localAudioTrack != null
     }
 
     /**
@@ -428,6 +603,9 @@ internal class WebRtcEngine(
             return false
         }
         if (enabled && !isLegacyScreenSharing && cameraController.videoCapturer == null) {
+            // ensure the video source exists before restarting capture — a prior
+            // video-off (or a resumed-camera-off hold) disposed it.
+            ensureVideoSource()
             if (!restartVideoCapturerWithFallback(cameraController.currentCameraSource)) {
                 localVideoTrack?.setEnabled(false)
                 return false
@@ -437,7 +615,18 @@ internal class WebRtcEngine(
             cameraController.disposeVideoCapturer()
         }
         val effectiveEnabled = enabled && (cameraController.videoCapturer != null || isLegacyScreenSharing)
-        localVideoTrack?.setEnabled(effectiveEnabled)
+        // FOREGROUND-path enable with no live video track (e.g. a camera-off hold
+        // was resumed camera-off, leaving the track disposed): (re)create + attach
+        // the camera track before returning true, so the session never broadcasts a
+        // live video state backed by a null track. `setEnabled` alone is a nil-track
+        // no-op. When the track already exists this just flips setEnabled — normal
+        // foreground video on/off, single-call behavior intact.
+        if (effectiveEnabled && localVideoTrack == null) {
+            ensureLocalVideoTrack(enabled = true)
+            peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
+        } else {
+            localVideoTrack?.setEnabled(effectiveEnabled)
+        }
         return effectiveEnabled
     }
 
@@ -615,6 +804,7 @@ internal class WebRtcEngine(
             applyAudioSenderParameters = ::applyAudioSenderParameters,
             currentVideoSenderPolicy = { policySlot?.let { videoSenderPolicyForSlot(it) } ?: activeVideoSenderPolicy() },
             isRemoteBlackFrameAnalysisEnabled = { isRemoteBlackFrameAnalysisEnabled },
+            heldSendersMode = { heldSendersMode },
             peerConnectionDisposeQueue = peerConnectionDisposeQueue,
             supportsIndependentContentVideo = independentRouted,
             isOfferOwner = isOfferOwner,
@@ -623,6 +813,20 @@ internal class WebRtcEngine(
         )
         policySlot = slot
         peerSlots.add(slot)
+        // Sticky deafen (FIX A3): a slot created while the session is held must
+        // start deafened so its remote audio tracks come up silent. Seed BEFORE
+        // ensurePeerConnection so the slot's onTrack applies the current state.
+        if (!remotePlaybackEnabled) {
+            slot.setRemotePlaybackEnabled(false)
+        }
+        // Sticky rendering suppression (participant churn while held): a slot
+        // created while the session is held must start suppressed so a renderer
+        // attached to it or a remote track delivered to its onTrack does not
+        // deliver visible frames. Seed BEFORE ensurePeerConnection, alongside the
+        // deafen above, so the slot's onTrack/attach paths apply the current state.
+        if (remoteRenderingSuppressed) {
+            slot.detachRemoteRenderersForHold()
+        }
         if (!iceServers.isNullOrEmpty()) {
             slot.ensurePeerConnection()
         }

@@ -150,6 +150,19 @@ internal class FakePeerConnectionSlot(
         contentAttachedToSender = true
     }
     override fun setAudioTrack(track: AudioTrack?) {}
+
+    // Hold: video sender nulling (FIX A2) + sticky remote deafen (FIX A3).
+    var clearLocalVideoTracksCalls = 0; private set
+    override fun clearLocalVideoTracks() { clearLocalVideoTracksCalls += 1 }
+
+    /** Recorded enabled values passed to setRemotePlaybackEnabled, in order. */
+    val setRemotePlaybackEnabledCalls = mutableListOf<Boolean>()
+    /** Current sticky deafen state (last value set; true by default). */
+    val remotePlaybackEnabled: Boolean get() = setRemotePlaybackEnabledCalls.lastOrNull() ?: true
+    override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        setRemotePlaybackEnabledCalls += enabled
+    }
+
     override fun closePeerConnection(deferDispose: Boolean) {
         closePeerConnectionCalled = true
         closePeerConnectionDeferredDispose = deferDispose

@@ -11,13 +11,41 @@ final class SessionTestHarness {
     let fakeMedia: FakeMediaEngine
     let fakeClock: FakeSessionClock
 
+    /// The arbiter this harness's session was wired with — `.shared` by default
+    /// (reset in init), or a caller-supplied dedicated arbiter for multi-session
+    /// tests that must NOT share the singleton.
+    let arbiter: ForegroundMediaArbiter
+
     init(
         roomId: String = "test-room-id",
         handlesReconnection: Bool = false,
         deferInitialAnswer: Bool = false,
         config: SerenadaConfig? = nil,
-        delegate: SerenadaCoreDelegate? = nil
+        delegate: SerenadaCoreDelegate? = nil,
+        initialMediaRole: CallMediaRole = .foreground,
+        // Default mirrors the public single-call `SerenadaCore.join()` path: a
+        // FOREGROUND harness session self-acquires the direct lease, a HELD one
+        // never does. A test that wants a registry-style FOREGROUND session (one
+        // that does NOT self-acquire/self-release the lease) passes `false`.
+        acquireForegroundLease: Bool? = nil,
+        isCapabilityGranted: ((MediaCapability) -> Bool)? = nil,
+        arbiter: ForegroundMediaArbiter? = nil,
+        // Inject a controllable recovery store (durable "Rejoin?" record). Durable
+        // recovery is foreground-only (Candidate A); a test injects a shared store
+        // to assert which call owns the cross-launch record.
+        recoveryStorage: RecoveryStorage = RecoveryStorage()
     ) {
+        // The foreground arbiter is a PROCESS singleton: a prior test case may
+        // have left a live lease/mode, which would make this session's direct
+        // join fail to acquire. Reset it so each harness starts from a clean
+        // arbiter. (Mirrors web `arbiter.__resetForTests`.) A caller-supplied
+        // dedicated arbiter is used as-is (it is not the shared singleton).
+        ForegroundMediaArbiter.shared.resetForTests()
+        // The process-global audio-lease registry (Phase 4) would likewise leak a
+        // lease across cases if a default coordinator ran; reset it for isolation.
+        AudioSessionLeaseRegistry.shared.resetForTests()
+        let resolvedArbiter = arbiter ?? .shared
+        self.arbiter = resolvedArbiter
         self.fakeProvider = FakeSignalingProvider(handlesReconnection: handlesReconnection)
         var resolvedConfig = config ?? SerenadaConfig(signalingProvider: fakeProvider)
         if deferInitialAnswer {
@@ -32,6 +60,9 @@ final class SessionTestHarness {
             resolvedConfig.audioCoordinator = fakeAudioCoordinator
         }
 
+        // A FOREGROUND session self-acquires the direct lease (single-call default)
+        // unless the test overrides; a HELD session never self-acquires.
+        let resolvedAcquireLease = acquireForegroundLease ?? (initialMediaRole == .foreground)
         self.session = SerenadaSession(
             roomId: roomId,
             config: resolvedConfig,
@@ -40,7 +71,12 @@ final class SessionTestHarness {
             apiClient: fakeAPI,
             audioController: fakeAudio,
             mediaEngine: fakeMedia,
-            clock: fakeClock
+            clock: fakeClock,
+            recoveryStorage: recoveryStorage,
+            initialMediaRole: initialMediaRole,
+            acquireForegroundLease: resolvedAcquireLease,
+            isCapabilityGranted: isCapabilityGranted,
+            foregroundArbiter: resolvedArbiter
         )
     }
 
@@ -62,7 +98,9 @@ final class SessionTestHarness {
     func simulateJoinedResponse(
         cid: String = "local-cid-1",
         participants: [(cid: String, joinedAt: Int)] = [],
-        hostCid: String? = nil
+        hostCid: String? = nil,
+        reconnectToken: String? = nil,
+        reconnectTokenTTLMs: Int64? = nil
     ) {
         let resolvedHost = hostCid ?? cid
         let participantList = participants.isEmpty
@@ -71,7 +109,9 @@ final class SessionTestHarness {
         fakeProvider.simulateJoined(
             peerId: cid,
             participants: participantList,
-            hostPeerId: resolvedHost
+            hostPeerId: resolvedHost,
+            reconnectToken: reconnectToken,
+            reconnectTokenTTLMs: reconnectTokenTTLMs
         )
     }
 
@@ -152,6 +192,8 @@ final class SessionTestHarness {
         localJoinedAt: Int = 1,
         remoteJoinedAt: Int = 2,
         hostCid: String? = nil,
+        reconnectToken: String? = nil,
+        reconnectTokenTTLMs: Int64? = nil,
         iceServers: [IceServerConfig] = [IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")]
     ) async {
         fakeProvider.iceServerResults = [.success(iceServers)]
@@ -164,7 +206,9 @@ final class SessionTestHarness {
                 (cid: localCid, joinedAt: localJoinedAt),
                 (cid: remoteCid, joinedAt: remoteJoinedAt)
             ],
-            hostCid: hostCid ?? localCid
+            hostCid: hostCid ?? localCid,
+            reconnectToken: reconnectToken,
+            reconnectTokenTTLMs: reconnectTokenTTLMs
         )
         await yieldToMainActor()
         await fakeClock.advance(byMs: 100)
@@ -172,6 +216,39 @@ final class SessionTestHarness {
         await waitForLocalMedia()
         await waitForIceServers()
         await waitForInitialOfferIfNeeded(localCid: localCid, remoteCid: remoteCid)
+    }
+
+    /// Advance a HELD-initial session to in-call: a held join never calls
+    /// `startLocalMedia` (no capture) so the foreground `waitForLocalMedia` path
+    /// would hang. This drives signaling open + joined + ICE so the peer slot is
+    /// created (stable senders, nil tracks) without ever foregrounding.
+    func advanceToInCallHeld(
+        localCid: String = "local-cid-1",
+        remoteCid: String = "remote-cid-1",
+        localJoinedAt: Int = 1,
+        remoteJoinedAt: Int = 2,
+        hostCid: String? = nil,
+        reconnectToken: String? = nil,
+        reconnectTokenTTLMs: Int64? = nil,
+        iceServers: [IceServerConfig] = [IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")]
+    ) async {
+        fakeProvider.iceServerResults = [.success(iceServers)]
+        await yieldToMainActor()
+        openSignaling()
+        simulateJoinedResponse(
+            cid: localCid,
+            participants: [
+                (cid: localCid, joinedAt: localJoinedAt),
+                (cid: remoteCid, joinedAt: remoteJoinedAt)
+            ],
+            hostCid: hostCid ?? localCid,
+            reconnectToken: reconnectToken,
+            reconnectTokenTTLMs: reconnectTokenTTLMs
+        )
+        await yieldToMainActor()
+        await fakeClock.advance(byMs: 100)
+        await yieldToMainActor()
+        await waitForIceServers()
     }
 
     /// Advance to inCall with a remote whose join capabilities/media policy are
@@ -277,5 +354,9 @@ final class SessionTestHarness {
 
     func tearDown() {
         session.cancelJoin()
+        // Release any lease this session acquired so the next test case starts
+        // clean even if it does not build a harness (and so a leaked lease never
+        // masks a real acquire failure).
+        ForegroundMediaArbiter.shared.resetForTests()
     }
 }

@@ -234,10 +234,11 @@ final class SignalingMessageRouter {
         outgoingContentRevision = revision
     }
 
-    func broadcastMediaState(audioEnabled: Bool, videoEnabled: Bool) {
+    func broadcastMediaState(audioEnabled: Bool, videoEnabled: Bool, held: Bool) {
         let payload: [String: JSONValue] = [
             "audioEnabled": .bool(audioEnabled),
             "videoEnabled": .bool(videoEnabled),
+            "held": .bool(held),
         ]
         sendMessage("participant_media_state", .object(payload), nil)
     }

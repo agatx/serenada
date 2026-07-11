@@ -3,12 +3,15 @@ import type {
     CallErrorCode,
     CallQualitySummary,
     CallState,
+    CallMediaRole,
     CallStats,
     CameraMode,
     ConfigurableCameraMode,
     ConnectionEvent,
     ConnectionStatus,
     DropoutTrigger,
+    ForegroundOwnerToken,
+    MediaActivationState,
     MediaCapability,
     ParticipantContent,
     SerenadaConfig,
@@ -16,7 +19,9 @@ import type {
     SignalingState,
     SnapshotResult,
     SnapshotSource,
+    VideoMode,
 } from './types.js';
+import { foregroundArbiter } from './foregroundArbiter.js';
 import { CallQualityTracker } from './media/CallQualityTracker.js';
 import { reconnectFailedReasonForCode } from './media/reconnectReason.js';
 import {
@@ -86,6 +91,21 @@ interface SessionDependencies {
     autoStart?: boolean;
     displayName?: string;
     peerId?: string;
+    /**
+     * Initial foreground-media role (multi-call session, Phase 2). The public
+     * `SerenadaCore.join()` always passes `'foreground'`; the (Phase 3) registry
+     * passes `'held'` to create a held call that owns no capture and holds no
+     * lease. Defaults to `'foreground'` so existing construction is unchanged.
+     */
+    initialMediaRole?: CallMediaRole;
+    /**
+     * When `true`, acquire the process-wide foreground lease (mode `'direct'`) at
+     * construction before activating media — the route for a public single-call
+     * `SerenadaCore.join()`. A second concurrent direct join while one is live
+     * throws {@link ForegroundLeaseUnavailable}. Held-initial joins never acquire
+     * the lease. Tests/registry that manage the lease themselves leave this unset.
+     */
+    acquireForegroundLease?: boolean;
 }
 
 function mapErrorCode(serverCode: string): CallErrorCode {
@@ -139,6 +159,7 @@ function toRoomParticipant(participant: SignalingProviderParticipant): RoomParti
         peerId: participant.appPeerId,
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
+        held: participant.held,
         connectionStatus: participant.connectionStatus,
         capabilities: participant.capabilities,
         mediaPolicy: participant.mediaPolicy,
@@ -324,7 +345,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private clientId: string | null = null;
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
-    private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean }>();
+    private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean; held?: boolean }>();
     // Remote capabilities/mediaPolicy advertised at join, keyed by CID. Stored
     // verbatim (allowlisted upstream); consumers apply defaults for missing
     // keys. Media routing and UI use these for per-peer independent content
@@ -337,6 +358,75 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly remoteContentStates = new Map<string, TrackedRemoteContent>();
     private readonly availableCameraModes: ConfigurableCameraMode[];
     private userPreferredVideoEnabled: boolean;
+
+    // --- Multi-call session media-role state. For a normally-joined single call
+    // these stay at foreground/active so behavior is unchanged. ---
+    /** Which foreground-media lease this call holds. Defaults to `foreground`. */
+    private mediaRole: CallMediaRole = 'foreground';
+    /** Foreground-activation progress; only meaningful while foregrounding. */
+    private mediaActivationState: MediaActivationState = 'active';
+    /**
+     * User intent (survives hold). The single source of truth for what the user
+     * wants published; toggles update these. `actual*` reflect what peers
+     * observe right now (always false while held).
+     */
+    private desiredAudioEnabled: boolean;
+    private desiredVideoMode: VideoMode;
+    private actualAudioPublished: boolean;
+    private actualVideoPublished: boolean;
+    /**
+     * Monotonic generation bumped at the start of every suspend/resume media
+     * operation. `resumeForeground` captures its generation before awaiting media
+     * reacquire and re-checks after each `await`; if a concurrent
+     * `suspendForHold` superseded it, resume rolls back its partial activation
+     * and bails WITHOUT setting foreground or broadcasting `held:false`. In Phase 2
+     * the token-gated {@link activateForeground} seeds this from the arbiter's
+     * operation generation so a stale activation callback from a superseded switch
+     * is fenced; the un-gated {@link suspendForHold}/{@link resumeForeground}
+     * primitives keep self-incrementing it for the local suspend/resume race.
+     */
+    private mediaOpGeneration = 0;
+    /**
+     * True while {@link resumeForeground} is awaiting media reacquire. A
+     * concurrent {@link suspendForHold} uses this to know it must still drive the
+     * suspend (rather than no-op on the still-`held` role) so it can supersede
+     * the resume and complete the hold.
+     */
+    private resumeInFlight = false;
+    /**
+     * The arbiter-minted lease owner token while this call holds (or is
+     * activating) the foreground media lease, else `null`. It is the SECOND fence
+     * (alongside {@link mediaOpGeneration}) for a late activation callback: an
+     * `activateForeground` is honored only if BOTH the current generation AND this
+     * token still match (contract §3 fencing). `null` for a normally-joined single
+     * call until it routes through the arbiter; set by {@link activateForeground}
+     * (registry-issued) and the direct-lease join, cleared by
+     * {@link releaseForeground}/{@link abortForegroundActivation}.
+     *
+     * This is a FENCE token only — holding it does NOT make the session the lease
+     * owner of record. A registry-issued token (from {@link activateForeground})
+     * is owned by the registry, which releases it. Only the {@link directLeaseToken}
+     * below (a self-owned direct lease) is self-released on teardown.
+     */
+    private foregroundOwnerToken: ForegroundOwnerToken | null = null;
+    /**
+     * The lease token for a lease this session acquired ITSELF via a public direct
+     * {@link SerenadaCore.join} (mode `'direct'`), else `null`. Distinct from
+     * {@link foregroundOwnerToken} (the fence token, which a registry-managed call
+     * also sets): teardown self-releases ONLY this token. A registry-issued
+     * activation/fence token is registry-owned and never self-released, so a
+     * session activated by the registry can never self-release the registry's lease
+     * on teardown (parity with iOS's separate `directLeaseToken`).
+     */
+    private directLeaseToken: ForegroundOwnerToken | null = null;
+    /**
+     * Whether this session must self-acquire the `direct` foreground lease when it
+     * starts (the public single-call `SerenadaCore.join()` path). The acquire is
+     * deferred to {@link start} so a lease-unavailable failure surfaces as an error
+     * `CallState` rather than throwing out of the non-throwing public `join()` —
+     * parity with iOS/Android, which fail the join instead of throwing.
+     */
+    private shouldAcquireForegroundLease = false;
 
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
@@ -379,6 +469,20 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const videoMediaEnabled = config.videoMediaEnabled !== false;
         this.availableCameraModes = Object.freeze(videoMediaEnabled ? resolveCameraModes(config.cameraModes) : []) as ConfigurableCameraMode[];
         this.userPreferredVideoEnabled = this.availableCameraModes.length > 0 && config.defaultVideoEnabled !== false;
+
+        // Desired/actual media intent seeds from config defaults. `desired*` is
+        // the single source of user intent (toggles update it); `actual*`
+        // mirrors what peers observe and matches desired for a foreground call.
+        // A session created in the `held` initial role owns no capture, so its
+        // `actual*` are false from the start (Core Invariant 2).
+        const initialMediaRole = deps.initialMediaRole ?? 'foreground';
+        const heldInitial = initialMediaRole === 'held';
+        this.desiredAudioEnabled = config.defaultAudioEnabled !== false;
+        this.desiredVideoMode = this.userPreferredVideoEnabled ? this.availableCameraModes[0] : 'off';
+        this.actualAudioPublished = heldInitial ? false : this.desiredAudioEnabled;
+        this.actualVideoPublished = heldInitial ? false : this.userPreferredVideoEnabled;
+        this.mediaRole = initialMediaRole;
+        this.mediaActivationState = heldInitial ? 'inactive' : 'active';
 
         this._state = {
             phase: 'joining',
@@ -432,9 +536,66 @@ export class SerenadaSession implements SerenadaSessionHandle {
             () => this.media.arePeerPathsAllDirect().then((direct) => !direct),
         );
 
+        // Durable recovery is foreground-only (design §5): only the foreground
+        // call writes the single cross-launch recovery record. A held call keeps
+        // its in-memory + in-tab reconnect identity (so it can reconnect on
+        // transport drops) but must not own the durable record. The provider's
+        // `joined`/token-refresh writes consult this gate; on resume-to-foreground
+        // the session force-persists via `persistDurableRecoveryNow`.
+        signaling.setDurableRecoveryGate?.(() => this.mediaRole === 'foreground');
+
+        if (heldInitial) {
+            // Held-initial join (Core Invariant 3 / contract §5): connect signaling
+            // and let negotiation create stable audio+video senders with a null
+            // track, but start NO capture and take NO lease. Mark the permission
+            // check done so `rebuildState` never auto-fires `startLocalMedia`.
+            this.permissionCheckDone = true;
+            this.media.initializeHeldWithoutCapture();
+        }
+        // Public single-call `SerenadaCore.join()` takes the `direct` foreground
+        // lease. The acquire itself is deferred to start() so a lease-unavailable
+        // failure surfaces as an error CallState (parity with iOS/Android) rather
+        // than throwing out of the non-throwing public join(). Held-initial and
+        // registry-managed sessions never self-acquire.
+        this.shouldAcquireForegroundLease = !heldInitial && deps.acquireForegroundLease === true;
+
         if (deps.autoStart !== false) {
             this.start();
         }
+    }
+
+    /**
+     * Release this session's SELF-OWNED direct lease + owning-mode claim back to
+     * the process arbiter, if it acquired one. Idempotent (releases at most once;
+     * a second call no-ops because the token is cleared). Called on every teardown
+     * path (`leave`/`end`/`destroy`) and on the common terminal reset
+     * ({@link resetSessionResources}) so a process-singleton lease never leaks and
+     * a subsequent direct join can acquire it.
+     *
+     * Releases ONLY {@link directLeaseToken}. A registry-issued activation/fence
+     * token ({@link foregroundOwnerToken} set by {@link activateForeground}) is
+     * registry-owned: the session must NEVER self-release it (the Phase-3 registry
+     * owns lease + mode release for managed calls). Only a direct-lease session
+     * claimed `direct` mode with `this`, so the mode claim is released only here.
+     */
+    private releaseForegroundLeaseToArbiter(): void {
+        const token = this.directLeaseToken;
+        if (token === null) {
+            // No self-owned direct lease (held-initial or registry-managed
+            // session): nothing to release, and the mode claim is not ours.
+            return;
+        }
+        this.directLeaseToken = null;
+        // Clear the fence token too if it still points at the released lease.
+        if (this.foregroundOwnerToken === token) {
+            this.foregroundOwnerToken = null;
+        }
+        try {
+            foregroundArbiter.releaseLease(token);
+        } catch (err) {
+            this.config.logger?.log('warning', 'Session', `Foreground lease release failed: ${formatError(err)}`);
+        }
+        foregroundArbiter.releaseMode(this);
     }
 
     /** Current call state. Subscribe via {@link subscribe} for updates. */
@@ -531,6 +692,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     /** Leave the call gracefully. The other participant stays connected. */
     leave(): void {
         if (this.isInactive) return;
+        this.releaseForegroundLeaseToArbiter();
         this.finalizeQuality();
         this.clearReconnectTimer();
         this.invalidateIceFetches();
@@ -568,6 +730,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
     setCameraMode(mode: CameraMode): void {
         if (mode !== 'selfie' && mode !== 'world') return;
         if (!this.availableCameraModes.includes(mode)) return;
+        // Track desired camera mode so a later resume restores the right facing.
+        if (this.desiredVideoMode !== 'off') {
+            this.desiredVideoMode = mode;
+        }
+        // Core Invariant 2: a held call owns no capture. Record the desired
+        // facing only; do not touch the camera (resume applies it).
+        if (this.mediaRole === 'held') return;
         if (mode === 'world' && this.media.facingMode === 'user') {
             void this.media.flipCamera();
         } else if (mode === 'selfie' && this.media.facingMode === 'environment') {
@@ -578,12 +747,38 @@ export class SerenadaSession implements SerenadaSessionHandle {
     /** Cycle to the next camera mode in the configured order. */
     async flipCamera(): Promise<void> {
         if (this.availableCameraModes.length <= 1) return;
+        // Core Invariant 2: a held call owns no capture. Flip the desired facing
+        // without touching the camera; resume applies it.
+        if (this.mediaRole === 'held') {
+            if (this.desiredVideoMode !== 'off') {
+                this.desiredVideoMode = this.desiredVideoMode === 'selfie' ? 'world' : 'selfie';
+            }
+            return;
+        }
         await this.media.flipCamera();
+        // Keep desired camera mode in sync with the new facing so resume
+        // restores the camera the user last chose.
+        if (this.desiredVideoMode !== 'off') {
+            this.desiredVideoMode = this.cameraFacingAsVideoMode();
+        }
+    }
+
+    /** Current camera facing expressed as a {@link VideoMode} (never `'off'`). */
+    private cameraFacingAsVideoMode(): ConfigurableCameraMode {
+        return this.media.facingMode === 'environment' ? 'world' : 'selfie';
     }
 
     /** Start sharing the screen, replacing the camera video track. */
     async startScreenShare(): Promise<void> {
         if (this.config.videoMediaEnabled === false) return;
+        // Core Invariant 2: held media owns no screen share. Refuse while held —
+        // no getDisplayMedia capture, no content/participant_media_state
+        // broadcast. Screen share is foreground-only and is NOT auto-restored on
+        // resume, so there is no pending intent to record; just decline.
+        if (this.mediaRole === 'held') {
+            this.config.logger?.log('debug', 'Session', 'startScreenShare ignored while held (Core Invariant 2)');
+            return;
+        }
         const wasScreenSharing = this.media.isScreenSharing;
         await this.media.startScreenShare();
         if (!this.isInactive && !wasScreenSharing && this.media.isScreenSharing) {
@@ -634,6 +829,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
     destroy(): void {
         if (this._destroyed) return;
         this._destroyed = true;
+        // Release the process-wide foreground lease + mode claim so it never
+        // leaks (a host that calls destroy() directly, or a failed/early join).
+        this.releaseForegroundLeaseToArbiter();
         // Snapshot the quality summary before stats/media teardown so a host
         // that tears down via `destroy()` directly (React UI cleanup) still
         // reads a finalized summary — including an open dropout at teardown.
@@ -659,6 +857,27 @@ export class SerenadaSession implements SerenadaSessionHandle {
             return;
         }
         this.started = true;
+
+        // Acquire the `direct` foreground lease BEFORE connecting so only one call
+        // owns capture/audio (contract §2). A second concurrent direct join — or a
+        // direct join while a registry owns the process — fails fast. Surface it as
+        // an error CallState here (parity with iOS/Android) instead of throwing, so
+        // the non-throwing public join() always returns a usable handle. This is a
+        // SELF-owned lease (directLeaseToken); teardown self-releases it.
+        if (this.shouldAcquireForegroundLease && this.directLeaseToken === null) {
+            try {
+                const token = foregroundArbiter.acquireForeground(this.roomId, 'direct', this);
+                this.directLeaseToken = token;
+                this.foregroundOwnerToken = token;
+            } catch {
+                this.failWithError({
+                    code: 'FOREGROUND_LEASE_UNAVAILABLE',
+                    message: 'Foreground media unavailable: another call owns it',
+                });
+                return;
+            }
+        }
+
         this.pendingJoinOptions = {
             displayName: this.displayName,
             appPeerId: this.appPeerId,
@@ -752,12 +971,25 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearJoinTimeout();
         this.error = null;
         this.clientId = event.peerId;
+        // Drop the live-relay media-state cache: this `joined` snapshot carries the
+        // server's LATEST per-participant audioEnabled/videoEnabled/held (stored by
+        // the same handler that relays them), so it is at least as fresh as any
+        // relay seen before a disconnect. Without this, a stale cached `held:true`
+        // (or mute state) from before a reconnect outranks the snapshot in the
+        // `peerState?.held ?? participant.held` merge and a peer that resumed while
+        // this client was detached stays rendered "on hold" until its next
+        // broadcast. Fresh joins have an empty cache, so this is reattach-only in
+        // effect.
+        this.remoteMediaStates.clear();
         this.roomState = buildRoomState(event, null, event.peerId);
         this.seedLocalContentRevisionFromSnapshot();
         this.media.updateRoomState(this.roomState, this.clientId);
         this.maybeStartMediaLivenessTimer();
         this.rebuildState();
-        this.broadcastLocalMediaState();
+        // Carry the current role's held flag so a session joined directly into the
+        // `held` initial role advertises held:true on join (audio/video false), not
+        // a stale "live" state. A normal foreground join broadcasts held:false.
+        this.broadcastLocalMediaState(this.mediaRole === 'held');
         void this.fetchInitialIceServers();
     };
 
@@ -783,7 +1015,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.media.updateRoomState(this.roomState, this.clientId);
         this.maybeStartMediaLivenessTimer();
         this.rebuildState();
-        this.broadcastLocalMediaState();
+        // Include `held` so a newly joined peer sees this call's hold state.
+        this.broadcastLocalMediaState(this.mediaRole === 'held');
     };
 
     private readonly handlePeerLeft = (event: PeerEvent): void => {
@@ -1002,6 +1235,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 `Post-reconnect snapshot timeout after ${EPOCH_RESYNC_TIMEOUT_MS}ms; firing ICE restart against last-known peer map`,
             );
         }
+        // Re-broadcast current media state (including `held`) so peers that
+        // missed the original message during the outage converge. Carries the
+        // current role's held flag (held:true while suspended).
+        this.broadcastLocalMediaState(this.mediaRole === 'held');
         this.media.handleSignalingReconnect();
     }
 
@@ -1032,6 +1269,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     private resetSessionResources(): void {
+        // Release the self-owned direct lease on the COMMON terminal reset path
+        // (remote-end, signaling error, join timeout, ICE-server fetch failure)
+        // BEFORE media/signaling teardown, so a terminal error never leaves the
+        // process-singleton lease held and wedges all future direct joins with
+        // ForegroundLeaseUnavailable. Idempotent: the leave()/end()/destroy()
+        // paths call this too and it releases at most once (parity with iOS/
+        // Android releasing in their common reset path).
+        this.releaseForegroundLeaseToArbiter();
         this.clearReconnectTimer();
         this.clearJoinTimeout();
         this.clearEndingTimer();
@@ -1121,42 +1366,500 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     private setTrackEnabled(kind: 'audio' | 'video', enabled?: boolean): void {
+        // Core Invariant 2: a held call owns NO capture. While held, a user
+        // toggle updates `desired*` intent ONLY — no getUserMedia, no track
+        // reacquire/release, and no `participant_media_state` broadcast (peers
+        // already see held:true / audio+video false). `actual*` stays false. The
+        // latest `desired*` is applied on the next resumeForeground().
+        if (this.mediaRole === 'held') {
+            if (kind === 'video') {
+                if (this.availableCameraModes.length === 0) return;
+                const newEnabled = enabled ?? this.desiredVideoMode === 'off';
+                this.userPreferredVideoEnabled = newEnabled;
+                this.desiredVideoMode = newEnabled ? this.cameraFacingAsVideoMode() : 'off';
+            } else {
+                const newEnabled = enabled ?? !this.desiredAudioEnabled;
+                this.desiredAudioEnabled = newEnabled;
+            }
+            this.rebuildState();
+            return;
+        }
+        // Foreground role. `localStream` may be null when a call was joined held
+        // and then activated with both audio and video off (held-initial never
+        // ran startLocalMedia). We do NOT early-return on a null stream: unmuting
+        // must still ACQUIRE capture. Fall through to the no-track branches below
+        // (audio → reacquireLocalAudioCapture, video → reacquireVideoTrack), which
+        // the engine primitives handle by creating a fresh stream. `newEnabled`
+        // derives from `desired*` when there is no track to read.
         const stream = this.media.localStream;
-        if (!stream) return;
         if (kind === 'video') {
             if (this.availableCameraModes.length === 0) return;
-            const videoTrack = stream.getVideoTracks()[0];
-            const newEnabled = enabled ?? !(videoTrack?.enabled ?? this.userPreferredVideoEnabled);
+            const videoTrack = stream?.getVideoTracks()[0];
+            const newEnabled = enabled ?? !(videoTrack ? videoTrack.enabled : this.desiredVideoMode !== 'off');
             this.userPreferredVideoEnabled = newEnabled;
+            // Update desired intent so a later hold/resume restores it correctly.
+            this.desiredVideoMode = newEnabled ? this.cameraFacingAsVideoMode() : 'off';
+            // Mirror the current foreground intent into the engine so an in-flight
+            // resume-handoff cleanup can reconcile a just-released track against a
+            // re-enable that raced its disarm (never silent-unmuted). See
+            // `MediaEngine.setForegroundCaptureIntent`.
+            this.media.setForegroundCaptureIntent('video', newEnabled);
+            // Keep any pending resume handoff current: disabling video now must
+            // withdraw the camera from a handoff a resume armed but hasn't yet
+            // consumed, so it does not reacquire a camera the user just turned off.
+            if (!newEnabled) this.media.disarmResumeHandoff('video');
+            // Enabling reacquires a track asynchronously: keep `actualVideoPublished`
+            // false until the swap resolves so the field never reports published
+            // video before a track is flowing. The eventual wire broadcast below is
+            // already track-backed. Disabling can settle synchronously. Mirrors the
+            // audio reacquire path's `actualAudioPublished` derivation.
+            if (!newEnabled) {
+                this.actualVideoPublished = false;
+            }
             const swap = newEnabled ? this.media.reacquireVideoTrack() : this.media.releaseVideoTrack();
             void swap.then(() => {
-                if (!this.isInactive) {
-                    this.broadcastLocalMediaState();
-                    this.rebuildState();
+                if (this.isInactive) return;
+                // A hold (or a superseding toggle) during the async reacquire/release
+                // must not publish stale foreground media: re-check that the call is
+                // still foreground and the desired video intent still matches this
+                // op before deriving `actualVideoPublished` and broadcasting. A hold
+                // owns no capture and broadcasts held:true separately.
+                if (this.mediaRole !== 'foreground') return;
+                if (newEnabled !== (this.desiredVideoMode !== 'off')) return;
+                if (newEnabled) {
+                    const reacquired = this.media.localStream?.getVideoTracks()[0];
+                    this.actualVideoPublished = !!reacquired && reacquired.enabled;
                 }
+                this.broadcastLocalMediaState();
+                this.rebuildState();
             });
             this.rebuildState();
         } else {
-            const track = stream.getAudioTracks()[0];
-            if (track) track.enabled = enabled ?? !track.enabled;
-            this.broadcastLocalMediaState();
-            this.rebuildState();
+            const track = stream?.getAudioTracks()[0];
+            const newEnabled = enabled ?? !(track ? track.enabled : this.desiredAudioEnabled);
+            this.desiredAudioEnabled = newEnabled;
+            // Mirror the current foreground intent into the engine so an in-flight
+            // resume-handoff cleanup can reconcile a just-released track against a
+            // re-enable that raced its disarm (never silent-unmuted). See
+            // `MediaEngine.setForegroundCaptureIntent`.
+            this.media.setForegroundCaptureIntent('audio', newEnabled);
+            // Keep any pending resume handoff current: muting now must withdraw the
+            // mic from a handoff a resume armed but hasn't yet consumed, so it does
+            // not reacquire a mic the user just muted.
+            if (!newEnabled) this.media.disarmResumeHandoff('audio');
+            if (track) {
+                // Track already live (normally-joined call, incl. a muted single
+                // call): just flip `enabled` and publish. Single-call behavior
+                // is unchanged — no fresh getUserMedia.
+                track.enabled = newEnabled;
+                this.actualAudioPublished = newEnabled;
+                this.broadcastLocalMediaState();
+                this.rebuildState();
+            } else if (newEnabled) {
+                // No live mic track (a call resumed while muted released the
+                // mic). Unmuting must actually REACQUIRE capture before we
+                // publish/broadcast `audioEnabled:true` — otherwise peers see
+                // live audio with silence. Mirrors the video reacquire below.
+                const swap = this.media.reacquireLocalAudioCapture();
+                void swap.then(() => {
+                    if (this.isInactive) return;
+                    // A hold (or a superseding mute) during the async reacquire must
+                    // not publish stale foreground audio: re-check role + desired
+                    // intent before deriving `actualAudioPublished` and broadcasting.
+                    if (this.mediaRole !== 'foreground' || !this.desiredAudioEnabled) return;
+                    const reacquired = this.media.localStream?.getAudioTracks()[0];
+                    this.actualAudioPublished = !!reacquired && reacquired.enabled;
+                    this.broadcastLocalMediaState();
+                    this.rebuildState();
+                });
+                this.rebuildState();
+            } else {
+                // No track and disabling: nothing captured, nothing to publish.
+                this.actualAudioPublished = false;
+                this.broadcastLocalMediaState();
+                this.rebuildState();
+            }
         }
     }
 
-    private broadcastLocalMediaState(): void {
+    /**
+     * Current media role for this call (multi-call session model).
+     * `'foreground'` for a normally-joined single call. Read by the Phase 3
+     * registry to derive `activeCallId` and publish `ManagedCallState`.
+     */
+    get currentMediaRole(): CallMediaRole { return this.mediaRole; }
+
+    /** Foreground-activation progress; `'active'` for a normal single call. */
+    get currentMediaActivationState(): MediaActivationState { return this.mediaActivationState; }
+
+    /** User intent for audio/video (survives hold). Read by the registry. */
+    get currentDesiredAudioEnabled(): boolean { return this.desiredAudioEnabled; }
+    get currentDesiredVideoMode(): VideoMode { return this.desiredVideoMode; }
+
+    /** What peers observe now; always false while held. Read by the registry. */
+    get currentActualAudioPublished(): boolean { return this.actualAudioPublished; }
+    get currentActualVideoPublished(): boolean { return this.actualVideoPublished; }
+
+    /**
+     * Session-internal hold primitive (Phase 1; Phase 2 wraps this as the
+     * token-gated `releaseForeground`). Drives the session to a fully-held
+     * state: stop screen share, release mic + camera CAPTURE and null the
+     * senders, silence remote playout, then broadcast `held:true` AFTER capture
+     * is stopped (local-stop-then-broadcast ordering). Idempotent and must not
+     * throw after a partial release — calling it again is a safe no-op once
+     * already held.
+     */
+    async suspendForHold(): Promise<void> {
+        if (this.isInactive) return;
+        // Always bump the generation so a concurrent in-flight `resumeForeground`
+        // sees itself superseded and bails (the stale-activation race fence).
+        // This MUST run before the already-held short-circuit: while a resume is
+        // in flight the role is still `held`, so without this bump the resume
+        // would finish and wrongly set foreground, silently losing the hold.
+        this.mediaOpGeneration += 1;
+        // Already fully held with no resume in flight: a re-entrant call is a
+        // safe no-op (capture already released, held already broadcast).
+        if (this.mediaRole === 'held' && !this.resumeInFlight) return;
+        // Flip role first so a re-entrant call short-circuits and so `actual*`
+        // never reports a held call as publishing media.
+        this.mediaRole = 'held';
+        this.mediaActivationState = 'inactive';
+        this.actualAudioPublished = false;
+        this.actualVideoPublished = false;
+        try {
+            await this.media.suspendLocalMediaForHold();
+        } catch (err) {
+            // Idempotent / no-throw contract: a partial release still leaves the
+            // session held. Log and proceed to broadcast the held state.
+            this.config.logger?.log('warning', 'Session', `suspendForHold partial release: ${formatError(err)}`);
+        }
+        if (this.isInactive) return;
+        // Broadcast AFTER local capture has stopped (local-stop-then-broadcast).
+        this.broadcastLocalMediaState(true);
+        this.rebuildState();
+    }
+
+    /**
+     * Session-internal resume primitive (the un-gated local suspend/resume race
+     * path; {@link activateForeground} is the token-gated wrapper). Re-acquires
+     * local media per the call's desired intent, re-enables remote playout, sets
+     * role/actual, then broadcasts `held:false` with audio/video derived from
+     * desired AFTER the tracks are attached (attach-then-broadcast ordering).
+     */
+    async resumeForeground(): Promise<void> {
+        // Self-incremented generation, no owner-token fence: this is the local
+        // hold/resume race path used directly by tests and the un-gated callers.
+        this.mediaOpGeneration += 1;
+        await this.runResume({ gen: this.mediaOpGeneration, token: null, throwOnFailure: false });
+    }
+
+    /**
+     * Shared resume body for both {@link resumeForeground} (un-gated) and
+     * {@link activateForeground} (token-gated). Re-checks BOTH the operation
+     * generation AND, when `token` is set, that the arbiter still reports `token`
+     * as the live lease owner after the media-reacquire await: a late callback is
+     * honored only if both match (contract §3 fencing). Generation alone is
+     * insufficient because rollback re-activates the old call under a fresh
+     * generation; the owner token is the independent second fence.
+     *
+     * `throwOnFailure` distinguishes the two callers: the un-gated primitive
+     * swallows reacquire errors and rolls back to held (Phase-1 contract);
+     * `activateForeground` re-throws so the registry switch can roll back.
+     */
+    private async runResume(opts: { gen: number; token: ForegroundOwnerToken | null; throwOnFailure: boolean }): Promise<void> {
+        if (this.isInactive) return;
+        if (this.mediaRole === 'foreground') return;
+        const { gen, token, throwOnFailure } = opts;
+        this.resumeInFlight = true;
+        // Surface activation progress (contract §4; parity with iOS/Android):
+        // `activating` while reacquiring media, `active` on success, `inactive`
+        // on a superseded/failed resume (the rollback path).
+        this.mediaActivationState = 'activating';
+        this.rebuildState();
+        try {
+            await this.media.resumeLocalMediaFromHold(this.desiredAudioEnabled, this.desiredVideoMode);
+            if (this.isInactive) return;
+            // Both fences: a bumped generation (a concurrent hold) OR a lost lease
+            // (token no longer the arbiter's current owner) supersedes this resume.
+            const supersededByGeneration = this.mediaOpGeneration !== gen;
+            const supersededByToken = token !== null && !foregroundArbiter.isCurrentOwner(token);
+            if (supersededByGeneration || supersededByToken) {
+                // Superseded during reacquire. Roll back the partial activation:
+                // re-suspend capture + remote playout and keep the role held. Do
+                // NOT broadcast held:false / foreground.
+                await this.rollbackSupersededResume();
+                // Token-gated caller (`activateForeground`): a superseded resume is
+                // an activation FAILURE, not a success. Throw (after rollback) so
+                // `activateForeground` rejects and `runSwitch` rolls back —
+                // otherwise the registry would treat this as activated and set it
+                // foreground while the call actually rolled back to held.
+                if (throwOnFailure) {
+                    throw new Error('Foreground activation superseded during resume');
+                }
+                return;
+            }
+            const stream = this.media.localStream;
+            const audioTrack = stream?.getAudioTracks()[0];
+            const videoTrack = stream?.getVideoTracks()[0];
+            // Capture-landing check (D-web-1): `resumeLocalMediaFromHold` swallows
+            // getUserMedia failures (it logs and returns), so a token-gated
+            // activation would otherwise fall through here, report itself active,
+            // and let the registry mark the switch successful while the newly
+            // "foreground" call actually has no mic/camera — the registry's rollback
+            // machinery only runs when `activateForeground` throws. For the
+            // token-gated caller, throw when the DESIRED capture did not land so the
+            // existing rollback re-foregrounds the old call. The un-gated primitive
+            // (`resumeForeground`, single-call) stays best-effort: a partial resume
+            // keeps the call foreground with whatever landed (Phase-1 contract).
+            if (throwOnFailure) {
+                const audioLanded = !this.desiredAudioEnabled || (!!audioTrack && audioTrack.enabled);
+                const videoLanded = this.desiredVideoMode === 'off' || (!!videoTrack && videoTrack.enabled);
+                if (!audioLanded || !videoLanded) {
+                    await this.rollbackSupersededResume();
+                    const missing = [
+                        !audioLanded ? 'mic' : null,
+                        !videoLanded ? 'camera' : null,
+                    ].filter(Boolean).join(' + ');
+                    const detail = this.media.lastLocalMediaError
+                        ? ` (${this.media.lastLocalMediaError.name}: ${this.media.lastLocalMediaError.message})`
+                        : '';
+                    throw new Error(`Foreground activation failed: desired ${missing} capture did not land${detail}`);
+                }
+            }
+            this.mediaRole = 'foreground';
+            this.mediaActivationState = 'active';
+            this.actualAudioPublished = !!audioTrack && audioTrack.enabled;
+            this.actualVideoPublished = !!videoTrack && videoTrack.enabled;
+            // Now foreground: immediately (re)write the durable recovery record
+            // from in-memory credentials so it describes THIS call with no gap
+            // (writes were gated off while held). Design §5: foreground-only.
+            this.signaling.persistDurableRecoveryNow?.();
+            // Broadcast AFTER tracks are attached (attach-then-broadcast).
+            this.broadcastLocalMediaState();
+            this.rebuildState();
+        } catch (err) {
+            // Reacquire threw: leave the call held (no foreground, no
+            // held:false) and surface the rollback activation state. This is the
+            // failed-resume arm of the §4 `inactive` contract.
+            this.config.logger?.log('warning', 'Session', `resumeForeground failed: ${formatError(err)}`);
+            if (!this.isInactive) {
+                await this.rollbackSupersededResume();
+            }
+            if (throwOnFailure) {
+                throw err instanceof Error ? err : new Error(formatError(err));
+            }
+        } finally {
+            this.resumeInFlight = false;
+        }
+    }
+
+    /**
+     * Undo a partial foreground activation that was superseded by a concurrent
+     * hold: release any capture reacquired during resume and disable remote
+     * playout, leaving the session held. Idempotent / no-throw (a winning
+     * suspend may already have suspended media). Never broadcasts.
+     */
+    private async rollbackSupersededResume(): Promise<void> {
+        this.mediaRole = 'held';
+        this.mediaActivationState = 'inactive';
+        this.actualAudioPublished = false;
+        this.actualVideoPublished = false;
+        try {
+            await this.media.suspendLocalMediaForHold();
+        } catch (err) {
+            this.config.logger?.log('warning', 'Session', `resumeForeground rollback partial release: ${formatError(err)}`);
+        }
+        if (this.isInactive) return;
+        this.rebuildState();
+    }
+
+    // --- Token-gated foreground contract (multi-call session, contract §3).
+    // Registry-owned and token-gated: public single-call integrations never call
+    // these (they use join()/leave()/end() + the audio/video toggles). The
+    // registry holds the arbiter lease; the session uses the token only to fence
+    // late callbacks and to prove it is draining the current owner. ---
+
+    /**
+     * PURE preflight check (contract §3): inspects current permission state for
+     * the call's DESIRED media WITHOUT opening a prompt or starting capture.
+     * - `'ok'` when desired media needs no device permission: in particular when
+     *   `desiredAudioEnabled === false` AND `desiredVideoMode === 'off'` (a fully
+     *   muted, camera-off call can foreground with no prompt), or when the
+     *   required device permissions are already granted.
+     * - `'needsPermission'` when a required device permission for the desired
+     *   media is not already granted. On web, a `prompt`/unknown permission state
+     *   is treated as NOT granted.
+     * - `'failed'` for non-permission preconditions.
+     *
+     * The host owns the prompt: it requests permission, then retries the switch.
+     */
+    async preflightForeground(): Promise<'ok' | 'needsPermission' | 'failed'> {
+        if (this.isInactive) return 'failed';
+        const needsMic = this.desiredAudioEnabled;
+        const needsCamera = this.desiredVideoMode !== 'off' && this.availableCameraModes.length > 0;
+        // Desired media needs no device permission -> always ok (no prompt).
+        if (!needsMic && !needsCamera) return 'ok';
+        // Each required kind is resolved INDEPENDENTLY (a working per-kind
+        // Permissions API query, else the fallbacks) so one kind's unusable /
+        // rejected query never masks the other. Not granted for any required
+        // kind -> needsPermission (never a prompt here; the host owns that).
+        if (needsMic && !(await this.preflightKindGranted('microphone'))) return 'needsPermission';
+        if (needsCamera && !(await this.preflightKindGranted('camera'))) return 'needsPermission';
+        return 'ok';
+    }
+
+    /**
+     * Resolve whether a single device kind is already granted for the desired
+     * media, WITHOUT opening a prompt. Layered signals (contract §3):
+     *  1. Permissions API `query` — primary. A definite `granted`/`prompt`/
+     *     `denied` is authoritative. A per-kind rejection (e.g. Firefox rejects
+     *     the `camera`/`microphone` names) or an unknown/absent state falls
+     *     through to the fallbacks rather than reading as not-granted.
+     *  2. The session-level "capture already succeeded once" latch — a prior
+     *     in-SDK `getUserMedia` proves the grant.
+     *  3. `enumerateDevices` label visibility — device labels are non-empty only
+     *     after a same-origin grant for that kind, so a host-driven getUserMedia
+     *     grant (the documented prompt-then-retry protocol) becomes visible even
+     *     on a browser with no usable Permissions API. Async, so it runs last.
+     * Actual capture remains authoritative; every fallback is conservative.
+     */
+    private async preflightKindGranted(kind: 'microphone' | 'camera'): Promise<boolean> {
+        const permissions = (typeof navigator !== 'undefined' ? navigator.permissions : undefined);
+        if (permissions?.query) {
+            try {
+                const result = await permissions.query({ name: kind as PermissionName });
+                const state = result?.state;
+                if (state === 'granted') return true;
+                // A definite prompt/denied answer is authoritative: not granted.
+                if (state === 'prompt' || state === 'denied') return false;
+                // Unknown/missing state: fall through to the secondary signals.
+            } catch {
+                // Query rejected for this kind (unusable name): fall through.
+            }
+        }
+        // Secondary: the capture-success latch.
+        const latch = kind === 'microphone'
+            ? this.media.audioCaptureEverSucceeded
+            : this.media.videoCaptureEverSucceeded;
+        if (latch) return true;
+        // Tertiary: enumerateDevices label visibility.
+        return this.hasLabeledDevicesForKind(kind);
+    }
+
+    /**
+     * True when `enumerateDevices` reports at least one device of `kind` with a
+     * non-empty label — the platform only reveals labels after a same-origin
+     * permission grant for that kind, so this catches a host-driven grant that
+     * the Permissions API cannot report. Conservative: any absence/error -> false.
+     */
+    private async hasLabeledDevicesForKind(kind: 'microphone' | 'camera'): Promise<boolean> {
+        const mediaDevices = (typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined);
+        if (!mediaDevices?.enumerateDevices) return false;
+        const wantKind = kind === 'microphone' ? 'audioinput' : 'videoinput';
+        try {
+            const devices = await mediaDevices.enumerateDevices();
+            return devices.some((device) => device.kind === wantKind && device.label !== '');
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Token-gated foreground activation (contract §3). Wraps the resume mechanics
+     * with the arbiter's `operationGeneration` and the lease owner token as the
+     * two independent fences for late callbacks. Throws on failure so the caller
+     * (registry switch) can roll back. The registry has already acquired the lease
+     * and passes its token + the current operation generation.
+     */
+    async activateForeground(ownerToken: ForegroundOwnerToken, operationGeneration: number): Promise<void> {
+        if (this.isInactive) {
+            throw new Error('Cannot activate foreground on an inactive session');
+        }
+        // Adopt the externally-supplied generation as the active op generation
+        // and record the owner token as the second fence. A later un-gated hold
+        // still supersedes by bumping past this generation.
+        this.mediaOpGeneration = operationGeneration;
+        this.foregroundOwnerToken = ownerToken;
+        if (this.mediaRole === 'foreground') {
+            this.mediaActivationState = 'active';
+            return;
+        }
+        await this.runResume({ gen: operationGeneration, token: ownerToken, throwOnFailure: true });
+    }
+
+    /**
+     * Undo an {@link activateForeground} that began capture/audio before failing,
+     * leaving the session held (contract §3). Idempotent / no-throw. Does NOT
+     * release the arbiter lease (the registry owns lease release); it only clears
+     * the session's token reference and drains any partial activation.
+     */
+    async abortForegroundActivation(ownerToken: ForegroundOwnerToken): Promise<void> {
+        if (this.foregroundOwnerToken === ownerToken) {
+            this.foregroundOwnerToken = null;
+        }
+        if (this.isInactive) return;
+        // Bump so any still-in-flight resume for this activation sees itself
+        // superseded and rolls back rather than landing on foreground.
+        this.mediaOpGeneration += 1;
+        await this.rollbackSupersededResume();
+    }
+
+    /**
+     * Token-gated, idempotent release to fully-held (contract §3). MUST NOT throw
+     * after a partial release. Uses `ownerToken` only to fence late callbacks and
+     * prove it is draining the current owner; it does NOT call
+     * `arbiter.releaseLease` (the registry does, after this confirms fully-held).
+     * Delegates to the idempotent {@link suspendForHold} mechanics.
+     */
+    async releaseForeground(ownerToken: ForegroundOwnerToken): Promise<void> {
+        // Token mismatch with a live different token: a stale caller; no-op (do
+        // not drain a call the caller does not own). When it matches, clear the
+        // session's token reference (the registry frees the lease afterwards).
+        if (this.foregroundOwnerToken !== null && this.foregroundOwnerToken !== ownerToken) {
+            return;
+        }
+        this.foregroundOwnerToken = null;
+        await this.suspendForHold();
+    }
+
+    private broadcastLocalMediaState(held = false): void {
+        if (held) {
+            // Held: own no capture. Send audio/video disabled + held:true so an
+            // old peer that ignores `held` still degrades to muted/camera-off,
+            // never a wrong "live" state.
+            this.signaling.broadcast('participant_media_state', {
+                audioEnabled: false,
+                videoEnabled: false,
+                held: true,
+            });
+            return;
+        }
         const stream = this.media.localStream;
         const audioTrack = stream?.getAudioTracks()[0];
         const videoTrack = stream?.getVideoTracks()[0];
-        // Audio: track is always present once media starts; we toggle the
-        // `enabled` flag in place. Video: track may be absent (released to free
-        // the camera) — derive from track presence so we never advertise
-        // camera-on while reacquire is pending or has failed. Pre-media-start
-        // (no stream) we fall back to the user's stated preference.
+        // Audio: see `publishedAudioEnabled` (desired intent gated by track).
+        // Video: derive from track presence. A held call with camera off does
+        // not reacquire the camera, so there is no video track and this yields
+        // false. Track-presence (not `desiredVideoMode`) is intentional: in
+        // legacy screen-share-from-audio-only the camera mode is off yet a video
+        // (display) track IS flowing and peers must see videoEnabled:true.
         this.signaling.broadcast('participant_media_state', {
-            audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
+            audioEnabled: this.publishedAudioEnabled(stream, audioTrack),
             videoEnabled: stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled,
+            held: false,
         });
+    }
+
+    /**
+     * Audio-published value shared by the broadcast and the local-participant
+     * snapshot: DESIRED intent gated by an actually-present audio track once
+     * media has started, falling back to bare desired intent pre-media-start.
+     * Never keyed off `config.defaultAudioEnabled` — a muted-resumed call has no
+     * reacquired audio track, so this yields false (privacy: never advertise
+     * audioEnabled:true while muted). See {@link broadcastLocalMediaState}.
+     */
+    private publishedAudioEnabled(stream: MediaStream | null, audioTrack: MediaStreamTrack | undefined): boolean {
+        return stream ? (this.desiredAudioEnabled && !!audioTrack) : this.desiredAudioEnabled;
     }
 
     private handleRemoteMediaState(message: PeerMessage): void {
@@ -1166,6 +1869,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.remoteMediaStates.set(message.from, {
             audioEnabled: typeof payload.audioEnabled === 'boolean' ? payload.audioEnabled : existing?.audioEnabled,
             videoEnabled: typeof payload.videoEnabled === 'boolean' ? payload.videoEnabled : existing?.videoEnabled,
+            // `held` is additive and lenient (like audio/video): an older peer
+            // that omits it leaves the cached value unchanged.
+            held: typeof payload.held === 'boolean' ? payload.held : existing?.held,
         });
         this.rebuildState();
     }
@@ -1376,10 +2082,20 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const audioTrack = stream?.getAudioTracks()[0];
         const videoTrack = stream?.getVideoTracks()[0];
 
+        // A held call owns NO capture and broadcasts audio/video disabled +
+        // held:true to peers. Report the SAME false/false locally so the local
+        // participant snapshot never contradicts the wire (a held-initial call
+        // has a null stream and otherwise falls back to desired preferences,
+        // which default true). The desired-preference fallback below is kept
+        // ONLY for the pre-media-start joining phase of a FOREGROUND call.
+        const isHeld = this.mediaRole === 'held';
         // Mirror broadcast: derive from real track presence/state so the
         // local UI matches what peers see. Pre-media-start (no stream),
         // fall back to the user's preference.
-        const localVideoEnabled = stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled;
+        const localVideoEnabled = isHeld
+            ? false
+            : (stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled);
+        const localAudioEnabled = isHeld ? false : this.publishedAudioEnabled(stream, audioTrack);
         const independentMode = this.config.enableIndependentContentVideo === true;
         // Independent mode: `localStream` carries audio + camera only (content is
         // a separate track), so the camera track presence is the precise camera
@@ -1393,7 +2109,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
             cid: clientId,
             displayName: this.displayName,
             peerId: this.appPeerId,
-            audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
+            // Mirror the broadcast so the local UI matches what peers see.
+            audioEnabled: localAudioEnabled,
             // `cameraEnabled` is camera-specific and `videoEnabled` mirrors it.
             // Both equal `localVideoEnabled` here because, in both independent and
             // legacy modes, the camera track presence/state IS the local video
@@ -1432,6 +2149,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
                     // signal; independent screen-share state is exposed via content.
                     cameraEnabled: videoEnabled,
                     videoEnabled,
+                    // `held` surfaces the peer's hold state so call UIs can show
+                    // "on hold" distinctly. Prefer the live relay value, then fall
+                    // back to the `held` the server now persists in joined/room_state
+                    // snapshots — so a late joiner or a client that reconnected after
+                    // missing the original relay (or sees a suspended peer that can't
+                    // re-broadcast) still renders the peer as on hold. Absent for
+                    // peers we've never heard a `held` field from (older / never held).
+                    held: peerState?.held ?? participant.held,
                     content: trackedContent?.active === true ? trackedContent : undefined,
                     cameraReceiving: roleLiveness.camera,
                     contentReceiving: roleLiveness.content,

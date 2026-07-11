@@ -74,6 +74,8 @@ xcodebuild \
   test
 ```
 
+SPM package tests (SerenadaCore, SerenadaCallUI) compile into the host `SerenadaiOSTests` bundle, so a targeted run uses `-only-testing:SerenadaiOSTests` (for example `-only-testing:SerenadaiOSTests/MultiSessionSignalingProviderTests`); `-only-testing:SerenadaCoreTests` does not work.
+
 Run the deep-link rejoin UI flow test only:
 ```bash
 cd client-ios

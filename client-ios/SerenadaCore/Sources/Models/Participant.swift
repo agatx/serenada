@@ -86,6 +86,11 @@ public struct Participant: Codable, Equatable {
     public let peerId: String?
     public let audioEnabled: Bool?
     public let videoEnabled: Bool?
+    /// Multi-call "on hold" flag the server persists in joined/room_state
+    /// snapshots (additive; nil for older clients / never-held peers). Lets a
+    /// late joiner or a client reconnecting after it missed the live
+    /// `participant_media_state` relay still render a held peer correctly.
+    public let held: Bool?
     public let signalingStatus: ParticipantSignalingStatus
     public let contentState: ParticipantContentState?
     /// Static build capabilities advertised at `join`, forwarded by the server.
@@ -100,6 +105,7 @@ public struct Participant: Codable, Equatable {
         peerId: String? = nil,
         audioEnabled: Bool? = nil,
         videoEnabled: Bool? = nil,
+        held: Bool? = nil,
         signalingStatus: ParticipantSignalingStatus = .active,
         contentState: ParticipantContentState? = nil,
         capabilities: ParticipantCapabilities? = nil,
@@ -111,6 +117,7 @@ public struct Participant: Codable, Equatable {
         self.peerId = peerId
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
+        self.held = held
         self.signalingStatus = signalingStatus
         self.contentState = contentState
         self.capabilities = capabilities

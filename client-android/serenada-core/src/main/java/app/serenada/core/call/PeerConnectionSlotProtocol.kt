@@ -106,6 +106,15 @@ internal interface PeerConnectionSlotProtocol {
     fun setAudioTrack(track: AudioTrack?)
 
     /**
+     * Null this peer's local video SENDER tracks (`setTrack(null, false)`) on
+     * hold, mirroring [setAudioTrack]`(null)` for audio. Clears the camera sender
+     * (legacy single-video) and, for independent-capable peers, both the bound
+     * camera and content senders, so a held call preserves its senders/
+     * transceivers without carrying a stale capture track. No renegotiation.
+     */
+    fun clearLocalVideoTracks() {}
+
+    /**
      * Attach a renderer/sink to this peer's CONTENT (screen share) video track
      * specifically. For legacy peers this is the single video track when the
      * peer is presenting content; for independent-capable peers it is the
@@ -137,6 +146,31 @@ internal interface PeerConnectionSlotProtocol {
     fun hasRemoteDescription(): Boolean
     fun isRemoteVideoTrackEnabled(): Boolean
     fun duckPlayback(ducked: Boolean)
+
+    /**
+     * Hard-deafen this peer's remote audio receivers by toggling
+     * `AudioTrack.setEnabled`. Distinct from [duckPlayback] (volume duck): a
+     * held call sets `enabled=false` so its remote audio produces no output at
+     * all, then `enabled=true` on resume. Independent of, and does not clobber,
+     * the duck volume.
+     */
+    fun setRemotePlaybackEnabled(enabled: Boolean) {}
+
+    /**
+     * Detach this peer's visible camera + content sinks from the remote tracks for
+     * a held call, so the decoder stops delivering frames to hidden renderers.
+     * The peer connection, remote tracks, and sink registrations are preserved;
+     * [reattachRemoteRenderersAfterResume] restores them. Sticky: a remote track
+     * that arrives while held also comes up with its visible sinks detached.
+     */
+    fun detachRemoteRenderersForHold() {}
+
+    /**
+     * Re-attach exactly the registered visible sinks after a resume, undoing
+     * [detachRemoteRenderersForHold]. Idempotent — repeated hold/resume cycles
+     * never accumulate duplicate sinks.
+     */
+    fun reattachRemoteRenderersAfterResume() {}
 
     // Renderer/stats
     fun attachRemoteRenderer(renderer: SurfaceViewRenderer)
