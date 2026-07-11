@@ -271,6 +271,14 @@ export class FakeMediaEngine {
         this.disarmResumeHandoffCalls.push(kind);
     }
 
+    // Records the session's mirrored foreground capture intent (parity with
+    // MediaEngine.setForegroundCaptureIntent). Inert bookkeeping for the fake.
+    setForegroundCaptureIntentCalls: Array<{ kind: 'audio' | 'video'; enabled: boolean }> = [];
+
+    setForegroundCaptureIntent(kind: 'audio' | 'video', enabled: boolean): void {
+        this.setForegroundCaptureIntentCalls.push({ kind, enabled });
+    }
+
     setRemotePlaybackEnabled(enabled: boolean): void {
         this.setRemotePlaybackEnabledCalls.push(enabled);
     }

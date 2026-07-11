@@ -253,6 +253,16 @@ export class MediaEngine {
     // once (cleared on read) and cleared on teardown; the reacquire paths have
     // their own coalescing/no-op guards, so the handoff cannot loop.
     private pendingResumeHandoff: { audio: boolean; videoMode: VideoMode } | null = null;
+    // Latest per-kind foreground enable/disable intent, mirrored from the
+    // session's foreground `setTrackEnabled` (see {@link setForegroundCaptureIntent}).
+    // Unlike the nullable {@link pendingResumeHandoff} object — which a full disarm
+    // nulls, so a later re-enable cannot re-arm it — these plain booleans always
+    // reflect the user's CURRENT intent. {@link handOffToResumedCapture} reads them
+    // AFTER its same-kind disarm release await to reconcile the just-released track
+    // against that intent, so an unmute racing the release never leaves the call
+    // silent-unmuted (desired on, no live track).
+    private foregroundAudioIntent = false;
+    private foregroundVideoIntent = false;
     private localMediaStartPromise: Promise<MediaStream | null> | null = null;
     // Monotonic CAPTURE GENERATION. Bumped synchronously whenever the current
     // capture is invalidated: a media (re)start (`startLocalMediaInternal`), a
@@ -958,6 +968,22 @@ export class MediaEngine {
     }
 
     /**
+     * Mirror the session's latest foreground enable/disable intent for a media
+     * kind into the engine. Called from the session's foreground
+     * `setTrackEnabled` on every toggle. Read only by
+     * {@link handOffToResumedCapture}'s post-release reconcile: when a same-kind
+     * disarm made the handoff release a just-attached track, the user may have
+     * re-enabled the kind meanwhile via a path that only flipped `track.enabled`
+     * (the track was still attached then) and scheduled no reacquire. This flag —
+     * which survives a full disarm nulling {@link pendingResumeHandoff} — lets the
+     * handoff reacquire a fresh track so the call is never left silent-unmuted.
+     */
+    setForegroundCaptureIntent(kind: 'audio' | 'video', enabled: boolean): void {
+        if (kind === 'audio') this.foregroundAudioIntent = enabled;
+        else this.foregroundVideoIntent = enabled;
+    }
+
+    /**
      * Consume the armed resume handoff, but only if `intent` is STILL the armed
      * one. A {@link disarmResumeHandoff} that withdrew both kinds during a
      * reacquire await already nulled `pendingResumeHandoff`, and a fresh resume
@@ -1020,7 +1046,25 @@ export class MediaEngine {
             // after the user muted (privacy). The re-check reads the mutated
             // `intent`, not the pre-await snapshot. Idempotent when the reacquire
             // attached nothing (held-fenced/failed).
-            if (!live.audio) await this.releaseLocalAudioCapture();
+            if (!live.audio) {
+                await this.releaseLocalAudioCapture();
+                // RE-ENABLE racing the disarm cleanup: the user may have UNMUTED
+                // during the reacquire OR the release await above. The session's
+                // enable-with-track-present path only flipped `track.enabled` and
+                // scheduled no reacquire (the track was still attached when it ran),
+                // so the release above just left the call SILENT-UNMUTED — desired
+                // audio on, but the live mic stopped/removed. `live.audio` cannot
+                // detect this: a full disarm nulled `pendingResumeHandoff`, so the
+                // session's re-enable had no armed intent to re-arm. Reconcile
+                // against the engine-owned foreground intent (which survives the
+                // null) and reacquire a fresh mic iff audio is currently desired and
+                // the call is still foreground. Idempotent —
+                // `reacquireLocalAudioCapture` no-ops when a live track is present.
+                if (this.foregroundAudioIntent && !this.destroyed && !this.heldNoCapture
+                    && !this.localStream?.getAudioTracks()[0]) {
+                    await this.reacquireLocalAudioCapture();
+                }
+            }
         }
         if (this.destroyed || this.heldNoCapture) { this.consumeResumeHandoff(intent); return; }
         if (intent.videoMode !== 'off' && !this.localStream?.getVideoTracks()[0]) {
@@ -1030,7 +1074,18 @@ export class MediaEngine {
             // the camera getUserMedia await withdrew video after the reacquire
             // attached a live camera track. Detach it (same sink the hold path
             // uses) so a disabled camera never keeps sending.
-            if (live.videoMode === 'off') await this.releaseVideoTrack();
+            if (live.videoMode === 'off') {
+                await this.releaseVideoTrack();
+                // Symmetric re-enable reconcile (see the audio branch): the user may
+                // have re-enabled the camera during the reacquire/release, leaving a
+                // silent-unmuted video. `facingMode` was set above from the armed
+                // mode, so a fresh reacquire uses the correct facing. Reacquire iff
+                // video is currently desired and the call is still foreground.
+                if (this.foregroundVideoIntent && !this.destroyed && !this.heldNoCapture
+                    && !this.localStream?.getVideoTracks()[0]) {
+                    await this.reacquireVideoTrack();
+                }
+            }
         }
         this.consumeResumeHandoff(intent);
     }

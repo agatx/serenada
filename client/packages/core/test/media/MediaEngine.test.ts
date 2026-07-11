@@ -184,6 +184,11 @@ class FakeRtcRtpSender {
     // `replaceTrack` promise that resolves LATE (after a concurrent hold/resume).
     // Inert by default (empty set), so every other test is unaffected.
     static deferredTracks = new Set<MediaStreamTrack>();
+    // Opt-in gating for the DETACH-await race tests: when true, `replaceTrack(null)`
+    // (the hold/handoff release path) parks until `releaseParked()`, modelling a
+    // sender detachment that resolves LATE (after a concurrent re-enable). Inert by
+    // default so every other test is unaffected.
+    static deferNullReplace = false;
     static parked: Array<() => void> = [];
     static releaseParked(): void {
         const pending = [...FakeRtcRtpSender.parked];
@@ -192,6 +197,7 @@ class FakeRtcRtpSender {
     }
     static resetGating(): void {
         FakeRtcRtpSender.deferredTracks.clear();
+        FakeRtcRtpSender.deferNullReplace = false;
         FakeRtcRtpSender.parked.length = 0;
     }
 
@@ -202,6 +208,12 @@ class FakeRtcRtpSender {
         if (track && FakeRtcRtpSender.deferredTracks.has(track)) {
             await new Promise<void>((resolve) => {
                 FakeRtcRtpSender.parked.push(() => { this.track = track; resolve(); });
+            });
+            return;
+        }
+        if (track === null && FakeRtcRtpSender.deferNullReplace) {
+            await new Promise<void>((resolve) => {
+                FakeRtcRtpSender.parked.push(() => { this.track = null; resolve(); });
             });
             return;
         }
@@ -1717,6 +1729,119 @@ describe('MediaEngine', () => {
             const resumedAudio = engine.localStream?.getAudioTracks()[0];
             expect(resumedAudio).toBeTruthy();
             expect(peer?.senders.some(s => s.track === resumedAudio)).toBe(true);
+        });
+
+        it('re-acquires a live mic when audio is RE-ENABLED while the handoff disarm-release is in flight', async () => {
+            // Stale-release vs re-enable race: the handoff's audio reacquire attached
+            // a live mic, then a `disarmResumeHandoff('audio')` (mute) made the
+            // handoff begin releasing it. If the user UNMUTES while that release is
+            // awaiting `replaceTrack(null)`, the session's enable-with-track-present
+            // path only flips `track.enabled` (the track is still attached) and
+            // schedules NO reacquire. The stale release then stops+removes the track,
+            // leaving the call silent-unmuted (desired audio on, no live mic). The
+            // handoff must reconcile against the foreground intent and reacquire.
+            const firstMic = createMediaTrack('audio');
+            const firstMicStop = vi.spyOn(firstMic, 'stop');
+            const secondMic = createMediaTrack('audio');
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveAudio!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))  // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveAudio = resolve; }))    // handoff audio reacquire (parked)
+                .mockImplementation(async () => new FakeMediaStream([secondMic]) as unknown as MediaStream); // reconcile reacquire
+            setupNavigator(getUserMedia);
+            // Park the RELEASE detach (`replaceTrack(null)`) so the unmute can race it.
+            FakeRtcRtpSender.deferNullReplace = true;
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'off');     // arms handoff {audio}
+            engine.setForegroundCaptureIntent('audio', true);       // resume desired audio on
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> audio reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            // User mutes WHILE the handoff's audio reacquire is awaiting getUserMedia.
+            engine.disarmResumeHandoff('audio');
+            engine.setForegroundCaptureIntent('audio', false);
+            resolveAudio(new FakeMediaStream([firstMic]) as unknown as MediaStream);  // mic lands -> handoff begins releasing it
+            // The disarm-release parks on `replaceTrack(null)`; the mic is still attached.
+            await vi.waitFor(() => expect(FakeRtcRtpSender.parked.length).toBeGreaterThan(0));
+            // User UNMUTES while the release detach is parked.
+            engine.setForegroundCaptureIntent('audio', true);
+            FakeRtcRtpSender.releaseParked();                       // release lands: first mic stopped+removed
+            const result = await start;
+
+            expect(result).toBeNull();
+            // The call ends with a LIVE mic (the reconcile reacquire), NOT silent:
+            // a fresh track, attached to the peer's audio sender.
+            const liveMic = engine.localStream?.getAudioTracks()[0];
+            expect(liveMic).toBe(secondMic);
+            expect(liveMic).not.toBe(firstMic);
+            expect(peer?.senders.some(s => s.track === secondMic)).toBe(true);
+            // The disarm-released first mic was stopped and detached.
+            expect(firstMicStop).toHaveBeenCalled();
+            expect(peer?.senders.some(s => s.track === firstMic)).toBe(false);
+            // Initial + handoff reacquire + reconcile reacquire = 3 getUserMedia calls.
+            expect(getUserMedia).toHaveBeenCalledTimes(3);
+        });
+
+        it('re-acquires a live camera when video is RE-ENABLED while the handoff disarm-release is in flight', async () => {
+            // Symmetric video variant of the stale-release vs re-enable race: a camera
+            // re-enable during the handoff's disarm-release must not leave the call
+            // silent-unmuted for video — the handoff reconciles and reacquires.
+            const firstCam = createMediaTrack('video');
+            const firstCamStop = vi.spyOn(firstCam, 'stop');
+            const secondCam = createMediaTrack('video');
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveVideo!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))  // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveVideo = resolve; }))    // handoff video reacquire (parked)
+                .mockImplementation(async () => new FakeMediaStream([secondCam]) as unknown as MediaStream); // reconcile reacquire
+            setupNavigator(getUserMedia);
+            FakeRtcRtpSender.deferNullReplace = true;
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(false, 'selfie'); // arms handoff {selfie}
+            engine.setForegroundCaptureIntent('video', true);       // resume desired video on
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> video reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            // User turns the camera off WHILE the handoff's video reacquire is awaiting.
+            engine.disarmResumeHandoff('video');
+            engine.setForegroundCaptureIntent('video', false);
+            resolveVideo(new FakeMediaStream([firstCam]) as unknown as MediaStream);  // camera lands -> handoff begins releasing it
+            await vi.waitFor(() => expect(FakeRtcRtpSender.parked.length).toBeGreaterThan(0));
+            // User re-enables the camera while the release detach is parked.
+            engine.setForegroundCaptureIntent('video', true);
+            FakeRtcRtpSender.releaseParked();                       // release lands: first camera stopped+removed
+            const result = await start;
+
+            expect(result).toBeNull();
+            const liveCam = engine.localStream?.getVideoTracks()[0];
+            expect(liveCam).toBe(secondCam);
+            expect(liveCam).not.toBe(firstCam);
+            expect(peer?.senders.some(s => s.track === secondCam)).toBe(true);
+            expect(firstCamStop).toHaveBeenCalled();
+            expect(peer?.senders.some(s => s.track === firstCam)).toBe(false);
+            expect(getUserMedia).toHaveBeenCalledTimes(3);
         });
 
         it('does not consume the handoff at a stale exit that no longer owns the latch (B replays it)', async () => {

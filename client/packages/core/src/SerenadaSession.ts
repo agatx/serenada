@@ -1399,6 +1399,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.userPreferredVideoEnabled = newEnabled;
             // Update desired intent so a later hold/resume restores it correctly.
             this.desiredVideoMode = newEnabled ? this.cameraFacingAsVideoMode() : 'off';
+            // Mirror the current foreground intent into the engine so an in-flight
+            // resume-handoff cleanup can reconcile a just-released track against a
+            // re-enable that raced its disarm (never silent-unmuted). See
+            // `MediaEngine.setForegroundCaptureIntent`.
+            this.media.setForegroundCaptureIntent('video', newEnabled);
             // Keep any pending resume handoff current: disabling video now must
             // withdraw the camera from a handoff a resume armed but hasn't yet
             // consumed, so it does not reacquire a camera the user just turned off.
@@ -1433,6 +1438,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
             const track = stream?.getAudioTracks()[0];
             const newEnabled = enabled ?? !(track ? track.enabled : this.desiredAudioEnabled);
             this.desiredAudioEnabled = newEnabled;
+            // Mirror the current foreground intent into the engine so an in-flight
+            // resume-handoff cleanup can reconcile a just-released track against a
+            // re-enable that raced its disarm (never silent-unmuted). See
+            // `MediaEngine.setForegroundCaptureIntent`.
+            this.media.setForegroundCaptureIntent('audio', newEnabled);
             // Keep any pending resume handoff current: muting now must withdraw the
             // mic from a handoff a resume armed but hasn't yet consumed, so it does
             // not reacquire a mic the user just muted.
