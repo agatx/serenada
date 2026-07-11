@@ -232,6 +232,17 @@ export class MediaEngine {
     // (see `setTrackEnabled` / `resumeForeground`); this is the engine-level
     // backstop for paths the session can't gate.
     private heldNoCapture = false;
+    // Resume-handoff intent, armed by {@link resumeLocalMediaFromHold} ONLY when
+    // its reacquire(s) early-returned on the `requestingMedia` guard — i.e. an
+    // in-flight `startLocalMediaInternal` still held the media latch, so the
+    // resumed call's desired mic/camera never got reacquired (route refresh /
+    // reacquire are no-ops). When that stale initial op finally bails out (and
+    // clears `requestingMedia`), {@link handOffToResumedCapture} consumes this and
+    // replays the desired capture via the SAME reacquire sinks resume uses, so a
+    // resumed foreground call is not left permanently mic/camera-less. Consumed
+    // once (cleared on read) and cleared on teardown; the reacquire paths have
+    // their own coalescing/no-op guards, so the handoff cannot loop.
+    private pendingResumeHandoff: { audio: boolean; videoMode: VideoMode } | null = null;
     private localMediaStartPromise: Promise<MediaStream | null> | null = null;
     // Monotonic CAPTURE GENERATION. Bumped synchronously whenever the current
     // capture is invalidated: a media (re)start (`startLocalMediaInternal`), a
@@ -569,6 +580,12 @@ export class MediaEngine {
             // freshly captured tracks instead of attaching them to peers).
             if (this.isCaptureStale(requestId)) {
                 stream.getTracks().forEach(t => t.stop());
+                // Release the media latch (this bail-out is the one path that took
+                // it and does NOT reach the happy-path clear below) so the handoff's
+                // reacquires can proceed, then hand off to any resume that this op
+                // blocked while parked in the acquire await.
+                this.requestingMedia = false;
+                await this.handOffToResumedCapture();
                 return null;
             }
 
@@ -598,6 +615,9 @@ export class MediaEngine {
                     await this.detachStaleTrackFromSenders(track);
                     try { track.stop(); } catch { /* ignore */ }
                 }
+                // `requestingMedia` was cleared above; hand off to a resume this op
+                // blocked while parked in the device-detection / route-refresh await.
+                await this.handOffToResumedCapture();
                 return null;
             }
             const activeStream = this.localStream;
@@ -634,6 +654,9 @@ export class MediaEngine {
                     await this.detachStaleTrackFromSenders(track);
                     try { track.stop(); } catch { /* ignore */ }
                 }
+                // `requestingMedia` was cleared above; hand off to a resume this op
+                // blocked while parked in an attach await.
+                await this.handOffToResumedCapture();
                 return null;
             }
             this.notifyChange();
@@ -669,6 +692,9 @@ export class MediaEngine {
         }
         this.isScreenSharing = false;
         this.requestingMedia = false;
+        // A full teardown supersedes any pending resume handoff (also covers
+        // `destroy`, which routes through here).
+        this.pendingResumeHandoff = null;
         this.notifyChange();
     }
 
@@ -847,7 +873,44 @@ export class MediaEngine {
             await this.reacquireVideoTrack();
         }
         this.setRemotePlaybackEnabled(true);
+        // If a concurrent `startLocalMediaInternal` still holds the media latch,
+        // the reacquire(s) above early-returned on their `requestingMedia` guard
+        // and the resumed call is left without the mic/camera it wants. Arm a
+        // handoff so that op's stale bail-out replays the desired capture once the
+        // latch clears. Only arm for a kind that is genuinely still missing while
+        // not held, so a resume whose reacquires actually landed arms nothing.
+        if (this.requestingMedia && !this.heldNoCapture) {
+            const audioMissing = desiredAudio && !this.localStream?.getAudioTracks()[0];
+            const videoMissing = desiredVideoMode !== 'off' && !this.localStream?.getVideoTracks()[0];
+            if (audioMissing || videoMissing) {
+                this.pendingResumeHandoff = { audio: desiredAudio, videoMode: desiredVideoMode };
+            }
+        }
         this.notifyChange();
+    }
+
+    /**
+     * Replay a resumed call's desired capture that a concurrent in-flight
+     * initial-media start blocked (see {@link pendingResumeHandoff}). Called from
+     * the stale bail-outs of {@link startLocalMediaInternal} AFTER that op has
+     * cleared `requestingMedia`, so the reacquire sinks (which early-return while
+     * `requestingMedia` is set) now proceed. Consumes the armed intent (runs once
+     * per stale exit) and reacquires each still-missing kind via the SAME sinks
+     * resume uses. No-op when nothing was armed, when the call is held again, or
+     * when the engine was destroyed; the reacquire paths carry their own no-op
+     * guards, so this cannot loop.
+     */
+    private async handOffToResumedCapture(): Promise<void> {
+        const intent = this.pendingResumeHandoff;
+        this.pendingResumeHandoff = null;
+        if (!intent || this.destroyed || this.heldNoCapture) return;
+        if (intent.audio && !this.localStream?.getAudioTracks()[0]) {
+            await this.reacquireLocalAudioCapture();
+        }
+        if (intent.videoMode !== 'off' && !this.localStream?.getVideoTracks()[0]) {
+            this.facingMode = intent.videoMode === 'selfie' ? 'user' : 'environment';
+            await this.reacquireVideoTrack();
+        }
     }
 
     /**

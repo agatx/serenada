@@ -1328,6 +1328,97 @@ describe('MediaEngine', () => {
             expect(peer?.senders.some(sender => sender.track === audioTrack || sender.track === videoTrack)).toBe(false);
         });
 
+        it('hands off to resumed capture when a stale initial-media start blocked the resume reacquire', async () => {
+            // The resume's mic/camera reacquire early-returns on the `requestingMedia`
+            // guard because a parked initial-media start still holds the media latch
+            // (and the route refresh is a no-op). If that stale start just bailed out
+            // it would leave the resumed foreground call permanently without mic or
+            // camera; the stale-exit must instead hand off to the resumed capture.
+            const initialAudio = createMediaTrack('audio');
+            const initialVideo = createMediaTrack('video');
+            const initialAudioStop = vi.spyOn(initialAudio, 'stop');
+            const initialVideoStop = vi.spyOn(initialVideo, 'stop');
+            let resolveInitial!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))
+                .mockImplementation(async (constraints: MediaStreamConstraints) => {
+                    const tracks: MediaStreamTrack[] = [];
+                    if (constraints.audio) tracks.push(createMediaTrack('audio'));
+                    if (constraints.video) tracks.push(createMediaTrack('video'));
+                    return new FakeMediaStream(tracks) as unknown as MediaStream;
+                });
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // initial getUserMedia (gen 1, latch held)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            // Resume wants mic + camera but its reacquire(s) early-return: the parked
+            // initial start still holds `requestingMedia`, so nothing reacquires.
+            await engine.resumeLocalMediaFromHold(true, 'selfie');
+            expect(engine.localStream?.getAudioTracks() ?? []).toHaveLength(0);
+            expect(engine.localStream?.getVideoTracks() ?? []).toHaveLength(0);
+
+            resolveInitial(new FakeMediaStream([initialAudio, initialVideo]) as unknown as MediaStream);
+            const result = await start;
+
+            // Stale start published nothing and stopped its OWN captured tracks.
+            expect(result).toBeNull();
+            expect(initialAudioStop).toHaveBeenCalled();
+            expect(initialVideoStop).toHaveBeenCalled();
+            expect(peer?.senders.some(s => s.track === initialAudio || s.track === initialVideo)).toBe(false);
+
+            // The foreground call ends with live mic + camera (the reacquired tracks),
+            // attached to the peer's senders — the handoff replayed the resume intent.
+            const resumedAudio = engine.localStream?.getAudioTracks()[0];
+            const resumedVideo = engine.localStream?.getVideoTracks()[0];
+            expect(resumedAudio).toBeTruthy();
+            expect(resumedVideo).toBeTruthy();
+            expect(resumedAudio).not.toBe(initialAudio);
+            expect(resumedVideo).not.toBe(initialVideo);
+            expect(peer?.senders.some(s => s.track === resumedAudio)).toBe(true);
+            expect(peer?.senders.some(s => s.track === resumedVideo)).toBe(true);
+        });
+
+        it('acquires nothing when only a hold (no resume) interleaves a parked initial-media start', async () => {
+            // Hold-only variant: no resume armed a handoff, so the stale initial-media
+            // bail-out must NOT reacquire anything — the call is still held.
+            const initialAudio = createMediaTrack('audio');
+            const initialVideo = createMediaTrack('video');
+            let resolveInitial!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))
+                .mockImplementation(async () => createMediaStream({ audio: true, video: true }));
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // hold, NO resume
+            resolveInitial(new FakeMediaStream([initialAudio, initialVideo]) as unknown as MediaStream);
+            const result = await start;
+
+            expect(result).toBeNull();
+            // Still held: no capture reacquired, senders carry no live track, and the
+            // handoff triggered no further getUserMedia (only the initial acquire ran).
+            expect(engine.localStream?.getAudioTracks() ?? []).toHaveLength(0);
+            expect(engine.localStream?.getVideoTracks() ?? []).toHaveLength(0);
+            expect(peer?.senders.every(s => s.track === null)).toBe(true);
+            expect(getUserMedia).toHaveBeenCalledTimes(1);
+        });
+
         it('undoes a stale initial-media sender attachment when hold+resume interleaves before the replaceTrack resolves', async () => {
             // Attachment-await race: the initial getUserMedia resolves, but the
             // per-peer `replaceTrack` that attaches the initial tracks is still in
