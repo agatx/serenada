@@ -979,6 +979,71 @@ final class HoldResumeTests: XCTestCase {
                       "Unmute must publish audio enabled over the existing track")
         harness.tearDown()
     }
+
+    // MARK: - Remote renderer detach/replay across hold (contract §3 "held media")
+
+    /// A held call must render NOTHING, including the REMOTE camera + content
+    /// streams — not just the local preview. Hold must detach the session-owned
+    /// remote renderers from the peer slot; resume must replay them exactly once.
+    /// Over repeated cycles the detach/attach must stay balanced (no leaked,
+    /// duplicate registrations feeding frames to an invisible held call).
+    func testHoldDetachesRemoteRenderersAndResumeReattachesBalanced() async {
+        let harness = await makeInCallHarness()
+        guard let slot = harness.fakeMedia.fakeSlots["remote"] else {
+            XCTFail("expected a peer slot for the remote participant")
+            harness.tearDown()
+            return
+        }
+
+        let cameraRenderer = NSObject()
+        let contentRenderer = NSObject()
+        harness.session.attachRemoteRenderer(cameraRenderer, forParticipant: "remote")
+        harness.session.attachRemoteContentRenderer(contentRenderer, forParticipant: "remote")
+        await yieldToMainActor()
+
+        func cameraAttaches() -> Int { slot.attachRemoteRendererCalls.filter { $0 === cameraRenderer }.count }
+        func cameraDetaches() -> Int { slot.detachRemoteRendererCalls.filter { $0 === cameraRenderer }.count }
+        func contentAttaches() -> Int { slot.attachRemoteContentRendererCalls.filter { $0 === contentRenderer }.count }
+        func contentDetaches() -> Int { slot.detachRemoteContentRendererCalls.filter { $0 === contentRenderer }.count }
+
+        // Baseline: attached once each, not yet detached (net-attached == 1 each).
+        XCTAssertEqual(cameraAttaches(), 1, "remote camera renderer attaches once on registration")
+        XCTAssertEqual(contentAttaches(), 1, "remote content renderer attaches once on registration")
+        XCTAssertEqual(cameraDetaches(), 0)
+        XCTAssertEqual(contentDetaches(), 0)
+
+        // Three hold/resume cycles: each hold detaches both remote renderers, each
+        // resume re-attaches both — exactly once per cycle, staying balanced.
+        for cycle in 1...3 {
+            harness.session.applyHeldRoleInternal()
+            await waitUntil { harness.session.mediaRole == .held }
+
+            XCTAssertEqual(cameraDetaches(), cycle,
+                           "hold #\(cycle) must detach the remote camera renderer")
+            XCTAssertEqual(contentDetaches(), cycle,
+                           "hold #\(cycle) must detach the remote content renderer")
+            // Net-attached back to zero while held: renders nothing.
+            XCTAssertEqual(cameraAttaches() - cameraDetaches(), 0,
+                           "held call must have no attached remote camera renderer")
+            XCTAssertEqual(contentAttaches() - contentDetaches(), 0,
+                           "held call must have no attached remote content renderer")
+
+            harness.session.applyForegroundRoleInternal()
+            await waitUntil { harness.session.mediaRole == .foreground }
+            await yieldToMainActor()
+
+            XCTAssertEqual(cameraAttaches(), cycle + 1,
+                           "resume #\(cycle) must re-attach the remote camera renderer exactly once")
+            XCTAssertEqual(contentAttaches(), cycle + 1,
+                           "resume #\(cycle) must re-attach the remote content renderer exactly once")
+            // Net-attached exactly one each after resume: no accumulation.
+            XCTAssertEqual(cameraAttaches() - cameraDetaches(), 1,
+                           "resumed call must have exactly one attached remote camera renderer")
+            XCTAssertEqual(contentAttaches() - contentDetaches(), 1,
+                           "resumed call must have exactly one attached remote content renderer")
+        }
+        harness.tearDown()
+    }
 }
 
 /// Test audio coordinator whose `activateCallSession` can be PAUSED so a test can

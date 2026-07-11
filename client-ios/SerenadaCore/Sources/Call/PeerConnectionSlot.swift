@@ -909,8 +909,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 
     public func attachRemoteRenderer(_ renderer: AnyObject) {
 #if canImport(WebRTC)
-        remoteRenderers.append(WeakRendererBox(value: renderer))
+        // Dedup by renderer identity: a repeated attach (e.g. a resume replay onto
+        // a slot whose registration was never detached) must not accumulate boxes.
         compactRenderers()
+        if !remoteRenderers.contains(where: { $0.value === renderer }) {
+            remoteRenderers.append(WeakRendererBox(value: renderer))
+        }
         guard let renderer = renderer as? RTCVideoRenderer else { return }
         let track = remoteVideoTrack
         rendererAttachmentQueue.async {
@@ -933,8 +937,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 
     public func attachRemoteContentRenderer(_ renderer: AnyObject) {
 #if canImport(WebRTC)
-        remoteContentRenderers.append(WeakRendererBox(value: renderer))
+        // Dedup by renderer identity (see attachRemoteRenderer): repeated attach
+        // across hold/resume must not accumulate boxes.
         compactContentRenderers()
+        if !remoteContentRenderers.contains(where: { $0.value === renderer }) {
+            remoteContentRenderers.append(WeakRendererBox(value: renderer))
+        }
         guard let renderer = renderer as? RTCVideoRenderer else { return }
         let track = remoteContentTrack
         rendererAttachmentQueue.async {
@@ -1740,6 +1748,22 @@ extension PeerConnectionSlot {
     /// The live peer connection, so a test can inspect transceiver direction /
     /// sender identity after attach/detach (the hold-direction regression).
     var _test_peerConnection: RTCPeerConnection? { peerConnection }
+
+    /// Count of remote CAMERA renderer registrations in the slot's own
+    /// bookkeeping — the array that must not accumulate duplicate boxes across
+    /// repeated hold/resume replays.
+    var _test_remoteRendererCount: Int { remoteRenderers.count }
+
+    /// Count of remote CONTENT (screen share) renderer registrations.
+    var _test_remoteContentRendererCount: Int { remoteContentRenderers.count }
+
+    /// Bind remote camera/content tracks directly for the renderer-bookkeeping
+    /// test, bypassing the mid-based classifier (no negotiated transceivers
+    /// needed) so `attach*RemoteRenderer` exercises a real `track.add`.
+    func _test_setRemoteTracks(camera: RTCVideoTrack?, content: RTCVideoTrack?) {
+        remoteVideoTrack = camera
+        remoteContentTrack = content
+    }
 }
 #endif
 #endif

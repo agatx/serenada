@@ -1782,6 +1782,12 @@ public final class SerenadaSession: ObservableObject {
         //    also deafens remote playout). detachRenderers pauses held preview.
         webRtcEngine.suspendLocalMediaForHold()
         webRtcEngine.detachRenderersForHold()
+        // `detachRenderersForHold` only detaches the LOCAL preview renderers the
+        // engine owns. Remote camera + content renderers are session-owned and
+        // attach through the peer slots, so detach those too — a held session must
+        // render nothing (contract §3 "held media": visible renderers detached),
+        // remote included. Registrations are kept for the resume replay.
+        detachRemoteRenderersForHold()
 
         // 2.5 Pause the foreground-only pollers (Android parity: its suspend stops
         //     remote-video-state polling on hold). A held call keeps signaling and
@@ -1963,6 +1969,29 @@ public final class SerenadaSession: ObservableObject {
     private func replayAllRendererRegistrations() {
         for (cid, slot) in peerSlots {
             replayRendererRegistrations(to: slot, cid: cid)
+        }
+    }
+
+    /// Detach all remembered remote camera + content renderers from their peer
+    /// slots for a hold, WITHOUT forgetting the session registrations so `resume`
+    /// (`replayAllRendererRegistrations`) can replay exactly the registered set.
+    /// The engine's `detachRenderersForHold` only covers the LOCAL preview it
+    /// owns; this covers the session-owned REMOTE renderers.
+    private func detachRemoteRenderersForHold() {
+        compactRendererRegistrations()
+        for (cid, slot) in peerSlots {
+            // Default (no-cid) camera renderers may be attached to whichever slot
+            // was preferred at attach time; detach from every slot (a detach of an
+            // unattached renderer is a harmless no-op).
+            for box in defaultRemoteRendererRegistrations {
+                if let renderer = box.value { slot.detachRemoteRenderer(renderer) }
+            }
+            for box in remoteRendererRegistrations[cid] ?? [] {
+                if let renderer = box.value { slot.detachRemoteRenderer(renderer) }
+            }
+            for box in remoteContentRendererRegistrations[cid] ?? [] {
+                if let renderer = box.value { slot.detachRemoteContentRenderer(renderer) }
+            }
         }
     }
 

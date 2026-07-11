@@ -149,5 +149,59 @@ final class PeerConnectionSlotHoldDirectionTests: XCTestCase {
 
         slot.closePeerConnection()
     }
+
+    /// P2 reviewer finding: `PeerConnectionSlot.attachRemote(Content)Renderer`
+    /// appended to its bookkeeping WITHOUT dedup, so the resume replay onto a slot
+    /// whose registration was never detached ACCUMULATED duplicate boxes across
+    /// every hold/resume cycle (leak + duplicate frame delivery). The fix dedups by
+    /// renderer identity. Assert against the REAL slot bookkeeping with real tracks.
+    func testRemoteRendererBookkeepingDedupsAcrossHoldResumeCycles() throws {
+        let factory = makeFactory()
+        let audioTrack = factory.audioTrack(with: factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)), trackId: "audio-2")
+        let videoTrack = factory.videoTrack(with: factory.videoSource(), trackId: "video-2")
+        let slot = makeAttachedSlot(
+            factory: factory, audioTrack: audioTrack, videoTrack: videoTrack
+        )
+        // Bind real remote camera + content tracks so attach exercises track.add.
+        let cameraTrack = factory.videoTrack(with: factory.videoSource(), trackId: "remote-camera-2")
+        let contentTrack = factory.videoTrack(with: factory.videoSource(), trackId: "remote-content-2")
+        slot._test_setRemoteTracks(camera: cameraTrack, content: contentTrack)
+
+        let cameraRenderer = NoopVideoRenderer()
+        let contentRenderer = NoopVideoRenderer()
+
+        // Pre-fix accumulation reproducer: repeated attach WITHOUT a detach (as the
+        // buggy resume replay did on a never-detached slot) must NOT accumulate.
+        for _ in 0..<3 {
+            slot.attachRemoteRenderer(cameraRenderer)
+            slot.attachRemoteContentRenderer(contentRenderer)
+        }
+        XCTAssertEqual(slot._test_remoteRendererCount, 1,
+                       "repeated attach of the same remote camera renderer must not accumulate")
+        XCTAssertEqual(slot._test_remoteContentRendererCount, 1,
+                       "repeated attach of the same remote content renderer must not accumulate")
+
+        // Full detach/attach (hold then resume) cycles net exactly one each.
+        for cycle in 1...3 {
+            slot.detachRemoteRenderer(cameraRenderer)
+            slot.detachRemoteContentRenderer(contentRenderer)
+            XCTAssertEqual(slot._test_remoteRendererCount, 0, "hold #\(cycle) detaches the camera renderer")
+            XCTAssertEqual(slot._test_remoteContentRendererCount, 0, "hold #\(cycle) detaches the content renderer")
+
+            slot.attachRemoteRenderer(cameraRenderer)
+            slot.attachRemoteContentRenderer(contentRenderer)
+            XCTAssertEqual(slot._test_remoteRendererCount, 1, "resume #\(cycle) re-attaches exactly one camera renderer")
+            XCTAssertEqual(slot._test_remoteContentRendererCount, 1, "resume #\(cycle) re-attaches exactly one content renderer")
+        }
+
+        slot.closePeerConnection()
+    }
+}
+
+/// Minimal real `RTCVideoRenderer` for the bookkeeping/dedup test — conforms to
+/// the protocol so `RTCVideoTrack.add`/`remove` accept it, and drops frames.
+private final class NoopVideoRenderer: NSObject, RTCVideoRenderer {
+    func setSize(_ size: CGSize) {}
+    func renderFrame(_ frame: RTCVideoFrame?) {}
 }
 #endif
