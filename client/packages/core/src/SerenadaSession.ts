@@ -1399,6 +1399,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.userPreferredVideoEnabled = newEnabled;
             // Update desired intent so a later hold/resume restores it correctly.
             this.desiredVideoMode = newEnabled ? this.cameraFacingAsVideoMode() : 'off';
+            // Keep any pending resume handoff current: disabling video now must
+            // withdraw the camera from a handoff a resume armed but hasn't yet
+            // consumed, so it does not reacquire a camera the user just turned off.
+            if (!newEnabled) this.media.disarmResumeHandoff('video');
             // Enabling reacquires a track asynchronously: keep `actualVideoPublished`
             // false until the swap resolves so the field never reports published
             // video before a track is flowing. The eventual wire broadcast below is
@@ -1429,6 +1433,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
             const track = stream?.getAudioTracks()[0];
             const newEnabled = enabled ?? !(track ? track.enabled : this.desiredAudioEnabled);
             this.desiredAudioEnabled = newEnabled;
+            // Keep any pending resume handoff current: muting now must withdraw the
+            // mic from a handoff a resume armed but hasn't yet consumed, so it does
+            // not reacquire a mic the user just muted.
+            if (!newEnabled) this.media.disarmResumeHandoff('audio');
             if (track) {
                 // Track already live (normally-joined call, incl. a muted single
                 // call): just flip `enabled` and publish. Single-call behavior

@@ -1419,6 +1419,170 @@ describe('MediaEngine', () => {
             expect(getUserMedia).toHaveBeenCalledTimes(1);
         });
 
+        it('does not reacquire a media kind the user disabled after the handoff was armed (intent stays current)', async () => {
+            // Finding 1: the handoff intent snapshots resume-time desired media. If
+            // the user toggles the mic OFF (via the session, `disarmResumeHandoff`)
+            // AFTER resume armed the handoff but BEFORE the parked start consumes it,
+            // the handoff must NOT reacquire the mic — otherwise it would transmit
+            // audio the user just disabled. The still-desired camera is reacquired.
+            const initialAudio = createMediaTrack('audio');
+            const initialVideo = createMediaTrack('video');
+            let resolveInitial!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))
+                .mockImplementation(async (constraints: MediaStreamConstraints) => {
+                    const tracks: MediaStreamTrack[] = [];
+                    if (constraints.audio) tracks.push(createMediaTrack('audio'));
+                    if (constraints.video) tracks.push(createMediaTrack('video'));
+                    return new FakeMediaStream(tracks) as unknown as MediaStream;
+                });
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // initial getUserMedia (gen 1, latch held)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'selfie');  // arms handoff {audio, selfie}
+            // User mutes the mic before the parked start releases the latch.
+            engine.disarmResumeHandoff('audio');
+
+            resolveInitial(new FakeMediaStream([initialAudio, initialVideo]) as unknown as MediaStream);
+            const result = await start;
+
+            expect(result).toBeNull();
+            // Mic was withdrawn from the handoff: no live audio track, no audio
+            // getUserMedia after the initial acquire, no audio on the peer senders.
+            expect(engine.localStream?.getAudioTracks() ?? []).toHaveLength(0);
+            expect(peer?.senders.some(s => s.track?.kind === 'audio')).toBe(false);
+            // Camera was still desired, so the handoff reacquired and attached it.
+            const resumedVideo = engine.localStream?.getVideoTracks()[0];
+            expect(resumedVideo).toBeTruthy();
+            expect(peer?.senders.some(s => s.track === resumedVideo)).toBe(true);
+        });
+
+        it('does not clear the media latch a newer start now owns (stop + newer start supersedes the parked op)', async () => {
+            // Finding 2: a stale start continuation must release the `requestingMedia`
+            // latch ONLY if it still owns it. If a `stopLocalMedia` + a NEWER
+            // `startLocalMedia` took the latch while the old acquire was parked, the
+            // stale op clearing the latch would let recovery/toggle paths launch a
+            // concurrent getUserMedia under the newer start.
+            const oldAudio = createMediaTrack('audio');
+            const oldVideo = createMediaTrack('video');
+            let resolveOld!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveOld = resolve; }))  // start A (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>(() => {}))                                  // start B (parked, owns latch)
+                .mockImplementation(async () => createMediaStream({ audio: true, video: true }));         // any concurrent acquire = bug
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const internals = engine as unknown as { requestingMedia: boolean };
+
+            const startA = engine.startLocalMedia();               // gen 1, latch owner A
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            engine.stopLocalMedia();                                // gen -> 2, latch released
+            const startB = engine.startLocalMedia();               // gen 3, latch owner B (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+
+            resolveOld(new FakeMediaStream([oldAudio, oldVideo]) as unknown as MediaStream);  // A stale, bails
+            const resultA = await startA;
+
+            expect(resultA).toBeNull();
+            // B still owns the latch: A's stale bail-out did NOT clear it.
+            expect(internals.requestingMedia).toBe(true);
+            // A recovery/toggle path finds the latch held and does NOT double-acquire.
+            await engine.reacquireLocalAudioCapture();
+            expect(getUserMedia).toHaveBeenCalledTimes(2);
+            void startB;
+        });
+
+        it('does not start camera capture when a hold interleaves the handoff audio reacquire', async () => {
+            // Finding 3: the handoff rechecks held/destroyed BEFORE EACH kind. If a
+            // hold starts while the handoff's AUDIO reacquire is awaiting
+            // getUserMedia, the VIDEO branch must NOT proceed — otherwise it starts
+            // camera capture on a now-held call (dropped only post-acquisition).
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveAudio!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))  // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveAudio = resolve; }))    // handoff audio (parked)
+                .mockImplementation(async () => createMediaStream({ audio: false, video: true }));           // camera acquire = bug
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'selfie');  // arms handoff {audio, selfie}
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> audio reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            await engine.suspendLocalMediaForHold();               // hold AGAIN while handoff audio is awaiting
+            resolveAudio(createMediaStream({ audio: true, video: false }));   // fenced (held): dropped
+            const result = await start;
+
+            expect(result).toBeNull();
+            // The video branch never ran: no camera getUserMedia (still 2 calls) and
+            // no live camera track on the (held) call.
+            expect(getUserMedia).toHaveBeenCalledTimes(2);
+            expect(engine.localStream?.getVideoTracks() ?? []).toHaveLength(0);
+        });
+
+        it('retries capture via the handoff when the initial acquire rejects with a handoff armed', async () => {
+            // Finding 4: the catch path must consume the handoff too. A transient
+            // initial-acquire failure with an armed handoff would otherwise leave the
+            // resumed foreground call permanently capture-less.
+            let rejectInitial!: (err: unknown) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((_, reject) => { rejectInitial = reject; }))  // initial (rejects)
+                .mockImplementation(async (constraints: MediaStreamConstraints) => {
+                    const tracks: MediaStreamTrack[] = [];
+                    if (constraints.audio) tracks.push(createMediaTrack('audio'));
+                    if (constraints.video) tracks.push(createMediaTrack('video'));
+                    return new FakeMediaStream(tracks) as unknown as MediaStream;
+                });
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // initial acquire (audio-only, parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'selfie');  // arms handoff {audio, selfie}
+
+            rejectInitial(new DOMException('denied', 'NotAllowedError'));  // catch -> handoff replays capture
+            const result = await start;
+
+            expect(result).toBeNull();
+            // The foreground call ends with the desired mic + camera (via the handoff).
+            const resumedAudio = engine.localStream?.getAudioTracks()[0];
+            const resumedVideo = engine.localStream?.getVideoTracks()[0];
+            expect(resumedAudio).toBeTruthy();
+            expect(resumedVideo).toBeTruthy();
+            expect(peer?.senders.some(s => s.track === resumedAudio)).toBe(true);
+            expect(peer?.senders.some(s => s.track === resumedVideo)).toBe(true);
+        });
+
         it('undoes a stale initial-media sender attachment when hold+resume interleaves before the replaceTrack resolves', async () => {
             // Attachment-await race: the initial getUserMedia resolves, but the
             // per-peer `replaceTrack` that attaches the initial tracks is still in

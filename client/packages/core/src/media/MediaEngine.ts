@@ -208,6 +208,16 @@ export class MediaEngine {
     // Idempotency latch for the shared stop path (API / rollback / onended).
     private screenShareStopInFlight = false;
     private requestingMedia = false;
+    // Identifies which `startLocalMediaInternal` request currently OWNS the
+    // `requestingMedia` latch (its `requestId`; `null` when unheld). Only that
+    // request may release the latch: a stale continuation whose start was
+    // superseded by a `stopLocalMedia` + a NEWER `startLocalMediaInternal` must
+    // NOT clear a latch the newer acquire now holds, or recovery/toggle paths
+    // would launch a concurrent `getUserMedia` under the newer start. Hold/stop
+    // do NOT take this latch, so a hold+resume (which bumps `mediaRequestId` but
+    // never re-acquires the latch) leaves the parked start the rightful owner —
+    // which is exactly why it may release the latch and hand off to the resume.
+    private mediaLatchOwner: number | null = null;
     private destroyed = false;
     private cameraRecoveryInFlight = false;
     private audioRecoveryInFlight = false;
@@ -462,6 +472,21 @@ export class MediaEngine {
     }
 
     /**
+     * Release the `requestingMedia` latch ONLY if `requestId` still owns it (see
+     * {@link mediaLatchOwner}). A stale `startLocalMediaInternal` continuation
+     * whose start was superseded by a `stopLocalMedia` + a newer start no longer
+     * owns the latch, so it must leave the newer acquire's latch intact rather
+     * than clobbering it. A hold+resume never re-takes the latch, so the parked
+     * start remains the owner and this DOES release it (enabling the handoff).
+     */
+    private releaseMediaLatchIfOwner(requestId: number): void {
+        if (this.mediaLatchOwner === requestId) {
+            this.requestingMedia = false;
+            this.mediaLatchOwner = null;
+        }
+    }
+
+    /**
      * The track the CURRENT capture generation wants attached to `sender`, or
      * `null` when the live state says the sender should carry nothing. Resolves
      * by role for independent peers (audio/camera/content senders map to the
@@ -547,10 +572,11 @@ export class MediaEngine {
         this.mediaRequestId = requestId;
 
         this.requestingMedia = true;
+        this.mediaLatchOwner = requestId;
         this._lastLocalMediaError = null;
         try {
             if (!navigator.mediaDevices?.getUserMedia) {
-                this.requestingMedia = false;
+                this.releaseMediaLatchIfOwner(requestId);
                 this._lastLocalMediaError = { name: 'NotSupportedError', message: 'getUserMedia is not supported' };
                 return null;
             }
@@ -583,8 +609,11 @@ export class MediaEngine {
                 // Release the media latch (this bail-out is the one path that took
                 // it and does NOT reach the happy-path clear below) so the handoff's
                 // reacquires can proceed, then hand off to any resume that this op
-                // blocked while parked in the acquire await.
-                this.requestingMedia = false;
+                // blocked while parked in the acquire await. Only release when THIS
+                // op still owns the latch: a `stopLocalMedia` + newer start may own
+                // it by now, and clearing it would let the newer start's recovery /
+                // toggle paths launch a concurrent acquire.
+                this.releaseMediaLatchIfOwner(requestId);
                 await this.handOffToResumedCapture();
                 return null;
             }
@@ -600,7 +629,11 @@ export class MediaEngine {
             const acquiredTracks = stream.getTracks();
             const postStartDevices = await this.enumerateMediaDevices();
             await this.detectCameras(postStartDevices);
-            this.requestingMedia = false;
+            // Release the latch so the route refresh below (a reacquire sink) can
+            // run — but only if THIS op still owns it. A `stopLocalMedia` + newer
+            // start during the awaits above may own it now; leaving it set keeps
+            // the newer start's latch intact (this op bails at the fence below).
+            this.releaseMediaLatchIfOwner(requestId);
             if (this.roomState && this.clientId) {
                 await this.refreshLocalAudioTrack('initial-route-check', postStartDevices);
             }
@@ -667,7 +700,13 @@ export class MediaEngine {
                 name: err instanceof DOMException ? err.name : 'Error',
                 message: formatError(err),
             };
-            this.requestingMedia = false;
+            // Release the latch (only if this op still owns it — see the stale
+            // exits above) and hand off to any resume this op blocked while parked
+            // in the failing acquire. Without the handoff, a transient initial
+            // acquire failure would leave an un-gated foreground resume permanently
+            // capture-less. `handOffToResumedCapture` re-checks held/destroyed.
+            this.releaseMediaLatchIfOwner(requestId);
+            await this.handOffToResumedCapture();
             return null;
         }
     }
@@ -691,7 +730,11 @@ export class MediaEngine {
             this.localStream = null;
         }
         this.isScreenSharing = false;
+        // Full teardown: the latch (and its ownership) is unconditionally
+        // released — no in-flight start survives a stop (the generation bump
+        // above fences any parked continuation).
         this.requestingMedia = false;
+        this.mediaLatchOwner = null;
         // A full teardown supersedes any pending resume handoff (also covers
         // `destroy`, which routes through here).
         this.pendingResumeHandoff = null;
@@ -730,6 +773,12 @@ export class MediaEngine {
 
     async reacquireVideoTrack(): Promise<void> {
         if (!this.videoCaptureSupported) return;
+        // Core Invariant 2: a held call owns NO capture. Cheap entry guard so this
+        // never even STARTS `getUserMedia` on a held call (the post-acquire fence
+        // is a backstop, not a substitute). Resume clears `heldNoCapture` BEFORE
+        // it calls this, and foreground toggles run while not held, so no
+        // legitimate caller relies on this being absent.
+        if (this.heldNoCapture) return;
         // Independent share: camera is separate, so re-enabling the camera must
         // work while sharing. Only the legacy single-video share blocks it.
         if (this.isLegacyScreenSharing) return;
@@ -890,6 +939,25 @@ export class MediaEngine {
     }
 
     /**
+     * Withdraw one media kind from a still-pending resume handoff (see
+     * {@link pendingResumeHandoff}). The armed intent snapshots the desired
+     * media AT RESUME TIME; if the user then toggles that kind OFF before the
+     * blocking initial start releases the latch and the handoff consumes, the
+     * handoff must NOT reacquire and attach media the user has since disabled
+     * (which would transmit after they turned it off). The session's foreground
+     * toggle-off paths call this so the handoff stays current with user intent.
+     * No-op when nothing is armed; clears the whole intent once both kinds are
+     * withdrawn.
+     */
+    disarmResumeHandoff(kind: 'audio' | 'video'): void {
+        const intent = this.pendingResumeHandoff;
+        if (!intent) return;
+        if (kind === 'audio') intent.audio = false;
+        else intent.videoMode = 'off';
+        if (!intent.audio && intent.videoMode === 'off') this.pendingResumeHandoff = null;
+    }
+
+    /**
      * Replay a resumed call's desired capture that a concurrent in-flight
      * initial-media start blocked (see {@link pendingResumeHandoff}). Called from
      * the stale bail-outs of {@link startLocalMediaInternal} AFTER that op has
@@ -903,10 +971,18 @@ export class MediaEngine {
     private async handOffToResumedCapture(): Promise<void> {
         const intent = this.pendingResumeHandoff;
         this.pendingResumeHandoff = null;
-        if (!intent || this.destroyed || this.heldNoCapture) return;
+        if (!intent) return;
+        // Re-check held/destroyed BEFORE EACH kind, not once up front: the audio
+        // reacquire below awaits getUserMedia, and a hold can start during that
+        // await. Without a fresh check the video branch would then start camera
+        // capture on a newly-held call (the generation fence would only stop it
+        // AFTER acquisition — a needless privacy window). `reacquireVideoTrack`
+        // also carries its own cheap held entry guard as a backstop.
+        if (this.destroyed || this.heldNoCapture) return;
         if (intent.audio && !this.localStream?.getAudioTracks()[0]) {
             await this.reacquireLocalAudioCapture();
         }
+        if (this.destroyed || this.heldNoCapture) return;
         if (intent.videoMode !== 'off' && !this.localStream?.getVideoTracks()[0]) {
             this.facingMode = intent.videoMode === 'selfie' ? 'user' : 'environment';
             await this.reacquireVideoTrack();

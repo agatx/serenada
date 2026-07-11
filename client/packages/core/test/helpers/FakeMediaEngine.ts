@@ -263,6 +263,14 @@ export class FakeMediaEngine {
         this.setRemotePlaybackEnabled(true);
     }
 
+    // Records disarm calls so the session's toggle-off-keeps-handoff-current
+    // behavior can be asserted (parity with MediaEngine.disarmResumeHandoff).
+    disarmResumeHandoffCalls: Array<'audio' | 'video'> = [];
+
+    disarmResumeHandoff(kind: 'audio' | 'video'): void {
+        this.disarmResumeHandoffCalls.push(kind);
+    }
+
     setRemotePlaybackEnabled(enabled: boolean): void {
         this.setRemotePlaybackEnabledCalls.push(enabled);
     }
