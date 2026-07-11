@@ -761,8 +761,13 @@ export class MediaEngine {
         this.requestingMedia = false;
         this.mediaLatchOwner = null;
         // A full teardown supersedes any pending resume handoff (also covers
-        // `destroy`, which routes through here). Clear the reschedule latch too so
-        // any queued microtask is a no-op and a future handoff can reschedule again.
+        // `destroy`, which routes through here). This invalidates a RUNNING handoff
+        // pass, not just an un-started one: the `mediaRequestId` bump above is the
+        // pass-local abort signal (`runResumedCapturePass`/`reconcileHandoffCapture`
+        // re-check it around every await and bail once it moves), so a parked
+        // reacquire can no longer resurrect the camera/mic after a terminal reset.
+        // Clearing the reschedule latch stops any queued tail rerun from firing;
+        // clearing the intent lets a future handoff reschedule cleanly.
         this.pendingResumeHandoff = null;
         this.resumeHandoffRescheduled = false;
         this.notifyChange();
@@ -1072,6 +1077,18 @@ export class MediaEngine {
         if (this.requestingMedia) return;
         const intent = this.pendingResumeHandoff;
         if (!intent) return;
+        // Snapshot the capture generation for the WHOLE pass. A terminal
+        // {@link stopLocalMedia} (the session's `resetSessionResources` on
+        // remote-ended / signaling error / join timeout tears media down WITHOUT
+        // destroying the engine) bumps `mediaRequestId`, and a hold likewise. This
+        // pass captured `intent` up front, so without re-checking the generation a
+        // parked reacquire that resolves after the teardown would keep driving the
+        // now-stale intent — reacquiring the camera AFTER the call ended (the
+        // finding). `gen` is threaded into {@link reconcileHandoffCapture} and
+        // re-checked between the two kinds so the whole pass aborts once the
+        // lifecycle moves.
+        const gen = this.mediaRequestId;
+        if (this.isCaptureStale(gen)) return;
         // Do NOT null `pendingResumeHandoff` up front: keep it referencing this
         // in-flight `intent` so a `disarmResumeHandoff(kind)` during a reacquire
         // await below still mutates the SAME object the video facing recovery
@@ -1093,12 +1110,18 @@ export class MediaEngine {
         // post-release and post-reacquire checks. `intent.videoMode` is also read
         // to recover the desired camera facing for a video reacquire.
         await this.reconcileHandoffCapture(
+            gen,
             () => intent.audio || this.foregroundAudioIntent,
             () => !!this.localStream?.getAudioTracks()[0],
             () => this.reacquireLocalAudioCapture(),
             () => this.releaseLocalAudioCapture(),
         );
+        // A terminal stop (or hold) landing during the audio reconcile moved the
+        // generation; abort before touching the camera so the video branch never
+        // reacquires on a torn-down call.
+        if (this.isCaptureStale(gen)) return;
         await this.reconcileHandoffCapture(
+            gen,
             () => intent.videoMode !== 'off' || this.foregroundVideoIntent,
             () => !!this.localStream?.getVideoTracks()[0],
             () => this.reacquireVideoTrack(),
@@ -1150,6 +1173,7 @@ export class MediaEngine {
      * for this mid-release window.
      */
     private async reconcileHandoffCapture(
+        gen: number,
         wanted: () => boolean,
         hasLiveTrack: () => boolean,
         reacquire: () => Promise<void>,
@@ -1160,6 +1184,15 @@ export class MediaEngine {
         let lastActed: boolean | null = null;
         for (let pass = 0; pass < maxPasses; pass++) {
             if (this.destroyed) return;
+            // Lifecycle moved mid-pass: a terminal {@link stopLocalMedia} (session
+            // reset) or a hold bumped `gen` while a reacquire/release awaited. Abort
+            // the whole pass — the captured `intent` no longer describes a live call.
+            // Release any track THIS iteration just attached (via the ownership-scoped
+            // release/detach sink) so none survives the teardown, then stop.
+            if (this.mediaRequestId !== gen) {
+                if (hasLiveTrack()) await release();
+                return;
+            }
             // A held call owns no capture, so a wanted kind is NOT wanted-live while
             // held: this releases a track a hold stranded and skips reacquiring.
             const wantLive = wanted() && !this.heldNoCapture;
@@ -1179,6 +1212,14 @@ export class MediaEngine {
         // Bound exhausted under alternating intent: never leave a live track the
         // current intent says is off. Take the SAFE side and release it.
         if (this.destroyed) return;
+        // Same lifecycle abort as the loop: a terminal stop / hold during the last
+        // await moved `gen`. Release anything still live and stop — do NOT fall
+        // through to the reschedule below, which would re-arm a fresh pass after the
+        // call was torn down.
+        if (this.mediaRequestId !== gen) {
+            if (hasLiveTrack()) await release();
+            return;
+        }
         if (!(wanted() && !this.heldNoCapture) && hasLiveTrack()) {
             await release();
             // The release above awaited (a parked `replaceTrack(null)`); a user
@@ -1189,7 +1230,11 @@ export class MediaEngine {
             // The after-every-await fixed point does not hold at the counter bound,
             // so re-read the intent once more and, on that mismatch, reschedule a
             // fresh handoff pass instead of returning silently.
-            if (!this.destroyed && wanted() && !this.heldNoCapture && !hasLiveTrack()) {
+            // The bound-side release awaited too: a terminal stop / hold could have
+            // landed during it. Only reschedule when the generation is still ours —
+            // otherwise re-arming would resurrect a handoff for a torn-down call.
+            if (!this.destroyed && this.mediaRequestId === gen
+                && wanted() && !this.heldNoCapture && !hasLiveTrack()) {
                 this.rescheduleResumeHandoff();
             }
         }
