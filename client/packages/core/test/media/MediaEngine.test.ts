@@ -1844,6 +1844,209 @@ describe('MediaEngine', () => {
             expect(getUserMedia).toHaveBeenCalledTimes(3);
         });
 
+        it('releases the mic when audio is DISABLED while the handoff RECONCILE reacquire is in flight', async () => {
+            // The finding: the post-release RECONCILE reacquire (which reacquires a
+            // mic after a re-enable raced the disarm-release) was itself an UNFENCED
+            // one-shot. If the user disables audio AGAIN while that reconcile
+            // reacquire is awaiting getUserMedia, the session's toggle-off sees no
+            // track to release (the reacquire has not attached yet), so nothing
+            // detaches the mic it then attaches — silent transmit after mute. The
+            // bounded fixed-point loop re-reads the intent AFTER the reconcile
+            // reacquire await and releases the just-attached track.
+            const firstMic = createMediaTrack('audio');
+            const secondMic = createMediaTrack('audio');
+            const secondMicStop = vi.spyOn(secondMic, 'stop');
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveAudio!: (stream: MediaStream) => void;
+            let resolveReconcile!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))    // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveAudio = resolve; }))      // handoff audio reacquire (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveReconcile = resolve; })); // reconcile reacquire (parked)
+            setupNavigator(getUserMedia);
+            FakeRtcRtpSender.deferNullReplace = true;               // park the disarm-release detach
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'off');     // arms handoff {audio}
+            engine.setForegroundCaptureIntent('audio', true);       // resume desired audio on
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> audio reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            // Mute while the first handoff reacquire is awaiting.
+            engine.disarmResumeHandoff('audio');
+            engine.setForegroundCaptureIntent('audio', false);
+            resolveAudio(new FakeMediaStream([firstMic]) as unknown as MediaStream);  // mic lands -> loop releases it (parks on replaceTrack null)
+            await vi.waitFor(() => expect(FakeRtcRtpSender.parked.length).toBeGreaterThan(0));
+            // Unmute while the release detach is parked -> the reconcile reacquire runs next.
+            engine.setForegroundCaptureIntent('audio', true);
+            FakeRtcRtpSender.releaseParked();                      // release lands (firstMic gone) -> reconcile reacquire starts
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
+            // DISABLE again WHILE the reconcile reacquire is parked in getUserMedia (the finding).
+            engine.disarmResumeHandoff('audio');
+            engine.setForegroundCaptureIntent('audio', false);
+            FakeRtcRtpSender.deferNullReplace = false;             // let the final safe-side release settle
+            resolveReconcile(new FakeMediaStream([secondMic]) as unknown as MediaStream);  // reconcile mic lands, must be released
+            const result = await start;
+
+            expect(result).toBeNull();
+            // The loop observed the disable after the reconcile reacquire await and
+            // released the just-attached mic: no live audio, nothing on the senders.
+            expect(engine.localStream?.getAudioTracks() ?? []).toHaveLength(0);
+            expect(peer?.senders.some(s => s.track?.kind === 'audio')).toBe(false);
+            expect(secondMicStop).toHaveBeenCalled();
+            expect(getUserMedia).toHaveBeenCalledTimes(3);
+        });
+
+        it('releases the camera when video is DISABLED while the handoff RECONCILE reacquire is in flight', async () => {
+            // Symmetric video variant of the finding: the post-release reconcile
+            // reacquire for the camera must also be fenced against a LATER disable.
+            const firstCam = createMediaTrack('video');
+            const secondCam = createMediaTrack('video');
+            const secondCamStop = vi.spyOn(secondCam, 'stop');
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveVideo!: (stream: MediaStream) => void;
+            let resolveReconcile!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))    // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveVideo = resolve; }))      // handoff video reacquire (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveReconcile = resolve; })); // reconcile reacquire (parked)
+            setupNavigator(getUserMedia);
+            FakeRtcRtpSender.deferNullReplace = true;
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(false, 'selfie'); // arms handoff {selfie}
+            engine.setForegroundCaptureIntent('video', true);       // resume desired video on
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> video reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            engine.disarmResumeHandoff('video');
+            engine.setForegroundCaptureIntent('video', false);
+            resolveVideo(new FakeMediaStream([firstCam]) as unknown as MediaStream);  // camera lands -> loop releases it (parks)
+            await vi.waitFor(() => expect(FakeRtcRtpSender.parked.length).toBeGreaterThan(0));
+            engine.setForegroundCaptureIntent('video', true);      // re-enable while release parked
+            FakeRtcRtpSender.releaseParked();                      // release lands -> reconcile reacquire starts
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
+            // DISABLE again WHILE the reconcile reacquire is parked in getUserMedia.
+            engine.disarmResumeHandoff('video');
+            engine.setForegroundCaptureIntent('video', false);
+            FakeRtcRtpSender.deferNullReplace = false;
+            resolveReconcile(new FakeMediaStream([secondCam]) as unknown as MediaStream);
+            const result = await start;
+
+            expect(result).toBeNull();
+            expect(engine.localStream?.getVideoTracks() ?? []).toHaveLength(0);
+            expect(peer?.senders.some(s => s.track?.kind === 'video')).toBe(false);
+            expect(secondCamStop).toHaveBeenCalled();
+            expect(getUserMedia).toHaveBeenCalledTimes(3);
+        });
+
+        it('ends with a live mic when enable/disable churn races the handoff across parked awaits', async () => {
+            // Enable -> disable -> enable churn across the reacquire AND the
+            // disarm-release parked awaits must converge, on the fixed point, to the
+            // FINAL intent: audio desired on -> a live mic attached, never left
+            // silent-unmuted. Bounded getUserMedia (no thrash).
+            const firstMic = createMediaTrack('audio');
+            const firstMicStop = vi.spyOn(firstMic, 'stop');
+            const secondMic = createMediaTrack('audio');
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveAudio!: (stream: MediaStream) => void;
+            let resolveReconcile!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))    // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveAudio = resolve; }))      // handoff audio reacquire (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveReconcile = resolve; })); // reconcile reacquire (parked)
+            setupNavigator(getUserMedia);
+            FakeRtcRtpSender.deferNullReplace = true;
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'off');     // arms handoff {audio} (ENABLE)
+            engine.setForegroundCaptureIntent('audio', true);
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> audio reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            // DISABLE while the reacquire is parked.
+            engine.disarmResumeHandoff('audio');
+            engine.setForegroundCaptureIntent('audio', false);
+            resolveAudio(new FakeMediaStream([firstMic]) as unknown as MediaStream);  // mic lands -> loop releases (parks)
+            await vi.waitFor(() => expect(FakeRtcRtpSender.parked.length).toBeGreaterThan(0));
+            // ENABLE again while the release detach is parked -> reconcile reacquires.
+            engine.setForegroundCaptureIntent('audio', true);
+            FakeRtcRtpSender.deferNullReplace = false;             // reconcile + convergence settle synchronously
+            FakeRtcRtpSender.releaseParked();                      // release lands (firstMic gone) -> reconcile reacquire starts
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
+            resolveReconcile(new FakeMediaStream([secondMic]) as unknown as MediaStream);  // reconcile mic lands and STAYS (desired on)
+            const result = await start;
+
+            expect(result).toBeNull();
+            // Converged to the final intent: a live mic (the reconcile track),
+            // attached to the peer's audio sender, never silent-unmuted.
+            const liveMic = engine.localStream?.getAudioTracks()[0];
+            expect(liveMic).toBe(secondMic);
+            expect(peer?.senders.some(s => s.track === secondMic)).toBe(true);
+            expect(firstMicStop).toHaveBeenCalled();               // the disarm-released first mic was torn down
+            expect(getUserMedia).toHaveBeenCalledTimes(3);         // bounded: no thrash
+        });
+
+        it('terminates a pathological enable/disable alternation on the safe side (iteration bound)', async () => {
+            // The bounded fixed-point reconcile must not spin forever if the desired
+            // intent flips on every pass. With `wanted` always the opposite of the
+            // current track state the loop never reaches a fixed point; it must stop
+            // at the pass bound and, on stopping, prefer the SAFE side — release a
+            // live track the current intent says should be off.
+            const engine = new MediaEngine({}, () => {});
+            let live = false;
+            let reacquires = 0;
+            let releases = 0;
+            const reconcile = (engine as unknown as {
+                reconcileHandoffCapture: (
+                    wanted: () => boolean,
+                    hasLiveTrack: () => boolean,
+                    reacquire: () => Promise<void>,
+                    release: () => Promise<void>,
+                ) => Promise<void>;
+            }).reconcileHandoffCapture.bind(engine);
+
+            await reconcile(
+                () => !live,                                       // never agrees with the track state
+                () => live,
+                async () => { reacquires += 1; live = true; },
+                async () => { releases += 1; live = false; },
+            );
+
+            // Bounded: a handful of corrective passes, not an infinite spin.
+            expect(reacquires + releases).toBeLessThanOrEqual(6);
+            expect(reacquires + releases).toBeGreaterThan(0);
+            // Safe side: the intent said off for the final live track, so it was released.
+            expect(live).toBe(false);
+        });
+
         it('does not consume the handoff at a stale exit that no longer owns the latch (B replays it)', async () => {
             // Finding 2 (consume only with the active latch): start A parks owning the
             // latch, a stop + start B supersedes it (B now owns the latch, parked), a

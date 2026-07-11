@@ -1015,79 +1015,101 @@ export class MediaEngine {
         if (this.requestingMedia) return;
         const intent = this.pendingResumeHandoff;
         if (!intent) return;
-        // `disarmResumeHandoff` mutates this same object under our awaits, but
-        // TS control-flow narrows the guards below (`intent.audio` -> `true`,
-        // `intent.videoMode` -> non-`'off'`) and cannot model the aliased
-        // mutation. Re-read the withdrawn state through this widened alias so the
-        // post-await same-kind re-checks see the CURRENT (possibly disarmed) value.
-        const live: { audio: boolean; videoMode: VideoMode } = intent;
         // Do NOT null `pendingResumeHandoff` up front: keep it referencing this
-        // in-flight `intent` so a `disarmResumeHandoff(kind)` during the audio
-        // reacquire await below still mutates the SAME object the video branch
+        // in-flight `intent` so a `disarmResumeHandoff(kind)` during a reacquire
+        // await below still mutates the SAME object the video facing recovery
         // reads, and the withdrawn kind is not reacquired. Consumed only at the
-        // exits (via {@link consumeResumeHandoff}, which no-ops if a disarm or a
+        // exit (via {@link consumeResumeHandoff}, which no-ops if a disarm or a
         // fresh resume already replaced it).
         //
-        // Re-check held/destroyed BEFORE EACH kind, not once up front: the audio
-        // reacquire below awaits getUserMedia, and a hold can start during that
-        // await. Without a fresh check the video branch would then start camera
-        // capture on a newly-held call (the generation fence would only stop it
-        // AFTER acquisition — a needless privacy window). `reacquireVideoTrack`
-        // also carries its own cheap held entry guard as a backstop.
-        if (this.destroyed || this.heldNoCapture) { this.consumeResumeHandoff(intent); return; }
-        if (intent.audio && !this.localStream?.getAudioTracks()[0]) {
-            await this.reacquireLocalAudioCapture();
-            // SAME-kind disarm mid-acquire: a `disarmResumeHandoff('audio')` (the
-            // session's mute path) during the getUserMedia await above withdrew
-            // audio AFTER this reacquire had already attached a LIVE mic. The
-            // session's toggle-off saw no existing track to release (the handoff
-            // had not acquired it yet), so nothing detached it — release it here
-            // via the SAME sink the hold path uses, or the mic keeps transmitting
-            // after the user muted (privacy). The re-check reads the mutated
-            // `intent`, not the pre-await snapshot. Idempotent when the reacquire
-            // attached nothing (held-fenced/failed).
-            if (!live.audio) {
-                await this.releaseLocalAudioCapture();
-                // RE-ENABLE racing the disarm cleanup: the user may have UNMUTED
-                // during the reacquire OR the release await above. The session's
-                // enable-with-track-present path only flipped `track.enabled` and
-                // scheduled no reacquire (the track was still attached when it ran),
-                // so the release above just left the call SILENT-UNMUTED — desired
-                // audio on, but the live mic stopped/removed. `live.audio` cannot
-                // detect this: a full disarm nulled `pendingResumeHandoff`, so the
-                // session's re-enable had no armed intent to re-arm. Reconcile
-                // against the engine-owned foreground intent (which survives the
-                // null) and reacquire a fresh mic iff audio is currently desired and
-                // the call is still foreground. Idempotent —
-                // `reacquireLocalAudioCapture` no-ops when a live track is present.
-                if (this.foregroundAudioIntent && !this.destroyed && !this.heldNoCapture
-                    && !this.localStream?.getAudioTracks()[0]) {
-                    await this.reacquireLocalAudioCapture();
+        // Per-kind desired = the armed handoff intent OR the engine-mirrored
+        // foreground intent (`foreground{Audio,Video}Intent`). The armed `intent`
+        // is the resume-time desire and stays authoritative for the reacquire even
+        // when no foreground toggle has run (so the mirror is still its `false`
+        // default); a `disarmResumeHandoff` withdraws its kind. The mirror is ORed
+        // in so a re-enable that raced a FULL disarm — which nulled
+        // `pendingResumeHandoff`, leaving nothing to re-arm — is still seen. Both
+        // are re-read AFTER every await inside the loop, so a disable landing while
+        // a reacquire is parked in getUserMedia is observed and the just-attached
+        // track released on the next pass, instead of slipping past a one-shot
+        // post-reacquire check (the finding). This subsumes the former one-shot
+        // post-release and post-reacquire checks. `intent.videoMode` is also read
+        // to recover the desired camera facing for a video reacquire.
+        await this.reconcileHandoffCapture(
+            () => intent.audio || this.foregroundAudioIntent,
+            () => !!this.localStream?.getAudioTracks()[0],
+            () => this.reacquireLocalAudioCapture(),
+            () => this.releaseLocalAudioCapture(),
+        );
+        await this.reconcileHandoffCapture(
+            () => intent.videoMode !== 'off' || this.foregroundVideoIntent,
+            () => !!this.localStream?.getVideoTracks()[0],
+            () => this.reacquireVideoTrack(),
+            () => this.releaseVideoTrack(),
+            () => {
+                // Recover the desired facing from the still-armed intent right
+                // before each reacquire (selfie -> 'user'; world/composite ->
+                // 'environment'). When a full disarm has nulled the mode to 'off'
+                // (a mute a later unmute then re-enabled — the mirror wants video
+                // but the armed mode is gone), keep the facing the first reacquire
+                // already applied.
+                if (intent.videoMode !== 'off') {
+                    this.facingMode = intent.videoMode === 'selfie' ? 'user' : 'environment';
                 }
-            }
-        }
-        if (this.destroyed || this.heldNoCapture) { this.consumeResumeHandoff(intent); return; }
-        if (intent.videoMode !== 'off' && !this.localStream?.getVideoTracks()[0]) {
-            this.facingMode = intent.videoMode === 'selfie' ? 'user' : 'environment';
-            await this.reacquireVideoTrack();
-            // Symmetric same-kind disarm: a `disarmResumeHandoff('video')` during
-            // the camera getUserMedia await withdrew video after the reacquire
-            // attached a live camera track. Detach it (same sink the hold path
-            // uses) so a disabled camera never keeps sending.
-            if (live.videoMode === 'off') {
-                await this.releaseVideoTrack();
-                // Symmetric re-enable reconcile (see the audio branch): the user may
-                // have re-enabled the camera during the reacquire/release, leaving a
-                // silent-unmuted video. `facingMode` was set above from the armed
-                // mode, so a fresh reacquire uses the correct facing. Reacquire iff
-                // video is currently desired and the call is still foreground.
-                if (this.foregroundVideoIntent && !this.destroyed && !this.heldNoCapture
-                    && !this.localStream?.getVideoTracks()[0]) {
-                    await this.reacquireVideoTrack();
-                }
-            }
-        }
+            },
+        );
         this.consumeResumeHandoff(intent);
+    }
+
+    /**
+     * Bounded fixed-point reconcile of ONE media kind's live capture against the
+     * engine-mirrored foreground intent, for {@link handOffToResumedCapture}. Each
+     * pass re-reads the intent and the current track AFTER the previous await, so a
+     * disable (or re-enable) that races an in-flight reacquire/release is observed
+     * and corrected on the next pass rather than slipping past a one-shot check:
+     * reacquire when the kind is wanted but no live track is present, release when a
+     * live track is present but the kind is not wanted (which also covers a hold
+     * that latched mid-await — a held call must own no capture), and stop once the
+     * two agree. Two independent terminators: `lastActed` stops a futile retry when
+     * the corrective sink made no progress under an UNCHANGED intent (getUserMedia
+     * denied, a hold fence dropped the track) so a hard failure is attempted once,
+     * as the former one-shot did, not hammered; and `maxPasses` caps a pathological
+     * enable/disable alternation. On exhausting the bound, take the SAFE side:
+     * release any live track the current intent says should be off — never leave one
+     * transmitting.
+     */
+    private async reconcileHandoffCapture(
+        wanted: () => boolean,
+        hasLiveTrack: () => boolean,
+        reacquire: () => Promise<void>,
+        release: () => Promise<void>,
+        prepareReacquire?: () => void,
+    ): Promise<void> {
+        const maxPasses = 5;
+        let lastActed: boolean | null = null;
+        for (let pass = 0; pass < maxPasses; pass++) {
+            if (this.destroyed) return;
+            // A held call owns no capture, so a wanted kind is NOT wanted-live while
+            // held: this releases a track a hold stranded and skips reacquiring.
+            const wantLive = wanted() && !this.heldNoCapture;
+            if (wantLive === hasLiveTrack()) return; // fixed point reached
+            // Same target as last pass but still not reached: the sink failed or was
+            // fenced and repeating it under the unchanged intent won't help. A
+            // CHANGED intent (wantLive flipped) still gets its corrective pass.
+            if (wantLive === lastActed) break;
+            lastActed = wantLive;
+            if (wantLive) {
+                prepareReacquire?.();
+                await reacquire();
+            } else {
+                await release();
+            }
+        }
+        // Bound exhausted under alternating intent: never leave a live track the
+        // current intent says is off.
+        if (!this.destroyed && !(wanted() && !this.heldNoCapture) && hasLiveTrack()) {
+            await release();
+        }
     }
 
     /**
