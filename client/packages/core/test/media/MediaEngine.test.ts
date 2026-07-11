@@ -2047,6 +2047,133 @@ describe('MediaEngine', () => {
             expect(live).toBe(false);
         });
 
+        it('reschedules a fresh handoff pass when an ENABLE races the bound-side safe release (never silent-unmuted)', async () => {
+            // The finding: at the iteration bound the safe-side cleanup releases a live
+            // unwanted track, but its `replaceTrack(null)` awaits — and a user ENABLE of
+            // that kind can land during the await (the session flips `track.enabled`
+            // with the track still attached and schedules no reacquire). The release
+            // then removes the track: desired ON, no live track (silent-unmuted). The
+            // after-every-await fixed point does not hold AT the bound, so termination
+            // must be quiescence-based: after the bound release, re-read the intent and
+            // reschedule a fresh handoff pass that reacquires a live track.
+            const getUserMedia = vi.fn().mockImplementation(async (constraints: MediaStreamConstraints) => {
+                const tracks: MediaStreamTrack[] = [];
+                if (constraints.audio) tracks.push(createMediaTrack('audio'));
+                if (constraints.video) tracks.push(createMediaTrack('video'));
+                return new FakeMediaStream(tracks) as unknown as MediaStream;
+            });
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+            const internals = engine as unknown as {
+                foregroundAudioIntent: boolean;
+                reconcileHandoffCapture: (
+                    wanted: () => boolean,
+                    hasLiveTrack: () => boolean,
+                    reacquire: () => Promise<void>,
+                    release: () => Promise<void>,
+                ) => Promise<void>;
+            };
+
+            // Drive the alternation to the bound with `wanted` always the opposite of
+            // the track state (as the pathological-alternation test does). The
+            // bound-side safe release flips the fake track off, which flips `wanted`
+            // back ON — modelling the enable that races the release — and mirrors the
+            // real re-enable into the engine's foreground intent so the rescheduled
+            // real handoff reacquires a live mic.
+            let live = false;
+            await internals.reconcileHandoffCapture.bind(engine)(
+                () => !live,
+                () => live,
+                async () => { live = true; },
+                async () => { live = false; internals.foregroundAudioIntent = true; },
+            );
+
+            // The rescheduled pass runs on a microtask and reacquires the mic. It ends
+            // with a LIVE audio track attached to the peer's audio sender, not silent.
+            await vi.waitFor(() => expect(engine.localStream?.getAudioTracks()[0]).toBeTruthy());
+            const liveMic = engine.localStream?.getAudioTracks()[0];
+            expect(peer?.senders.some(s => s.track === liveMic)).toBe(true);
+        });
+
+        it('ends released when a DISABLE races the rescheduled reacquire (quiescence, not thrash)', async () => {
+            // Symmetric to the reschedule test, but the user DISABLES the kind again
+            // while the rescheduled pass is reacquiring. The fresh pass must observe
+            // the disable after its reacquire await and release the just-attached
+            // track: the call ends with no live track, and the reschedule does not
+            // spin.
+            let resolveReacquire!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveReacquire = resolve; }));
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+            const internals = engine as unknown as {
+                foregroundAudioIntent: boolean;
+                reconcileHandoffCapture: (
+                    wanted: () => boolean,
+                    hasLiveTrack: () => boolean,
+                    reacquire: () => Promise<void>,
+                    release: () => Promise<void>,
+                ) => Promise<void>;
+            };
+
+            let live = false;
+            await internals.reconcileHandoffCapture.bind(engine)(
+                () => !live,
+                () => live,
+                async () => { live = true; },
+                async () => { live = false; internals.foregroundAudioIntent = true; },
+            );
+
+            // The rescheduled pass reacquires: its getUserMedia parks. Disable while it
+            // is in flight (mute path: clear the foreground intent + disarm), then let
+            // the reacquire land.
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            internals.foregroundAudioIntent = false;
+            engine.disarmResumeHandoff('audio');
+            resolveReacquire(createMediaStream({ audio: true }));
+
+            // The fresh pass re-read the disable after the reacquire await and released
+            // the just-attached mic: no live audio, nothing on the peer's audio sender.
+            await vi.waitFor(() => expect(engine.localStream?.getAudioTracks() ?? []).toHaveLength(0));
+            expect(peer?.senders.some(s => s.track?.kind === 'audio')).toBe(false);
+            // Bounded: the single rescheduled reacquire, no thrash.
+            expect(getUserMedia).toHaveBeenCalledTimes(1);
+        });
+
+        it('does not stack reschedules (one pending handoff pass at a time)', async () => {
+            // The reschedule latch must ensure a burst of bound-side releases queues at
+            // most ONE fresh handoff pass. Two back-to-back reschedule requests must
+            // result in a single `handOffToResumedCapture` entry.
+            const engine = new MediaEngine({}, () => {});
+            const internals = engine as unknown as {
+                foregroundAudioIntent: boolean;
+                rescheduleResumeHandoff: () => void;
+                handOffToResumedCapture: () => Promise<void>;
+            };
+            internals.foregroundAudioIntent = true; // so the re-arm has a kind to want
+            let entries = 0;
+            internals.handOffToResumedCapture = () => { entries += 1; return Promise.resolve(); };
+
+            internals.rescheduleResumeHandoff(); // queues one pass
+            internals.rescheduleResumeHandoff(); // latched: no-op, does not stack
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(entries).toBe(1);
+        });
+
         it('does not consume the handoff at a stale exit that no longer owns the latch (B replays it)', async () => {
             // Finding 2 (consume only with the active latch): start A parks owning the
             // latch, a stop + start B supersedes it (B now owns the latch, parked), a

@@ -263,6 +263,12 @@ export class MediaEngine {
     // silent-unmuted (desired on, no live track).
     private foregroundAudioIntent = false;
     private foregroundVideoIntent = false;
+    // One-pending-reschedule latch for {@link rescheduleResumeHandoff}. Set when a
+    // fresh {@link handOffToResumedCapture} pass is queued on a microtask (because a
+    // user enable raced the bound-side safe release in {@link reconcileHandoffCapture})
+    // and cleared when that microtask fires. A burst of bound-side releases can thus
+    // queue only ONE reconcile pass at a time — the reschedule cannot stack.
+    private resumeHandoffRescheduled = false;
     private localMediaStartPromise: Promise<MediaStream | null> | null = null;
     // Monotonic CAPTURE GENERATION. Bumped synchronously whenever the current
     // capture is invalidated: a media (re)start (`startLocalMediaInternal`), a
@@ -746,8 +752,10 @@ export class MediaEngine {
         this.requestingMedia = false;
         this.mediaLatchOwner = null;
         // A full teardown supersedes any pending resume handoff (also covers
-        // `destroy`, which routes through here).
+        // `destroy`, which routes through here). Clear the reschedule latch too so
+        // any queued microtask is a no-op and a future handoff can reschedule again.
         this.pendingResumeHandoff = null;
+        this.resumeHandoffRescheduled = false;
         this.notifyChange();
     }
 
@@ -1077,6 +1085,20 @@ export class MediaEngine {
      * enable/disable alternation. On exhausting the bound, take the SAFE side:
      * release any live track the current intent says should be off — never leave one
      * transmitting.
+     *
+     * Termination is QUIESCENCE-based, not counter-truncated: the bound-side release
+     * itself awaits a `replaceTrack(null)`, and a user ENABLE of the kind can land
+     * during that await (the session's enable-with-track-present path only flips
+     * `track.enabled` and schedules no reacquire, then this release removes the
+     * track — desired ON, no live track). So after the release, re-read the intent
+     * one final time; on that mismatch (kind now wanted, no live track) do NOT return
+     * silently — {@link rescheduleResumeHandoff} re-arms and queues a FRESH pass.
+     * Each rescheduled pass is triggerable only by a NEW user action racing the
+     * previous one, so progress is bounded by user input, not the counter; the
+     * per-pass `lastActed` terminator still prevents same-input cycling. An enable
+     * that lands AFTER the handoff fully finishes is self-healed by the session
+     * toggle path (no live track -> it reacquires), so the reschedule is only needed
+     * for this mid-release window.
      */
     private async reconcileHandoffCapture(
         wanted: () => boolean,
@@ -1106,10 +1128,59 @@ export class MediaEngine {
             }
         }
         // Bound exhausted under alternating intent: never leave a live track the
-        // current intent says is off.
-        if (!this.destroyed && !(wanted() && !this.heldNoCapture) && hasLiveTrack()) {
+        // current intent says is off. Take the SAFE side and release it.
+        if (this.destroyed) return;
+        if (!(wanted() && !this.heldNoCapture) && hasLiveTrack()) {
             await release();
+            // The release above awaited (a parked `replaceTrack(null)`); a user
+            // ENABLE of this kind can have landed while it was in flight. The
+            // session's enable-with-track-present path only flipped `track.enabled`
+            // (the track was still attached) and scheduled NO reacquire, then this
+            // release stopped+removed it: desired ON, no live track (silent-unmuted).
+            // The after-every-await fixed point does not hold at the counter bound,
+            // so re-read the intent once more and, on that mismatch, reschedule a
+            // fresh handoff pass instead of returning silently.
+            if (!this.destroyed && wanted() && !this.heldNoCapture && !hasLiveTrack()) {
+                this.rescheduleResumeHandoff();
+            }
         }
+    }
+
+    /**
+     * Reschedule a FRESH {@link handOffToResumedCapture} pass after
+     * {@link reconcileHandoffCapture} hit its iteration bound with the intent now
+     * wanting a kind whose live track the bound-side safe release just removed (a
+     * user enable that raced the parked `replaceTrack(null)`). Rather than looping
+     * in place or returning silent-unmuted, re-arm the handoff from the CURRENT
+     * mirrored foreground intent and run another pass on a microtask.
+     *
+     * Progress is bounded by USER INPUT, not a counter: a rescheduled pass can only
+     * do work if a new toggle changed the intent again; otherwise its reconcile
+     * reaches the fixed point (or the `lastActed` no-progress terminator stops it)
+     * and it reschedules nothing. At most one reschedule is pending at a time
+     * ({@link resumeHandoffRescheduled}), so a burst of bound-side releases cannot
+     * stack passes. The usual entry guards (`requestingMedia`, `destroyed`,
+     * `heldNoCapture`) are re-checked by {@link handOffToResumedCapture} when the
+     * microtask fires.
+     */
+    private rescheduleResumeHandoff(): void {
+        if (this.resumeHandoffRescheduled) return; // one pending reschedule at a time
+        if (this.destroyed || this.heldNoCapture) return;
+        // Re-arm from the CURRENT mirrored foreground intent (the plain booleans,
+        // which survive a full disarm nulling `pendingResumeHandoff`) so the fresh
+        // pass reacquires exactly the kinds the user now wants. Recover the camera
+        // facing from the engine's `facingMode`, already applied by the prior pass.
+        this.pendingResumeHandoff = {
+            audio: this.foregroundAudioIntent,
+            videoMode: this.foregroundVideoIntent
+                ? (this.facingMode === 'user' ? 'selfie' : 'world')
+                : 'off',
+        };
+        this.resumeHandoffRescheduled = true;
+        queueMicrotask(() => {
+            this.resumeHandoffRescheduled = false;
+            void this.handOffToResumedCapture();
+        });
     }
 
     /**
