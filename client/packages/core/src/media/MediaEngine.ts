@@ -989,6 +989,12 @@ export class MediaEngine {
         if (this.requestingMedia) return;
         const intent = this.pendingResumeHandoff;
         if (!intent) return;
+        // `disarmResumeHandoff` mutates this same object under our awaits, but
+        // TS control-flow narrows the guards below (`intent.audio` -> `true`,
+        // `intent.videoMode` -> non-`'off'`) and cannot model the aliased
+        // mutation. Re-read the withdrawn state through this widened alias so the
+        // post-await same-kind re-checks see the CURRENT (possibly disarmed) value.
+        const live: { audio: boolean; videoMode: VideoMode } = intent;
         // Do NOT null `pendingResumeHandoff` up front: keep it referencing this
         // in-flight `intent` so a `disarmResumeHandoff(kind)` during the audio
         // reacquire await below still mutates the SAME object the video branch
@@ -1005,11 +1011,26 @@ export class MediaEngine {
         if (this.destroyed || this.heldNoCapture) { this.consumeResumeHandoff(intent); return; }
         if (intent.audio && !this.localStream?.getAudioTracks()[0]) {
             await this.reacquireLocalAudioCapture();
+            // SAME-kind disarm mid-acquire: a `disarmResumeHandoff('audio')` (the
+            // session's mute path) during the getUserMedia await above withdrew
+            // audio AFTER this reacquire had already attached a LIVE mic. The
+            // session's toggle-off saw no existing track to release (the handoff
+            // had not acquired it yet), so nothing detached it — release it here
+            // via the SAME sink the hold path uses, or the mic keeps transmitting
+            // after the user muted (privacy). The re-check reads the mutated
+            // `intent`, not the pre-await snapshot. Idempotent when the reacquire
+            // attached nothing (held-fenced/failed).
+            if (!live.audio) await this.releaseLocalAudioCapture();
         }
         if (this.destroyed || this.heldNoCapture) { this.consumeResumeHandoff(intent); return; }
         if (intent.videoMode !== 'off' && !this.localStream?.getVideoTracks()[0]) {
             this.facingMode = intent.videoMode === 'selfie' ? 'user' : 'environment';
             await this.reacquireVideoTrack();
+            // Symmetric same-kind disarm: a `disarmResumeHandoff('video')` during
+            // the camera getUserMedia await withdrew video after the reacquire
+            // attached a live camera track. Detach it (same sink the hold path
+            // uses) so a disabled camera never keeps sending.
+            if (live.videoMode === 'off') await this.releaseVideoTrack();
         }
         this.consumeResumeHandoff(intent);
     }

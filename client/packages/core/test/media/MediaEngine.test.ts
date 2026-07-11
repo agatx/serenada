@@ -1629,6 +1629,96 @@ describe('MediaEngine', () => {
             expect(peer?.senders.some(s => s.track === resumedAudio)).toBe(true);
         });
 
+        it('releases the mic when audio is disarmed WHILE the handoff audio reacquire is in flight', async () => {
+            // Finding (same-kind in-flight disarm): the handoff's audio reacquire
+            // checks the intent BEFORE `getUserMedia`, but a `disarmResumeHandoff`
+            // ('audio') (the session's mute path) can fire WHILE that acquire is
+            // awaiting. The in-flight reacquire then attaches the live mic anyway,
+            // and the session's toggle-off saw no existing track to release — so
+            // without a post-await re-check the mic transmits after mute. The
+            // handoff must release the just-acquired mic when its kind was withdrawn.
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveAudio!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))  // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveAudio = resolve; }))    // handoff audio (parked)
+                .mockImplementation(async () => createMediaStream({ audio: false, video: true }));           // camera acquire
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'selfie');  // arms handoff {audio, selfie}
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> audio reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            // User mutes WHILE the handoff's audio reacquire is awaiting getUserMedia.
+            engine.disarmResumeHandoff('audio');
+            resolveAudio(createMediaStream({ audio: true, video: false }));   // mic lands, but must be released
+            const result = await start;
+
+            expect(result).toBeNull();
+            // Mic was withdrawn mid-flight: even though the reacquire attached it, the
+            // handoff released it — no live audio track, nothing on the audio senders.
+            expect(engine.localStream?.getAudioTracks() ?? []).toHaveLength(0);
+            expect(peer?.senders.some(s => s.track?.kind === 'audio')).toBe(false);
+            // Camera was still desired: reacquired and attached (video per intent).
+            const resumedVideo = engine.localStream?.getVideoTracks()[0];
+            expect(resumedVideo).toBeTruthy();
+            expect(peer?.senders.some(s => s.track === resumedVideo)).toBe(true);
+        });
+
+        it('releases the camera when video is disarmed WHILE the handoff video reacquire is in flight', async () => {
+            // Symmetric same-kind in-flight disarm for video: a `disarmResumeHandoff`
+            // ('video') fired while the handoff's camera reacquire is awaiting
+            // getUserMedia must not leave a live camera track sending after the user
+            // turned the camera off. Audio (still desired) lands normally.
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveVideo!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))  // initial (parked)
+                .mockResolvedValueOnce(createMediaStream({ audio: true, video: false }))                     // handoff audio (lands)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveVideo = resolve; }))     // handoff video (parked)
+                .mockImplementation(async () => createMediaStream({ audio: false, video: true }));
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'selfie');  // arms handoff {audio, selfie}
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff: audio lands, then camera reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
+            // User turns the camera off WHILE the handoff's video reacquire is awaiting.
+            engine.disarmResumeHandoff('video');
+            resolveVideo(createMediaStream({ audio: false, video: true }));   // camera lands, but must be released
+            const result = await start;
+
+            expect(result).toBeNull();
+            // Camera was withdrawn mid-flight: the reacquired track was released — no
+            // live video track, nothing on the video senders.
+            expect(engine.localStream?.getVideoTracks() ?? []).toHaveLength(0);
+            expect(peer?.senders.some(s => s.track?.kind === 'video')).toBe(false);
+            // Mic was still desired: reacquired and attached.
+            const resumedAudio = engine.localStream?.getAudioTracks()[0];
+            expect(resumedAudio).toBeTruthy();
+            expect(peer?.senders.some(s => s.track === resumedAudio)).toBe(true);
+        });
+
         it('does not consume the handoff at a stale exit that no longer owns the latch (B replays it)', async () => {
             // Finding 2 (consume only with the active latch): start A parks owning the
             // latch, a stop + start B supersedes it (B now owns the latch, parked), a
