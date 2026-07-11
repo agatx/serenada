@@ -1333,9 +1333,9 @@ describe('MediaEngine', () => {
             // per-peer `replaceTrack` that attaches the initial tracks is still in
             // flight when a hold (then a resume that attaches fresh tracks)
             // interleaves. When the OLD `replaceTrack` finally lands it points the
-            // sender at a stopped pre-hold track; the post-attach fence must undo it
-            // per-sender, leaving each sender at the resumed track or null — NEVER
-            // the stale stopped track.
+            // sender at a stopped pre-hold track; the post-attach fence must RESTORE
+            // the resumed (current-generation) track on that sender — not null it,
+            // which would strip the resumed foreground call of its mic/camera.
             const audioA = createMediaTrack('audio');
             const videoA = createMediaTrack('video');
             const audioAStop = vi.spyOn(audioA, 'stop');
@@ -1368,8 +1368,19 @@ describe('MediaEngine', () => {
             const result = await start;
 
             expect(result).toBeNull();                             // stale start publishes nothing
-            // No sender is left carrying the stale pre-hold tracks (each ends at the
-            // resumed track or null).
+            // The resumed foreground call keeps its mic: the audio sender that
+            // received the stale pre-hold attach (the legacy attach awaits the
+            // parked audio `replaceTrack`, so the audio sender is the one that
+            // actually races here) ends at EXACTLY the resumed mic track — never
+            // null and never the stale stopped track. (The independent-peer resume
+            // test in MediaEngineIndependentContent.test.ts covers the camera/video
+            // sender restore, which this legacy path never reaches.)
+            const resumedAudio = engine.localStream?.getAudioTracks()[0];
+            expect(resumedAudio).toBeTruthy();
+            expect(resumedAudio).not.toBe(audioA);
+            const audioSender = peer?.senders.find(s => s.replaceTrackCalls.includes(audioA));
+            expect(audioSender).toBeTruthy();
+            expect(audioSender?.track).toBe(resumedAudio);
             expect(peer?.senders.some(sender => sender.track === audioA || sender.track === videoA)).toBe(false);
             expect(audioAStop).toHaveBeenCalled();
             expect(videoAStop).toHaveBeenCalled();

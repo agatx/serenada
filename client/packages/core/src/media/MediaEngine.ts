@@ -451,27 +451,62 @@ export class MediaEngine {
     }
 
     /**
+     * The track the CURRENT capture generation wants attached to `sender`, or
+     * `null` when the live state says the sender should carry nothing. Resolves
+     * by role for independent peers (audio/camera/content senders map to the
+     * live local audio/camera/content track) and by kind for legacy peers (whose
+     * single video sender carries the screen share while active, else the
+     * camera). A non-live candidate resolves to `null`.
+     */
+    private currentTrackForSender(peer: PeerState, sender: RTCRtpSender, senderKind: string): MediaStreamTrack | null {
+        let desired: MediaStreamTrack | null;
+        if (peer.mediaRoles.audio?.sender === sender) {
+            desired = this.localStream?.getAudioTracks()[0] ?? null;
+        } else if (peer.mediaRoles.camera?.sender === sender) {
+            desired = this.localCameraTrack;
+        } else if (peer.mediaRoles.content?.sender === sender) {
+            desired = this.localContentTrack;
+        } else if (senderKind === 'audio') {
+            // Legacy peer (no role mapping): disambiguate by kind.
+            desired = this.localStream?.getAudioTracks()[0] ?? null;
+        } else {
+            desired = this.isScreenSharing && this.localContentTrack ? this.localContentTrack : this.localCameraTrack;
+        }
+        return desired && desired.readyState === 'live' ? desired : null;
+    }
+
+    /**
      * Undo a superseded (stale) capture operation's sender attachment(s): for
      * every peer sender that STILL carries `staleTrack` — the exact track this
      * operation attached before a hold/stop bumped the capture generation —
-     * replace it with `null`. A sender a NEWER generation already repointed to a
-     * resumed track (`sender.track !== staleTrack`) is left untouched, so
-     * resume's freshly attached track is never clobbered (per-sender ownership).
+     * restore the track the CURRENT generation owns for that sender (via
+     * {@link currentTrackForSender}), falling back to `null` when the live state
+     * wants nothing there. A sender a NEWER generation already repointed
+     * (`sender.track !== staleTrack`) is left untouched (per-sender ownership).
+     *
+     * The restore (rather than a blind `null`) matters when a stale pre-hold
+     * `replaceTrack` physically LANDS after resume already repointed the sender
+     * to a resumed track: the browser leaves the sender carrying `staleTrack`, so
+     * this undo re-installs the resumed mic/camera/content instead of stripping
+     * the foreground call. `staleTrack` is being torn down by the caller, so if
+     * the live state still names it as current (its release runs after this) we
+     * fall back to `null`.
      *
      * This is the attachment-await counterpart to the post-acquire fences: the
      * generation is re-checked AFTER every `replaceTrack` yields, and a stale
-     * continuation whose `replaceTrack` won the race against a concurrent hold
-     * (leaving the sender pointed at a stopped pre-hold track) is unwound here.
-     * Callers stop the stale capture track separately.
+     * continuation whose `replaceTrack` won the race against a concurrent hold is
+     * unwound here. Callers stop the stale capture track separately.
      */
     private async detachStaleTrackFromSenders(staleTrack: MediaStreamTrack): Promise<void> {
         await Promise.all(Array.from(this.peers.values()).map(async (peer) => {
             for (const sender of peer.pc.getSenders()) {
                 if (sender.track !== staleTrack) continue;
+                const current = this.currentTrackForSender(peer, sender, staleTrack.kind);
+                const replacement = current === staleTrack ? null : current;
                 try {
-                    await sender.replaceTrack(null);
+                    await sender.replaceTrack(replacement);
                 } catch (err) {
-                    this.logger?.log('warning', 'WebRTC', `Failed to detach stale capture track from sender: ${formatError(err)}`);
+                    this.logger?.log('warning', 'WebRTC', `Failed to restore current track on stale sender: ${formatError(err)}`);
                 }
             }
         }));
@@ -555,7 +590,7 @@ export class MediaEngine {
 
             for (const [remoteCid, peer] of this.peers) {
                 if (peer.supportsIndependentContentVideo) {
-                    this.attachLocalTracksToIndependentPeer(remoteCid, peer);
+                    await this.attachLocalTracksToIndependentPeer(remoteCid, peer);
                 } else {
                     await this.attachLocalTracksToPeer(remoteCid, peer, activeStream);
                 }
@@ -2030,7 +2065,7 @@ export class MediaEngine {
             });
         }
 
-        this.ensureOwnerVideoTransceivers(peer);
+        void this.ensureOwnerVideoTransceivers(peer);
     }
 
     /**
@@ -2038,7 +2073,7 @@ export class MediaEngine {
      * transceiver second, both `sendrecv`, with no sender track yet (a null
      * sender track sends nothing). Idempotent — re-entry binds nothing new.
      */
-    private ensureOwnerVideoTransceivers(peer: PeerState): void {
+    private async ensureOwnerVideoTransceivers(peer: PeerState): Promise<void> {
         if (!peer.mediaRoles.camera) {
             const cameraTrack = this.localCameraTrack;
             const transceiver = cameraTrack && cameraTrack.readyState === 'live'
@@ -2054,7 +2089,8 @@ export class MediaEngine {
                 peer.pendingContentAttach = true;
             }
         }
-        this.attachPendingLocalTracks(peer);
+        // Surface the attach promise so a fenced caller can await it.
+        await this.attachPendingLocalTracks(peer);
     }
 
     /**
@@ -2094,7 +2130,7 @@ export class MediaEngine {
                 }
             } catch { /* ignore */ }
         }
-        this.attachPendingLocalTracks(peer);
+        void this.attachPendingLocalTracks(peer);
     }
 
     /**
@@ -2139,11 +2175,12 @@ export class MediaEngine {
      *     instead of leaving the content sender empty.
      * Mirrors the camera path's `sender.track !== track` idempotence guard.
      */
-    private attachPendingLocalTracks(peer: PeerState): void {
+    private async attachPendingLocalTracks(peer: PeerState): Promise<void> {
+        const attaches: Promise<unknown>[] = [];
         const cameraTrack = this.localCameraTrack;
         if (peer.mediaRoles.camera && cameraTrack && cameraTrack.readyState === 'live' &&
             peer.mediaRoles.camera.sender.track !== cameraTrack) {
-            void this.replaceRoleTrack(peer, 'camera', cameraTrack);
+            attaches.push(this.replaceRoleTrack(peer, 'camera', cameraTrack));
         }
         const contentTrack = this.localContentTrack;
         const wantsContent = peer.pendingContentAttach ||
@@ -2151,13 +2188,16 @@ export class MediaEngine {
         if (peer.mediaRoles.content && wantsContent && contentTrack &&
             peer.mediaRoles.content.sender.track !== contentTrack) {
             peer.pendingContentAttach = false;
-            void this.replaceRoleTrack(peer, 'content', contentTrack);
+            attaches.push(this.replaceRoleTrack(peer, 'content', contentTrack));
         } else if (peer.mediaRoles.content && contentTrack &&
             peer.mediaRoles.content.sender.track === contentTrack) {
             // Already attached (e.g. re-bind after a successful replaceTrack):
             // clear the pending flag so it doesn't linger.
             peer.pendingContentAttach = false;
         }
+        // Return the settled attachments so a fenced caller can await them
+        // (fire-and-forget callers `void` the result).
+        await Promise.all(attaches);
     }
 
     /**
@@ -2217,8 +2257,13 @@ export class MediaEngine {
         }
     }
 
-    /** Attach the live local audio track to a capable peer's audio transceiver. */
-    private attachAudioTrackToIndependentPeer(peer: PeerState): void {
+    /**
+     * Attach the live local audio track to a capable peer's audio transceiver.
+     * Returns a promise that resolves once the `replaceTrack` settles so a caller
+     * inside a capture-generation fence can await the attachment (see
+     * {@link attachLocalTracksToIndependentPeer}).
+     */
+    private async attachAudioTrackToIndependentPeer(peer: PeerState): Promise<void> {
         const audioTrack = this.localStream?.getAudioTracks()[0] ?? null;
         if (!audioTrack || audioTrack.readyState !== 'live') return;
         const audioTransceiver = peer.mediaRoles.audio
@@ -2227,8 +2272,11 @@ export class MediaEngine {
         if (audioTransceiver) {
             peer.mediaRoles.audio = audioTransceiver;
             if (audioTransceiver.sender.track !== audioTrack) {
-                void audioTransceiver.sender.replaceTrack(audioTrack).catch(err =>
-                    this.logger?.log('warning', 'WebRTC', `Failed to attach audio to capable peer: ${formatError(err)}`));
+                try {
+                    await audioTransceiver.sender.replaceTrack(audioTrack);
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `Failed to attach audio to capable peer: ${formatError(err)}`);
+                }
             }
             // Inlined (not `ensureRoleSendCapable`): that helper is video-gated
             // (`videoMediaEnabled`), but audio must stay send-capable even when
@@ -2248,12 +2296,20 @@ export class MediaEngine {
      * created owner transceivers is driven by the generic shouldIOffer /
      * !remoteDescription block at the sole call site, so nothing is returned.
      */
-    private attachLocalTracksToIndependentPeer(remoteCid: string, peer: PeerState): void {
-        this.attachAudioTrackToIndependentPeer(peer);
+    private async attachLocalTracksToIndependentPeer(remoteCid: string, peer: PeerState): Promise<void> {
+        // Collect the attach promises so the caller's post-attachment capture
+        // fence awaits them: a fire-and-forget attach could otherwise settle AFTER
+        // the fence passed, letting a late `replaceTrack` install a stopped
+        // pre-hold track on a sender a concurrent hold had already detached.
+        const attaches: Promise<unknown>[] = [this.attachAudioTrackToIndependentPeer(peer)];
         if (this.shouldIOffer(remoteCid)) {
-            this.ensureOwnerVideoTransceivers(peer);
+            // Owner: ensureOwnerVideoTransceivers creates the role transceivers AND
+            // attaches pending camera/content tracks — its promise covers them.
+            attaches.push(this.ensureOwnerVideoTransceivers(peer));
+        } else {
+            attaches.push(this.attachPendingLocalTracks(peer));
         }
-        this.attachPendingLocalTracks(peer);
+        await Promise.all(attaches);
     }
 
     /**
@@ -2570,7 +2626,7 @@ export class MediaEngine {
             if (!this.localStream) {
                 await this.startLocalMedia();
             } else {
-                this.attachAudioTrackToIndependentPeer(peer);
+                void this.attachAudioTrackToIndependentPeer(peer);
             }
             this.assignRemoteVideoRoles(peer);
         } else if (this.localStream) {
@@ -2629,7 +2685,7 @@ export class MediaEngine {
             // attach. Idempotent: `attachPendingLocalTracks` skips senders that
             // already carry the right track.
             if (peer.supportsIndependentContentVideo && this.videoMediaEnabled) {
-                this.attachPendingLocalTracks(peer);
+                void this.attachPendingLocalTracks(peer);
             }
         } catch (err) {
             const peer = this.peers.get(fromCid);
@@ -2780,7 +2836,7 @@ export class MediaEngine {
                         await this.replaceRoleTrack(peer, 'camera', newTrack);
                     } else if (newTrack && this.shouldIOffer(remoteCid)) {
                         // Owner not yet set up (peer pre-dates media): create now.
-                        this.ensureOwnerVideoTransceivers(peer);
+                        void this.ensureOwnerVideoTransceivers(peer);
                         this.scheduleLocalTrackNegotiation(remoteCid, peer);
                     }
                     return;
