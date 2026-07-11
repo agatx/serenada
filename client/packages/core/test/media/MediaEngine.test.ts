@@ -2042,6 +2042,106 @@ describe('MediaEngine', () => {
             expect(getUserMedia).toHaveBeenCalledTimes(3);
         });
 
+        it('leaves a superseding start\'s mic alone when the stale handoff abort fires (ownership-scoped release)', async () => {
+            // The finding: `stopLocalMedia` + a NEW `startLocalMedia` can complete
+            // (new mic live) while the handoff pass is still parked in its audio
+            // reacquire. When the stale reacquire finally resolves, the pass's
+            // generation-abort checkpoint sees a LIVE track — but that track belongs
+            // to the NEW generation. A non-ownership-scoped release would stop the
+            // superseding start's mic, leaving the new call capture-less with nothing
+            // to retry. The abort must release ONLY a track THIS pass acquired.
+            const newMic = createMediaTrack('audio');
+            const newCam = createMediaTrack('video');
+            const newMicStop = vi.spyOn(newMic, 'stop');
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveAudio!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))  // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveAudio = resolve; }))    // handoff audio reacquire (parked)
+                .mockImplementationOnce(async () => new FakeMediaStream([newMic, newCam]) as unknown as MediaStream); // NEW start
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(true, 'off');     // arms handoff {audio}
+            engine.setForegroundCaptureIntent('audio', true);       // resume desired audio on
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> audio reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            // Terminal stop + a NEW start that COMPLETES while the handoff reacquire
+            // is still parked: the new mic is live under a newer generation.
+            engine.stopLocalMedia();                               // gen -> 3 (terminal reset)
+            const newStream = await engine.startLocalMedia();      // gen -> 4, new start completes
+            expect(newStream?.getAudioTracks()[0]).toBe(newMic);   // sanity: new mic is live
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
+            // Release the parked STALE handoff reacquire: its own generation fence
+            // drops the mic it acquired, and the pass hits the generation-abort
+            // checkpoint with the NEW mic live. It must NOT be released.
+            resolveAudio(createMediaStream({ audio: true }));
+            const result = await start;
+
+            expect(result).toBeNull();
+            // The NEW call's mic survives: still attached, still live, never stopped.
+            expect(engine.localStream?.getAudioTracks()[0]).toBe(newMic);
+            expect(newMicStop).not.toHaveBeenCalled();
+            expect(peer?.senders.some(s => s.track === newMic)).toBe(true);
+            // No extra reacquire: the aborted pass released nothing and retried nothing.
+            expect(getUserMedia).toHaveBeenCalledTimes(3);
+        });
+
+        it('leaves a superseding start\'s camera alone when the stale handoff abort fires (ownership-scoped release)', async () => {
+            // Symmetric video variant of the finding: a `stopLocalMedia` + NEW
+            // `startLocalMedia` completes (new camera live) while the handoff's VIDEO
+            // reacquire is parked. The video-branch generation-abort must release ONLY
+            // this pass's own acquisition, never the superseding start's camera.
+            const newMic = createMediaTrack('audio');
+            const newCam = createMediaTrack('video');
+            const newCamStop = vi.spyOn(newCam, 'stop');
+            let resolveInitial!: (stream: MediaStream) => void;
+            let resolveVideo!: (stream: MediaStream) => void;
+            const getUserMedia = vi.fn()
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveInitial = resolve; }))  // initial (parked)
+                .mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveVideo = resolve; }))    // handoff video reacquire (parked)
+                .mockImplementationOnce(async () => new FakeMediaStream([newMic, newCam]) as unknown as MediaStream); // NEW start
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            const start = engine.startLocalMedia();                // gen 1, latch held
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+            await engine.suspendLocalMediaForHold();               // gen -> 2, held
+            await engine.resumeLocalMediaFromHold(false, 'selfie'); // arms handoff {selfie}
+            engine.setForegroundCaptureIntent('video', true);       // resume desired video on
+
+            resolveInitial(createMediaStream({ audio: true, video: true }));  // stale exit -> handoff -> video reacquire (parked)
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+            engine.stopLocalMedia();                               // gen -> 3 (terminal reset)
+            const newStream = await engine.startLocalMedia();      // gen -> 4, new start completes
+            expect(newStream?.getVideoTracks()[0]).toBe(newCam);   // sanity: new camera is live
+            await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
+            resolveVideo(createMediaStream({ audio: false, video: true }));
+            const result = await start;
+
+            expect(result).toBeNull();
+            expect(engine.localStream?.getVideoTracks()[0]).toBe(newCam);
+            expect(newCamStop).not.toHaveBeenCalled();
+            expect(peer?.senders.some(s => s.track === newCam)).toBe(true);
+            expect(getUserMedia).toHaveBeenCalledTimes(3);
+        });
+
         it('ends with a live mic when enable/disable churn races the handoff across parked awaits', async () => {
             // Enable -> disable -> enable churn across the reacquire AND the
             // disarm-release parked awaits must converge, on the fixed point, to the
@@ -2105,6 +2205,7 @@ describe('MediaEngine', () => {
             // at the pass bound and, on stopping, prefer the SAFE side — release a
             // live track the current intent says should be off.
             const engine = new MediaEngine({}, () => {});
+            const liveTrack = createMediaTrack('audio');
             let live = false;
             let reacquires = 0;
             let releases = 0;
@@ -2112,7 +2213,7 @@ describe('MediaEngine', () => {
                 reconcileHandoffCapture: (
                     gen: number,
                     wanted: () => boolean,
-                    hasLiveTrack: () => boolean,
+                    currentTrack: () => MediaStreamTrack | null,
                     reacquire: () => Promise<void>,
                     release: () => Promise<void>,
                 ) => Promise<void>;
@@ -2123,7 +2224,7 @@ describe('MediaEngine', () => {
             await reconcile(
                 engineInternals.mediaRequestId,                   // stable generation: no stop/hold in this test
                 () => !live,                                      // never agrees with the track state
-                () => live,
+                () => (live ? liveTrack : null),
                 async () => { reacquires += 1; live = true; },
                 async () => { releases += 1; live = false; },
             );
@@ -2163,7 +2264,7 @@ describe('MediaEngine', () => {
                 reconcileHandoffCapture: (
                     gen: number,
                     wanted: () => boolean,
-                    hasLiveTrack: () => boolean,
+                    currentTrack: () => MediaStreamTrack | null,
                     reacquire: () => Promise<void>,
                     release: () => Promise<void>,
                 ) => Promise<void>;
@@ -2176,11 +2277,12 @@ describe('MediaEngine', () => {
             // back ON — modelling the enable that races the release — and mirrors the
             // real re-enable into the engine's foreground intent so the rescheduled
             // real handoff reacquires a live mic.
+            const liveTrack = createMediaTrack('audio');
             let live = false;
             await internals.reconcileHandoffCapture.bind(engine)(
                 internals.mediaRequestId,                         // stable generation: no stop/hold in this test
                 () => !live,
-                () => live,
+                () => (live ? liveTrack : null),
                 async () => { live = true; },
                 async () => { live = false; internals.foregroundAudioIntent = true; },
             );
@@ -2214,18 +2316,19 @@ describe('MediaEngine', () => {
                 reconcileHandoffCapture: (
                     gen: number,
                     wanted: () => boolean,
-                    hasLiveTrack: () => boolean,
+                    currentTrack: () => MediaStreamTrack | null,
                     reacquire: () => Promise<void>,
                     release: () => Promise<void>,
                 ) => Promise<void>;
                 mediaRequestId: number;
             };
 
+            const liveTrack = createMediaTrack('audio');
             let live = false;
             await internals.reconcileHandoffCapture.bind(engine)(
                 internals.mediaRequestId,                         // stable generation: no stop/hold in this test
                 () => !live,
-                () => live,
+                () => (live ? liveTrack : null),
                 async () => { live = true; },
                 async () => { live = false; internals.foregroundAudioIntent = true; },
             );

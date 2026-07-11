@@ -1112,7 +1112,7 @@ export class MediaEngine {
         await this.reconcileHandoffCapture(
             gen,
             () => intent.audio || this.foregroundAudioIntent,
-            () => !!this.localStream?.getAudioTracks()[0],
+            () => this.localStream?.getAudioTracks()[0] ?? null,
             () => this.reacquireLocalAudioCapture(),
             () => this.releaseLocalAudioCapture(),
         );
@@ -1123,7 +1123,7 @@ export class MediaEngine {
         await this.reconcileHandoffCapture(
             gen,
             () => intent.videoMode !== 'off' || this.foregroundVideoIntent,
-            () => !!this.localStream?.getVideoTracks()[0],
+            () => this.localStream?.getVideoTracks()[0] ?? null,
             () => this.reacquireVideoTrack(),
             () => this.releaseVideoTrack(),
             () => {
@@ -1175,22 +1175,37 @@ export class MediaEngine {
     private async reconcileHandoffCapture(
         gen: number,
         wanted: () => boolean,
-        hasLiveTrack: () => boolean,
+        currentTrack: () => MediaStreamTrack | null,
         reacquire: () => Promise<void>,
         release: () => Promise<void>,
         prepareReacquire?: () => void,
     ): Promise<void> {
         const maxPasses = 5;
         let lastActed: boolean | null = null;
+        // The exact track THIS pass acquired and attached under `gen`. Recorded
+        // only when the reacquire returned with the generation STILL ours, so it
+        // can never point at a track a superseding start attached: a reacquire
+        // fenced by a mid-await teardown drops its own track (its internal
+        // generation fence), leaving `currentTrack()` either null or a newer
+        // start's foreign track. The abort/cleanup branches release ONLY this
+        // recorded track — the invariant is that the pass may undo only its own
+        // acquisitions, never a superseding generation's live capture.
+        let acquiredTrack: MediaStreamTrack | null = null;
+        const hasLiveTrack = () => currentTrack() !== null;
         for (let pass = 0; pass < maxPasses; pass++) {
             if (this.destroyed) return;
             // Lifecycle moved mid-pass: a terminal {@link stopLocalMedia} (session
             // reset) or a hold bumped `gen` while a reacquire/release awaited. Abort
             // the whole pass — the captured `intent` no longer describes a live call.
-            // Release any track THIS iteration just attached (via the ownership-scoped
-            // release/detach sink) so none survives the teardown, then stop.
+            // Release ONLY a track THIS pass acquired: a `stopLocalMedia` + newer
+            // `startLocalMedia` can have attached a fresh track of this kind under a
+            // newer generation, and `release()` is NOT ownership-scoped — it would
+            // stop the superseding start's live track (the finding), leaving the new
+            // call capture-less with nothing to retry. Compare identity: leave any
+            // track we did not acquire untouched.
             if (this.mediaRequestId !== gen) {
-                if (hasLiveTrack()) await release();
+                const live = currentTrack();
+                if (live && live === acquiredTrack) await release();
                 return;
             }
             // A held call owns no capture, so a wanted kind is NOT wanted-live while
@@ -1205,19 +1220,29 @@ export class MediaEngine {
             if (wantLive) {
                 prepareReacquire?.();
                 await reacquire();
+                // Record the track we just attached as this pass's own, but only if
+                // the generation is still ours. If a teardown + newer start raced the
+                // reacquire, the generation has moved and `currentTrack()` is now the
+                // superseding start's track (or null) — never ours — so skipping the
+                // record keeps the ownership check above honest.
+                if (this.mediaRequestId === gen) acquiredTrack = currentTrack();
             } else {
                 await release();
+                // We just tore down our own capture; nothing of ours remains live.
+                acquiredTrack = null;
             }
         }
         // Bound exhausted under alternating intent: never leave a live track the
         // current intent says is off. Take the SAFE side and release it.
         if (this.destroyed) return;
         // Same lifecycle abort as the loop: a terminal stop / hold during the last
-        // await moved `gen`. Release anything still live and stop — do NOT fall
-        // through to the reschedule below, which would re-arm a fresh pass after the
-        // call was torn down.
+        // await moved `gen`. Release ONLY this pass's own acquisition (same
+        // ownership rule as the loop-top abort — a superseding start's live track
+        // must be left alone), and stop — do NOT fall through to the reschedule
+        // below, which would re-arm a fresh pass after the call was torn down.
         if (this.mediaRequestId !== gen) {
-            if (hasLiveTrack()) await release();
+            const live = currentTrack();
+            if (live && live === acquiredTrack) await release();
             return;
         }
         if (!(wanted() && !this.heldNoCapture) && hasLiveTrack()) {
