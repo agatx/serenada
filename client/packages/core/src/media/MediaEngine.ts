@@ -450,6 +450,33 @@ export class MediaEngine {
         return this.destroyed || this.heldNoCapture || this.mediaRequestId !== gen;
     }
 
+    /**
+     * Undo a superseded (stale) capture operation's sender attachment(s): for
+     * every peer sender that STILL carries `staleTrack` — the exact track this
+     * operation attached before a hold/stop bumped the capture generation —
+     * replace it with `null`. A sender a NEWER generation already repointed to a
+     * resumed track (`sender.track !== staleTrack`) is left untouched, so
+     * resume's freshly attached track is never clobbered (per-sender ownership).
+     *
+     * This is the attachment-await counterpart to the post-acquire fences: the
+     * generation is re-checked AFTER every `replaceTrack` yields, and a stale
+     * continuation whose `replaceTrack` won the race against a concurrent hold
+     * (leaving the sender pointed at a stopped pre-hold track) is unwound here.
+     * Callers stop the stale capture track separately.
+     */
+    private async detachStaleTrackFromSenders(staleTrack: MediaStreamTrack): Promise<void> {
+        await Promise.all(Array.from(this.peers.values()).map(async (peer) => {
+            for (const sender of peer.pc.getSenders()) {
+                if (sender.track !== staleTrack) continue;
+                try {
+                    await sender.replaceTrack(null);
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `Failed to detach stale capture track from sender: ${formatError(err)}`);
+                }
+            }
+        }));
+    }
+
     async startLocalMedia(): Promise<MediaStream | null> {
         if (this.localStream) return this.localStream;
         // Core Invariant 2: a held call owns NO capture. The offer-driven
@@ -520,6 +547,11 @@ export class MediaEngine {
             }
             const activeStream = this.localStream;
             if (!activeStream) return null;
+            // Stable snapshot of the tracks THIS start attaches: a concurrent hold
+            // mutates `activeStream` (removes tracks as it releases capture), so the
+            // post-attachment fence below must iterate the list captured now, not a
+            // re-read of the (possibly emptied) stream.
+            const acquiredTracks = activeStream.getTracks();
 
             for (const [remoteCid, peer] of this.peers) {
                 if (peer.supportsIndependentContentVideo) {
@@ -537,6 +569,22 @@ export class MediaEngine {
                 } else if (!this.shouldIOffer(remoteCid) && peer.pc.remoteDescription) {
                     this.scheduleLocalTrackNegotiation(remoteCid, peer);
                 }
+            }
+            // Post-attachment fence: the per-peer attach loop above yields on
+            // `replaceTrack` (legacy `attachLocalTracksToPeer`), so a hold — or
+            // another start/stop — can latch DURING an attach await: its
+            // `suspendLocalMediaForHold` bumps the generation and releases capture.
+            // If this superseded continuation's `replaceTrack` won the race, the
+            // sender is left carrying a stopped pre-hold track. Undo ONLY the
+            // senders still carrying the tracks THIS start attached (a resumed
+            // track a newer generation installed is never clobbered — per-sender
+            // ownership), stop the stale capture, and publish nothing.
+            if (this.isCaptureStale(requestId)) {
+                for (const track of acquiredTracks) {
+                    await this.detachStaleTrackFromSenders(track);
+                    try { track.stop(); } catch { /* ignore */ }
+                }
+                return null;
             }
             this.notifyChange();
             return activeStream;
@@ -1005,6 +1053,12 @@ export class MediaEngine {
                     this.screenShareTrack = null;
                 }
                 this.screenShareRestoreVideoEnabled = null;
+                // Undo the sender mutation this stale swap made: if a peer's video
+                // sender still carries the display track (this op's `replaceTrack`
+                // won the race against the concurrent hold's `releaseVideoTrack`),
+                // detach it. A sender the hold/resume already repointed elsewhere is
+                // left untouched (per-sender ownership).
+                await this.detachStaleTrackFromSenders(displayTrack);
                 try { displayTrack.stop(); } catch { /* ignore */ }
                 return;
             }
@@ -1144,6 +1198,12 @@ export class MediaEngine {
         // re-broadcast `active:true` (a higher revision) from a held call: release the
         // surface (idempotent with the stop) and bail without sending.
         if (this.isCaptureStale(gen)) {
+            // Undo the sender mutation this stale attach made: detach the display
+            // track from any content (or legacy single-video) sender that still
+            // carries it, so the concurrent hold's teardown is not re-clobbered by
+            // this op's late `replaceTrack`. A sender a newer op already repointed
+            // is left untouched (per-sender ownership).
+            await this.detachStaleTrackFromSenders(displayTrack);
             this.releaseLocalContentTrack();
             this.isScreenSharing = false;
             this.notifyChange();

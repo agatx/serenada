@@ -178,12 +178,34 @@ class FakeRtcSessionDescription {
 
 class FakeRtcRtpSender {
     readonly replaceTrackCalls: Array<MediaStreamTrack | null> = [];
+    // Opt-in gating for the capture-generation ATTACHMENT-await race tests.
+    // When a track is registered as deferred, `replaceTrack(track)` parks until
+    // `releaseParked()` and only sets `this.track` once released — modelling a
+    // `replaceTrack` promise that resolves LATE (after a concurrent hold/resume).
+    // Inert by default (empty set), so every other test is unaffected.
+    static deferredTracks = new Set<MediaStreamTrack>();
+    static parked: Array<() => void> = [];
+    static releaseParked(): void {
+        const pending = [...FakeRtcRtpSender.parked];
+        FakeRtcRtpSender.parked.length = 0;
+        pending.forEach(apply => apply());
+    }
+    static resetGating(): void {
+        FakeRtcRtpSender.deferredTracks.clear();
+        FakeRtcRtpSender.parked.length = 0;
+    }
 
     constructor(public track: MediaStreamTrack | null) {}
 
     async replaceTrack(track: MediaStreamTrack | null): Promise<void> {
-        this.track = track;
         this.replaceTrackCalls.push(track);
+        if (track && FakeRtcRtpSender.deferredTracks.has(track)) {
+            await new Promise<void>((resolve) => {
+                FakeRtcRtpSender.parked.push(() => { this.track = track; resolve(); });
+            });
+            return;
+        }
+        this.track = track;
     }
 }
 
@@ -340,6 +362,7 @@ describe('MediaEngine', () => {
 
     afterEach(() => {
         vi.useRealTimers();
+        FakeRtcRtpSender.resetGating();
         Object.defineProperty(globalThis, 'navigator', {
             value: originalNavigator,
             configurable: true,
@@ -1303,6 +1326,127 @@ describe('MediaEngine', () => {
             expect(audioStop).toHaveBeenCalled();
             expect(videoStop).toHaveBeenCalled();
             expect(peer?.senders.some(sender => sender.track === audioTrack || sender.track === videoTrack)).toBe(false);
+        });
+
+        it('undoes a stale initial-media sender attachment when hold+resume interleaves before the replaceTrack resolves', async () => {
+            // Attachment-await race: the initial getUserMedia resolves, but the
+            // per-peer `replaceTrack` that attaches the initial tracks is still in
+            // flight when a hold (then a resume that attaches fresh tracks)
+            // interleaves. When the OLD `replaceTrack` finally lands it points the
+            // sender at a stopped pre-hold track; the post-attach fence must undo it
+            // per-sender, leaving each sender at the resumed track or null — NEVER
+            // the stale stopped track.
+            const audioA = createMediaTrack('audio');
+            const videoA = createMediaTrack('video');
+            const audioAStop = vi.spyOn(audioA, 'stop');
+            const videoAStop = vi.spyOn(videoA, 'stop');
+            const getUserMedia = vi.fn()
+                .mockResolvedValueOnce(new FakeMediaStream([audioA, videoA]) as unknown as MediaStream)
+                .mockImplementation(async (constraints: MediaStreamConstraints) => {
+                    const tracks: MediaStreamTrack[] = [createMediaTrack('audio')];
+                    if (constraints.video) tracks.push(createMediaTrack('video'));
+                    return new FakeMediaStream(tracks) as unknown as MediaStream;
+                });
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({}, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            // Park the initial-media attach `replaceTrack(A)` so it resolves LATE.
+            FakeRtcRtpSender.deferredTracks.add(audioA);
+            FakeRtcRtpSender.deferredTracks.add(videoA);
+            const start = engine.startLocalMedia();                // acquires A, parks at attach
+            await vi.waitFor(() => expect(FakeRtcRtpSender.parked.length).toBeGreaterThan(0));
+            await engine.suspendLocalMediaForHold();               // gen bump, releases capture
+            await engine.resumeLocalMediaFromHold(true, 'selfie'); // attaches fresh (resumed) tracks
+            // Let the OLD initial `replaceTrack(A)` land last (clobbering the resumed track).
+            FakeRtcRtpSender.releaseParked();
+            const result = await start;
+
+            expect(result).toBeNull();                             // stale start publishes nothing
+            // No sender is left carrying the stale pre-hold tracks (each ends at the
+            // resumed track or null).
+            expect(peer?.senders.some(sender => sender.track === audioA || sender.track === videoA)).toBe(false);
+            expect(audioAStop).toHaveBeenCalled();
+            expect(videoAStop).toHaveBeenCalled();
+        });
+
+        it('nulls a stale initial-media sender when a hold with no resume interleaves before the replaceTrack resolves', async () => {
+            // Hold, no resume: the stale initial `replaceTrack` lands on a held call
+            // (no newer op installed anything). The fence detaches it, leaving the
+            // sender null — never the stale stopped track.
+            const audioA = createMediaTrack('audio');
+            const audioAStop = vi.spyOn(audioA, 'stop');
+            const getUserMedia = vi.fn().mockResolvedValue(new FakeMediaStream([audioA]) as unknown as MediaStream);
+            setupNavigator(getUserMedia);
+            const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            FakeRtcRtpSender.deferredTracks.add(audioA);
+            const start = engine.startLocalMedia();
+            await vi.waitFor(() => expect(FakeRtcRtpSender.parked.length).toBeGreaterThan(0));
+            await engine.suspendLocalMediaForHold();               // hold, no resume
+            FakeRtcRtpSender.releaseParked();                      // OLD replaceTrack lands on a held call
+            const result = await start;
+
+            expect(result).toBeNull();
+            expect(peer?.senders.every(sender => sender.track === null)).toBe(true);
+            expect(audioAStop).toHaveBeenCalled();
+        });
+
+        it('detaches a legacy display track from a sender when a hold latches while the attach replaceTrack is in flight', async () => {
+            // Attachment-await race (legacy screen share): the picker resolves and the
+            // post-picker guard passes, but a hold latches while the display track's
+            // `replaceTrack` is still in flight. When it lands late the sender points
+            // at the stopped display track; the stale branch must detach it and never
+            // mark the share active or broadcast content_state active:true.
+            const displayTrack = createMediaTrack('video');
+            const displayStop = vi.spyOn(displayTrack, 'stop');
+            const getDisplayMedia = vi.fn().mockResolvedValue(new FakeMediaStream([displayTrack]) as unknown as MediaStream);
+            const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    mediaDevices: {
+                        getUserMedia,
+                        getDisplayMedia,
+                        enumerateDevices: vi.fn().mockResolvedValue([]),
+                        addEventListener() {},
+                        removeEventListener() {},
+                    },
+                },
+                configurable: true,
+            });
+            const sent: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+            const engine = new MediaEngine({}, (type, payload) => { sent.push({ type, payload }); });
+            engine.updateSignalingConnected(true);
+            engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await engine.startLocalMedia();
+            const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+            // Park the display track's attach `replaceTrack` so it resolves LATE.
+            FakeRtcRtpSender.deferredTracks.add(displayTrack);
+            const share = engine.startScreenShare();
+            await vi.waitFor(() => expect(FakeRtcRtpSender.parked.length).toBeGreaterThan(0));
+            await engine.suspendLocalMediaForHold();               // hold latches mid-attach
+            FakeRtcRtpSender.releaseParked();                      // OLD replaceTrack lands after hold
+            await share;
+
+            expect(engine.isScreenSharing).toBe(false);
+            expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+            expect(peer?.senders.some(sender => sender.track === displayTrack)).toBe(false);
+            expect(displayStop).toHaveBeenCalled();
         });
 
         it('drops a legacy screen share whose picker resolves AFTER hold+resume (ABA)', async () => {

@@ -40,14 +40,36 @@ class FakeSender {
     readonly replaceTrackCalls: Array<MediaStreamTrack | null> = [];
     failNextReplace = false;
     private params: RTCRtpSendParameters = { encodings: [{}] } as RTCRtpSendParameters;
+    // Opt-in gating for the capture-generation ATTACHMENT-await race tests. When a
+    // track is registered as deferred, `replaceTrack(track)` parks until
+    // `releaseParked()` and only sets `this.track` once released — modelling a
+    // `replaceTrack` promise that resolves LATE (after a concurrent hold). Inert by
+    // default (empty set), so every other test is unaffected.
+    static deferredTracks = new Set<MediaStreamTrack>();
+    static parked: Array<() => void> = [];
+    static releaseParked(): void {
+        const pending = [...FakeSender.parked];
+        FakeSender.parked.length = 0;
+        pending.forEach(apply => apply());
+    }
+    static resetGating(): void {
+        FakeSender.deferredTracks.clear();
+        FakeSender.parked.length = 0;
+    }
     constructor(public track: MediaStreamTrack | null) {}
     async replaceTrack(track: MediaStreamTrack | null): Promise<void> {
         if (this.failNextReplace) {
             this.failNextReplace = false;
             throw new Error('replaceTrack rejected');
         }
-        this.track = track;
         this.replaceTrackCalls.push(track);
+        if (track && FakeSender.deferredTracks.has(track)) {
+            await new Promise<void>((resolve) => {
+                FakeSender.parked.push(() => { this.track = track; resolve(); });
+            });
+            return;
+        }
+        this.track = track;
     }
     getParameters(): RTCRtpSendParameters { return this.params; }
     async setParameters(p: RTCRtpSendParameters): Promise<void> { this.params = p; }
@@ -316,6 +338,7 @@ describe('MediaEngine independent content', () => {
 
     afterEach(() => {
         vi.useRealTimers();
+        FakeSender.resetGating();
         Object.defineProperty(globalThis, 'navigator', { value: originalNavigator, configurable: true });
         Object.defineProperty(globalThis, 'document', { value: originalDocument, configurable: true });
         (globalThis as Record<string, unknown>).window = originalWindow;
@@ -564,12 +587,16 @@ describe('MediaEngine independent content', () => {
         expect(peer.senders.some(s => s.track === displayTrack)).toBe(false);
     });
 
-    it('does not re-broadcast active:true when a hold latches during the content attach await', async () => {
+    it('detaches the content track and does not re-broadcast active:true when a hold latches while the content attach replaceTrack is in flight', async () => {
         // Residual race regression (independent path): the picker resolves (post-picker
         // guard passes) and isScreenSharing is set, but a hold latches WHILE the content
-        // track is attaching to peers. The racing suspendLocalMediaForHold stops the
-        // share (broadcasting active:false); the start path must NOT then re-broadcast
-        // active:true (a higher revision) from the held call (Core Invariant 2).
+        // track's `replaceTrack` is still UNRESOLVED. The gating below parks that
+        // `replaceTrack` across the hold and releases it afterwards, so the stale
+        // completion lands on the held call. The start path must (a) not re-broadcast
+        // active:true (a higher revision), and (b) leave the content sender NOT carrying
+        // the stale display track (Core Invariant 2). The prior version of this test
+        // awaited the original replacement BEFORE holding, so it never exercised an
+        // unresolved `replaceTrack` nor asserted the sender's final track.
         const displayTrack = makeTrack('video', 'display');
         const getDisplayMedia = vi.fn().mockResolvedValue(new FakeStream([displayTrack]) as unknown as MediaStream);
         const sent: Sent[] = [];
@@ -579,31 +606,26 @@ describe('MediaEngine independent content', () => {
             (type, payload, to) => sent.push({ type, payload, to }),
         );
         const h: Harness = { engine, sent, getDisplayMedia, pcOptions };
-        await joinAsOwnerCapable(h);
+        const peer = await joinAsOwnerCapable(h);
+        const contentSender = peer.transceivers
+            .filter(t => t.kind === 'video')
+            .sort((a, b) => Number(a.mid) - Number(b.mid))[1].sender;
 
-        // Interpose a full hold DURING the content-track attach await — isScreenSharing
-        // is already set, so the racing hold stops the share; the start path must not
-        // then send active:true.
-        const internals = engine as unknown as {
-            replaceRoleTrack: (peer: unknown, role: string, track: MediaStreamTrack | null) => Promise<boolean>;
-        };
-        const originalReplaceRole = internals.replaceRoleTrack.bind(engine);
-        let raced = false;
-        internals.replaceRoleTrack = async (peer, role, track) => {
-            const ok = await originalReplaceRole(peer, role, track);
-            if (role === 'content' && track === displayTrack && !raced) {
-                raced = true;
-                await engine.suspendLocalMediaForHold();
-            }
-            return ok;
-        };
-
+        // Park the content `replaceTrack(displayTrack)` so it stays UNRESOLVED across
+        // the hold, then release it so the stale completion lands afterwards.
+        FakeSender.deferredTracks.add(displayTrack);
         sent.length = 0;
-        await engine.startScreenShare();
+        const share = engine.startScreenShare();
+        await vi.waitFor(() => expect(FakeSender.parked.length).toBeGreaterThan(0));
+        await engine.suspendLocalMediaForHold();       // hold latches mid-attach
+        FakeSender.releaseParked();                    // stale replaceTrack lands after hold
+        await share;
 
-        expect(raced).toBe(true);                  // the attach-await race was exercised
         expect(engine.isScreenSharing).toBe(false);
         expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+        expect(contentSender.track).not.toBe(displayTrack);   // stale content track detached
+        expect(peer.senders.some(s => s.track === displayTrack)).toBe(false);
+        expect(displayTrack.readyState).toBe('ended');        // freshly captured surface released
     });
 
     it('replaceTrack rejection falls back to renegotiation instead of failing the share', async () => {
