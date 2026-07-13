@@ -362,6 +362,7 @@ internal class WebRtcEngine(
     private fun detachLocalMediaForRelease(): LocalMediaResources {
         cameraController.resetCameraState()
         localVideoTrack?.setEnabled(false)
+        localContentVideoTrack?.setEnabled(false)
         localAudioTrack?.setEnabled(false)
         localVideoTrack?.let { track ->
             localSinks.forEach { sink -> track.removeSink(sink) }
