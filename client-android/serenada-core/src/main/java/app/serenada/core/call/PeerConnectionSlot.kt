@@ -618,7 +618,26 @@ internal class PeerConnectionSlot(
     }
 
     override fun closePeerConnection(deferDispose: Boolean) {
-        if (isClosing && peerConnection == null) return
+        val pc = detachPeerConnectionForClose() ?: return
+        closePeerConnectionSafely(pc)
+        disposePeerConnectionSafely(pc, deferDispose)
+    }
+
+    /**
+     * Detach session/UI state synchronously, then return only the native work for the terminal
+     * teardown thread. Mid-call replacement continues to use [closePeerConnection] so its close
+     * remains immediate while only native dispose is deferred.
+     */
+    fun prepareTerminalClose(): Runnable? {
+        val pc = detachPeerConnectionForClose() ?: return null
+        return Runnable {
+            closePeerConnectionSafely(pc)
+            disposePeerConnectionSafely(pc, deferDispose = false)
+        }
+    }
+
+    private fun detachPeerConnectionForClose(): PeerConnection? {
+        if (isClosing && peerConnection == null) return null
         isClosing = true
         offerTimeoutTask = null
         iceRestartTask = null
@@ -645,10 +664,7 @@ internal class PeerConnectionSlot(
         lastRealtimeStatsSample = null
         freezeSamples.clear()
         onRemoteVideoTrack(remoteCid, null)
-        pc?.let {
-            closePeerConnectionSafely(it)
-            disposePeerConnectionSafely(it, deferDispose)
-        }
+        return pc
     }
 
     override fun createOffer(
@@ -1549,6 +1565,10 @@ internal class PeerConnectionDisposeQueue(
         }
         pending.add(wrapper)
         handler.postDelayed(wrapper, delayMs)
+    }
+
+    fun post(dispose: () -> Unit) {
+        postDelayed(Runnable(dispose), 0L)
     }
 
     fun flush(shutdownAfterDrain: Boolean = false, onDrained: (() -> Unit)? = null) {

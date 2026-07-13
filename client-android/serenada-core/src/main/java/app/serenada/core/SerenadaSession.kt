@@ -73,6 +73,7 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -855,7 +856,12 @@ class SerenadaSession internal constructor(
 
     // --- Public API ---
 
-    /** Leave the call gracefully. The other participant stays in the room. */
+    /**
+     * Leave the call gracefully. The other participant stays in the room.
+     *
+     * Session state reaches [CallPhase.Idle] before this returns. Terminal native media resource
+     * release may finish asynchronously so it cannot block the main thread.
+     */
     fun leave() {
         assertMainThread()
         if (_state.value.phase == CallPhase.Idle) return
@@ -2235,12 +2241,23 @@ class SerenadaSession internal constructor(
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
-        callAudioSessionController.deactivate()
+        // Host-provided session controllers keep their established Main-thread callback. The
+        // SDK default coordinator is deactivated below on a worker because AudioManager route
+        // restoration can synchronously block Main for hundreds of milliseconds on some devices.
+        if (callAudioSessionController !== defaultAudioCoordinator) {
+            callAudioSessionController.deactivate()
+        }
         val deactivationJob = audioCoordinatorScope.launch {
             try {
                 withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
                     audioCoordinatorMutex.withLock {
-                        audioCoordinator.deactivateCallSession()
+                        if (audioCoordinator === defaultAudioCoordinator) {
+                            withContext(Dispatchers.Default) {
+                                audioCoordinator.deactivateCallSession()
+                            }
+                        } else {
+                            audioCoordinator.deactivateCallSession()
+                        }
                     }
                 }
             } catch (e: TimeoutCancellationException) {
@@ -2254,7 +2271,8 @@ class SerenadaSession internal constructor(
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
         signalingProvider.disconnect()
-        peerSlots.values.forEach { it.closePeerConnection() }
+        // The media engine owns terminal peer teardown. Clearing the session map first makes
+        // late WebRTC callbacks stale while WebRtcEngine releases native resources off Main.
         peerSlots.clear()
         webRtcEngine.release()
         webRtcStatsExecutor?.shutdown()

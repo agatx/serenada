@@ -2,6 +2,7 @@ package app.serenada.core.call
 
 import android.os.Handler
 import android.os.Looper
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -174,5 +175,20 @@ class PeerConnectionSlotOnTrackMidTest {
             "content track must not be surfaced as the remote camera track",
             h.reportedCameraTrack,
         )
+    }
+
+    @Test
+    fun `terminal close detaches state before native close and dispose run`() {
+        val h = Harness()
+
+        val nativeTeardown = checkNotNull(h.slot.prepareTerminalClose())
+
+        assertEquals("native close must be deferred", 0, h.fakePc.closeCalls)
+        assertEquals("native dispose must be deferred", 0, h.fakePc.disposeCalls)
+
+        nativeTeardown.run()
+
+        assertEquals(1, h.fakePc.closeCalls)
+        assertEquals(1, h.fakePc.disposeCalls)
     }
 }

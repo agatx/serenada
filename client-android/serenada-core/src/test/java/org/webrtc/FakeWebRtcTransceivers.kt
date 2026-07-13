@@ -100,6 +100,11 @@ internal class FakePeerConnection(
     private val transceiverList: MutableList<RtpTransceiver>,
 ) : PeerConnection(NativePeerConnectionFactory { 0L }) {
 
+    var closeCalls = 0
+        private set
+    var disposeCalls = 0
+        private set
+
     override fun getTransceivers(): MutableList<RtpTransceiver> = transceiverList
     override fun getSenders(): MutableList<RtpSender> = mutableListOf()
     override fun getReceivers(): MutableList<RtpReceiver> = mutableListOf()
@@ -113,8 +118,8 @@ internal class FakePeerConnection(
     override fun connectionState(): PeerConnectionState = PeerConnectionState.CONNECTED
     override fun iceConnectionState(): IceConnectionState = IceConnectionState.CONNECTED
     override fun setConfiguration(config: RTCConfiguration): Boolean = true
-    override fun close() { /* no native */ }
-    override fun dispose() { /* no native */ }
+    override fun close() { closeCalls += 1 }
+    override fun dispose() { disposeCalls += 1 }
 }
 
 /**
