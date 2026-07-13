@@ -55,3 +55,4 @@ client-ios/Resources/GoogleService-Info.plist
 /client-ios/SerenadaCallUI/.swiftpm
 /.reviewlens
 .gstack/
+xcuserdata/

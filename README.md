@@ -91,17 +91,8 @@ The native iOS app lives in `client-ios/`.
    ```
 3. Open `SerenadaiOS.xcodeproj` in Xcode.
 4. Run `SerenadaiOS` on iOS 16+ simulator/device.
-5. Build and vendor pinned WebRTC XCFramework:
-   ```bash
-   bash tools/build_libwebrtc_ios_7827.sh
-   ```
-   This script also patches `rtc_base/ssl_roots.h` from the current root bundle (same approach as Android) and strips dSYMs by default to keep repository artifact size manageable.
-6. If you replace `client-ios/Vendor/WebRTC/WebRTC.xcframework` manually, regenerate checksum:
-   ```bash
-   cd client-ios
-   ./scripts/update_webrtc_checksum.sh
-   ```
-7. For local-only device signing overrides (without committing team IDs), use `client-ios/LocalSigning.xcconfig`. See `client-ios/README.md`.
+5. WebRTC is resolved automatically via SPM from the [zello-ios-web-rtc](https://github.com/zelloptt/zello-ios-web-rtc) package (pinned in `client-ios/SerenadaCore/Package.swift`) — no vendored XCFramework step is needed.
+6. For local-only device signing overrides (without committing team IDs), use `client-ios/LocalSigning.xcconfig`. See `client-ios/README.md`.
 
 iOS universal links are enabled for `serenada.app` and `serenada-app.ru` via associated domains plus `/.well-known/apple-app-site-association`.
 Note: iOS Simulator can run signaling and call flow, but local camera preview reliability varies by host setup; use a physical iPhone to validate local camera capture.

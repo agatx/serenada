@@ -245,7 +245,7 @@ SwiftUI + Swift 5.9, project generated via XcodeGen (`project.yml`). Two SPM pac
 - `NotificationService/` — push notification app extension (decrypts snapshot images)
 - `BroadcastUpload/` — screen sharing broadcast extension
 
-WebRTC: custom-built XCFramework from branch-heads/7827 in `Vendor/WebRTC/`.
+WebRTC: prebuilt XCFramework via the `zello-ios-web-rtc` SPM package (pinned exact version in `SerenadaCore/Package.swift`).
 
 **Sample apps** (`samples/ios/`, `samples/android/`, `samples/web/`):
 - Minimal integration examples showing SDK usage for third-party developers.

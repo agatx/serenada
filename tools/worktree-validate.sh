@@ -394,20 +394,11 @@ else
         check_warn "Xcode project not generated (run: cd client-ios && xcodegen generate)"
     fi
 
-    # WebRTC XCFramework
-    if [ -d "$IOS/Vendor/WebRTC/WebRTC.xcframework" ]; then
-        # Checksum verification
-        if [ -f "$IOS/scripts/verify_webrtc_checksum.sh" ]; then
-            if run_quiet sh "$IOS/scripts/verify_webrtc_checksum.sh"; then
-                check_pass "WebRTC.xcframework checksum verified"
-            else
-                check_fail "WebRTC.xcframework checksum mismatch"
-            fi
-        else
-            check_pass "WebRTC.xcframework present (no checksum script)"
-        fi
+    # WebRTC SPM dependency (zello-ios-web-rtc)
+    if grep -q "zello-ios-web-rtc" "$IOS/SerenadaCore/Package.swift" 2>/dev/null; then
+        check_pass "WebRTC SPM dependency declared (zello-ios-web-rtc)"
     else
-        check_warn "WebRTC.xcframework not found"
+        check_fail "WebRTC SPM dependency missing from SerenadaCore/Package.swift"
     fi
 
     # GoogleService-Info.plist (gitignored — bootstrap copies from main repo)

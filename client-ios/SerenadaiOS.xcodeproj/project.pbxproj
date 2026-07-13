@@ -26,7 +26,6 @@
 		2DC84097620992B43C52D59E /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = ECFBB844D3428C53592F5F7B /* FirebaseMessaging */; };
 		3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BD7296B4488661AE49A34BA /* RootViewRoutingTests.swift */; };
 		332B4061CA3CF448DBF766D6 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8648687C9C97AD05ABC9AEB /* AppDelegate.swift */; };
-		35B2C3834A362F96B5B9FFDC /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; };
 		366BA266D1F08550723BA77D /* LayoutConformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E194DC9F376B307952F4AD8E /* LayoutConformanceTests.swift */; };
 		3A954265ACD7FADB9138DC1B /* AppConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8662332FB191C23A57DDBA4D /* AppConstants.swift */; };
 		3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC78E56ECCCC36978DAE4FE /* AppLaunchOverrides.swift */; };
@@ -35,7 +34,6 @@
 		467581ED7FB87064203AA780 /* FakeSignalingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB6EC0967F80C7CB8EB7E9E0 /* FakeSignalingProvider.swift */; };
 		4A18E5E799BA54FF55141F92 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */; };
 		5153383FD16DC779F8EBA4B3 /* JoinFlowCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23CA15C6609960E60FFBCD90 /* JoinFlowCoordinatorTests.swift */; };
-		51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		5B73BDA93B3B03BE10F8F3DC /* DeepLinkParticipantCountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE1FC71083746A8D257448 /* DeepLinkParticipantCountUITests.swift */; };
 		60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */; };
 		6198802831401A13687DDCA9 /* FeedbackScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CAF324C3A37900C769BB9F /* FeedbackScreen.swift */; };
@@ -80,7 +78,6 @@
 		B402B3581D8D647DC2D139A7 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */; };
 		B896B31FAF7939AF63947C4C /* FakeSessionSignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC97F9BB82CE31EBF9C084B /* FakeSessionSignaling.swift */; };
 		BC3AE1438258D205BFE66CD2 /* SerenadaiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */; };
-		BD10E73D0A99AF24A662C4F6 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E07431915F3AC5DF220F5B3A /* GoogleService-Info.plist */; };
 		BED32D7AA3653B78E9DE382C /* SessionSuspendedSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A249E2EA4288C34C4B5FFD48 /* SessionSuspendedSurfaceTests.swift */; };
 		BFBDD07B636A41D2067D38F6 /* ToggleVideoGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D41B59EB63DD65F8AD1DF16 /* ToggleVideoGateTests.swift */; };
 		C023886262C8B5863112F6F7 /* ContentRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE0C82FFB22C8FA1FC76AD5 /* ContentRenderingTests.swift */; };
@@ -142,17 +139,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		1C6A5A52A1D1AF3D1A1D54C4 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		549F8A7A8C4D26D436470DAC /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -253,8 +239,6 @@
 		D5DEACDD78A7F800281C0FC6 /* CaptureResolutionSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureResolutionSelectionTests.swift; sourceTree = "<group>"; };
 		D6A49EB1B8C461E0A475E453 /* FakePeerConnectionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakePeerConnectionSlot.swift; sourceTree = "<group>"; };
 		D9036C71CC2E91FAD8FB5170 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
-		DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = WebRTC.xcframework; path = Vendor/WebRTC/WebRTC.xcframework; sourceTree = "<group>"; };
-		E07431915F3AC5DF220F5B3A /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		E194DC9F376B307952F4AD8E /* LayoutConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutConformanceTests.swift; sourceTree = "<group>"; };
 		E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaiOSApp.swift; sourceTree = "<group>"; };
 		E5D3CF250B070B90F00B3B1D /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -281,7 +265,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				35B2C3834A362F96B5B9FFDC /* WebRTC.xcframework in Frameworks */,
 				2DC84097620992B43C52D59E /* FirebaseMessaging in Frameworks */,
 				FEEA9BD167C38B0698BE668E /* SerenadaCore in Frameworks */,
 				A166AEDB8228E8C0BB59B927 /* SerenadaBroadcastExtensionSupport in Frameworks */,
@@ -359,14 +342,6 @@
 			name = Packages;
 			sourceTree = "<group>";
 		};
-		415AD043AF1AAD932CB6A417 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 		45049EAECFD0C6702F960499 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -390,7 +365,6 @@
 				45049EAECFD0C6702F960499 /* Sources */,
 				CF8ED7F99104C94EC09DEACA /* Tests */,
 				17DCEDBED1B30C52F980469C /* UITests */,
-				415AD043AF1AAD932CB6A417 /* Frameworks */,
 				00A34D701D66DCAB54FE6E0E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -430,7 +404,6 @@
 			isa = PBXGroup;
 			children = (
 				D0BE7FF0C166694E0F58114A /* Assets.xcassets */,
-				E07431915F3AC5DF220F5B3A /* GoogleService-Info.plist */,
 				E77A32857F53D8DEADAF2B04 /* SerenadaiOS.entitlements */,
 				EA93F28D0C87ABED6B756036 /* Localizable.strings */,
 			);
@@ -618,12 +591,10 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 676737BD445688EB70F00B13 /* Build configuration list for PBXNativeTarget "SerenadaiOS" */;
 			buildPhases = (
-				B4CF66E8F99EEADBB5B966EB /* Verify WebRTC Checksum */,
 				4705090E0EE23C3874EEA8F1 /* Sources */,
 				6A244A834479079D8A68C055 /* Resources */,
 				3867865F694935FA05848873 /* Frameworks */,
 				549F8A7A8C4D26D436470DAC /* Embed Foundation Extensions */,
-				1C6A5A52A1D1AF3D1A1D54C4 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -792,34 +763,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				7B08F470FBB83FCC41A84E2B /* Assets.xcassets in Resources */,
-				BD10E73D0A99AF24A662C4F6 /* GoogleService-Info.plist in Resources */,
 				0A2C0A7E3C1A621804CC59C9 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		B4CF66E8F99EEADBB5B966EB /* Verify WebRTC Checksum */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Verify WebRTC Checksum";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "#!/bin/sh\nset -eu\n\nROOT_DIR=\"${SRCROOT:-$(cd \"$(dirname \"$0\")/..\" && pwd)}\"\nWEBRTC_DIR=\"$ROOT_DIR/Vendor/WebRTC\"\nWEBRTC_XCFRAMEWORK=\"$WEBRTC_DIR/WebRTC.xcframework\"\nCHECKSUM_FILE=\"$WEBRTC_DIR/WebRTC.xcframework.sha256\"\n\nif [ ! -d \"$WEBRTC_XCFRAMEWORK\" ]; then\n  echo \"warning: WebRTC.xcframework not found at $WEBRTC_XCFRAMEWORK. Building in stub mode.\"\n  exit 0\nfi\n\nif [ ! -f \"$CHECKSUM_FILE\" ]; then\n  echo \"error: checksum file missing: $CHECKSUM_FILE\"\n  exit 1\nfi\n\nEXPECTED=\"$(awk 'NF {print $1; exit}' \"$CHECKSUM_FILE\" | tr '[:upper:]' '[:lower:]')\"\nif [ -z \"$EXPECTED\" ]; then\n  echo \"error: checksum file is empty: $CHECKSUM_FILE\"\n  exit 1\nfi\n\nACTUAL=\"$(cd \"$WEBRTC_DIR\" && find \"WebRTC.xcframework\" -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}')\"\n\nif [ \"$ACTUAL\" != \"$EXPECTED\" ]; then\n  echo \"error: WebRTC.xcframework checksum mismatch\"\n  echo \"expected: $EXPECTED\"\n  echo \"actual:   $ACTUAL\"\n  exit 1\nfi\n\necho \"WebRTC.xcframework checksum verified.\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4705090E0EE23C3874EEA8F1 /* Sources */ = {
@@ -991,10 +939,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Resources/SerenadaiOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"\"Vendor/WebRTC\"",
-				);
 				INFOPLIST_FILE = Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1128,10 +1072,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Resources/SerenadaiOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"\"Vendor/WebRTC\"",
-				);
 				INFOPLIST_FILE = Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (

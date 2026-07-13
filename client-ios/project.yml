@@ -49,14 +49,7 @@ targets:
           - voip
         LSApplicationQueriesSchemes:
           - https
-    preBuildScripts:
-      - name: Verify WebRTC Checksum
-        path: scripts/verify_webrtc_checksum.sh
-        basedOnDependencyAnalysis: false
     dependencies:
-      - framework: Vendor/WebRTC/WebRTC.xcframework
-        embed: true
-        codeSign: true
       - package: Firebase
         product: FirebaseMessaging
       - package: SerenadaCore

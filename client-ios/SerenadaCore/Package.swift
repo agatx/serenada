@@ -2,9 +2,9 @@
 
 import PackageDescription
 
-// When consuming SerenadaCore from a remote Git URL, override the WebRTC
-// binary target path below with the appropriate remote URL or local checkout.
-// For local development inside the Serenada monorepo the relative path works.
+// WebRTC comes from the zello-ios-web-rtc SPM package, which ships the
+// prebuilt XCFramework as a binary target. Pinned to an exact version for
+// reproducible builds; bump deliberately and re-verify call resilience.
 
 let package = Package(
     name: "SerenadaCore",
@@ -25,18 +25,20 @@ let package = Package(
             targets: ["SerenadaBroadcastExtensionSupport"]
         )
     ],
+    dependencies: [
+        .package(url: "https://github.com/zelloptt/zello-ios-web-rtc", exact: "0.0.1")
+    ],
     targets: [
-        .binaryTarget(
-            name: "WebRTC",
-            path: "../Vendor/WebRTC/WebRTC.xcframework"
-        ),
         .target(
             name: "SerenadaBroadcastExtensionSupport",
             path: "BroadcastSupport"
         ),
         .target(
             name: "SerenadaCore",
-            dependencies: ["WebRTC", "SerenadaBroadcastExtensionSupport"],
+            dependencies: [
+                .product(name: "WebRTC", package: "zello-ios-web-rtc"),
+                "SerenadaBroadcastExtensionSupport"
+            ],
             path: "Sources"
         ),
         .testTarget(

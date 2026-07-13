@@ -34,31 +34,14 @@ xcodegen generate
 2. Open `SerenadaiOS.xcodeproj` and run `SerenadaiOS` on a simulator/device.
 
 ## WebRTC dependency pinning
-This project expects a pinned `WebRTC.xcframework` in:
-- `Vendor/WebRTC/WebRTC.xcframework`
+WebRTC comes from the [zello-ios-web-rtc](https://github.com/zelloptt/zello-ios-web-rtc)
+SPM package, declared in `SerenadaCore/Package.swift` and pinned to an exact
+version. SPM resolves and unzips the prebuilt XCFramework automatically — no
+vendored artifact or checksum script is needed.
 
-Recommended build flow (from repository root):
-```bash
-bash tools/build_libwebrtc_ios_7827.sh
-```
-
-The script fetches Chromium WebRTC (`branch-heads/7827`, M149), patches
-`rtc_base/ssl_roots.h` from the current root bundle, builds iOS slices, strips
-dSYMs for repository-friendly size, copies the artifact into
-`client-ios/Vendor/WebRTC/`, and updates checksum.
-
-Manual checksum workflow (if you replace the artifact yourself):
-```bash
-cd client-ios
-./scripts/update_webrtc_checksum.sh
-```
-
-Checksum generation is repository-path stable (it hashes relative framework paths),
-so identical artifacts produce the same digest across different checkout locations.
-
-Builds run `scripts/verify_webrtc_checksum.sh` pre-build.
-
-If the WebRTC artifact is missing, the app builds in a local stub mode (UI/state/signaling scaffolding still compiles, but media transport is non-functional).
+To bump the WebRTC version, update the `exact:` version in
+`SerenadaCore/Package.swift`, re-resolve packages, and re-verify call
+resilience on physical devices.
 
 ## Universal links
 - Associated domains are configured for:

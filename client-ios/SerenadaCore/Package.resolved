@@ -1,0 +1,14 @@
+{
+  "pins" : [
+    {
+      "identity" : "zello-ios-web-rtc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zelloptt/zello-ios-web-rtc",
+      "state" : {
+        "revision" : "02c2ce0a81d91874e9caf5a5b86f8ee84f6c63c9",
+        "version" : "0.0.1"
+      }
+    }
+  ],
+  "version" : 2
+}
