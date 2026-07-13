@@ -295,6 +295,26 @@ val serenada = SerenadaCore(
 
 Custom coordinators implement `SerenadaAudioCoordinator`. They activate and deactivate call audio, apply route selections, publish `availableDevices`, `effectiveInputDevice`, `effectiveOutputDevice`, and emit `AudioCoordinatorEvent.ExternalAudioStarted` / `ExternalAudioEnded` when host-owned audio should temporarily mute local capture or duck playback. For duck-only interruptions that should not mute capture, emit `PlaybackDuckingStarted` / `PlaybackDuckingEnded`.
 
+### Coordinator lifecycle and teardown
+
+Serenada serializes audio-coordinator handoff process-wide across all `SerenadaSession` instances.
+Before calling `activateCallSession()`, the SDK waits for every previously started
+`deactivateCallSession()` to finish. This applies when both sessions use the default coordinator,
+both use custom coordinator instances, or ownership moves between default and custom coordinators.
+
+Android invokes coordinator activation and deactivation from the main thread. A custom coordinator
+must:
+
+- Keep `activateCallSession()` and `deactivateCallSession()` safe to call from the main thread.
+- Make `deactivateCallSession()` idempotent and suspend until audio focus, mode, route, Bluetooth,
+  and callback cleanup is complete.
+- Move blocking system calls or host-audio-queue work off the main thread, then return only after
+  that work has finished.
+
+Do not launch teardown work and return immediately. Once `deactivateCallSession()` returns, the SDK
+considers the process-wide audio resources available to the next session. Existing custom
+coordinators that already await their complete cleanup require no changes.
+
 The concrete default coordinator is internal SDK behavior, not a supported public class to instantiate. Leave `audioCoordinator = null` to use it.
 
 Custom UIs can observe and control the active coordinator through the session:

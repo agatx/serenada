@@ -129,6 +129,13 @@ Android and iOS expose a pluggable audio coordination surface for hosts that nee
 
 The SDK's default audio coordinator is internal implementation detail. To use default behavior, leave `audioCoordinator` unset. To customize behavior, implement `SerenadaAudioCoordinator` and inject it through `SerenadaConfig`.
 
+On Android, coordinator lifecycle handoff is process-wide across all sessions and applies equally to
+default and custom coordinator instances. `activateCallSession()` runs on the main thread only after
+previous coordinator teardown has completed. `deactivateCallSession()` must be idempotent and must
+suspend until its focus, mode, route, Bluetooth, and callback cleanup is finished. Implementations
+should move blocking work off the main thread; fire-and-forget teardown is not supported because its
+work would outlive the SDK's handoff boundary.
+
 `AudioCoordinatorEvent.externalAudioStarted` / `ExternalAudioStarted` applies the configured external-audio mute and ducking policy. Use `playbackDuckingStarted` / `PlaybackDuckingStarted` for duck-only interruptions that should lower playback without muting capture.
 
 `isMicMuted` is composed from user mute, external-audio mute, and input-route availability. `isMicMutedByExternalAudio` lets host UIs distinguish coordinator-driven external audio from a manual user mute.

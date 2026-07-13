@@ -286,6 +286,12 @@ The coordinator implementation is responsible for:
 - Managing audio focus, modes, and Bluetooth routing.
 - Publishing available devices, current input/output routes, and session events (interruptions, resume, focus changes) to the SDK.
 
+On Android, coordinator handoff is serialized process-wide across Serenada sessions, including
+handoffs between default and custom coordinators. The SDK does not activate the next coordinator
+until the previous coordinator's `deactivateCallSession()` returns. Custom implementations must
+therefore suspend until focus, mode, route, Bluetooth, and callback cleanup is complete instead of
+launching cleanup in the background; blocking system work should run off the main thread.
+
 The session exposes coordinator state for custom UI:
 
 - `availableAudioDevices`: routes published by the active coordinator.
