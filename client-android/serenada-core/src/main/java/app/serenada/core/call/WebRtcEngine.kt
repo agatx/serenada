@@ -416,7 +416,7 @@ internal class WebRtcEngine(
         // native teardown can run without racing renderer unmounts or stale session callbacks.
         peerConnectionDisposeQueue.enqueueForFlush {
             try {
-                if (!teardownTicket.awaitTurn(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)) {
+                if (!teardownTicket.awaitTurnBlocking(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)) {
                     logger?.log(
                         SerenadaLogLevel.WARNING,
                         "WebRTC",

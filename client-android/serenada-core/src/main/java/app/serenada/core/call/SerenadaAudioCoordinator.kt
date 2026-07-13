@@ -116,11 +116,16 @@ sealed class AudioCoordinatorEvent {
  */
 interface SerenadaAudioCoordinator {
     /**
-     * Activate audio for a Serenada call.
+     * Activate audio for a Serenada call. Serenada invokes this on Main after every previously
+     * started Serenada audio-coordinator deactivation has completed.
      */
     suspend fun activateCallSession(intent: AudioIntent)
 
-    /** Deactivate call audio and release coordinator-owned route or focus state. */
+    /**
+     * Deactivate call audio and release coordinator-owned route or focus state. Do not return
+     * until that cleanup is complete. Implementations should be idempotent and move blocking
+     * system calls off Main.
+     */
     suspend fun deactivateCallSession()
 
     /** Apply a user-selected audio route. */

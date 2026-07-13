@@ -31,11 +31,22 @@ internal class ProcessTeardownFence {
         }
     }
 
+    internal fun hasPending(): Boolean = synchronized(lock) {
+        tail.count != 0L
+    }
+
     internal class Ticket(
         private val predecessor: CountDownLatch,
         private val completion: CountDownLatch,
     ) {
-        fun awaitTurn(timeoutMs: Long): Boolean =
+        suspend fun awaitTurn(timeoutMs: Long): Boolean {
+            if (predecessor.count == 0L) return true
+            return withContext(Dispatchers.Default) {
+                awaitTurnBlocking(timeoutMs)
+            }
+        }
+
+        fun awaitTurnBlocking(timeoutMs: Long): Boolean =
             predecessor.await(timeoutMs, TimeUnit.MILLISECONDS)
 
         fun complete() {
@@ -45,5 +56,5 @@ internal class ProcessTeardownFence {
 }
 
 internal val terminalMediaTeardownFence = ProcessTeardownFence()
-internal val defaultAudioTeardownFence = ProcessTeardownFence()
+internal val audioCoordinatorTeardownFence = ProcessTeardownFence()
 internal const val PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS = 10_000L

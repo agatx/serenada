@@ -46,9 +46,9 @@ class ProcessTeardownFenceTest {
         val first = fence.begin()
         val second = fence.begin()
 
-        assertFalse(second.awaitTurn(1))
+        assertFalse(second.awaitTurnBlocking(1))
         first.complete()
-        assertTrue(second.awaitTurn(1_000))
+        assertTrue(second.awaitTurnBlocking(1_000))
         second.complete()
     }
 }

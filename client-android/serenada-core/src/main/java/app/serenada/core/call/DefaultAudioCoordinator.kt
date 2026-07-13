@@ -60,7 +60,6 @@ internal class DefaultAudioCoordinator(
         val bluetoothScoWasActive: Boolean,
         val focusWasGranted: Boolean,
         val focusRequest: AudioFocusRequest?,
-        val ticket: ProcessTeardownFence.Ticket,
     )
     private val communicationDeviceExecutor = Executor { command ->
         handler.post(command)
@@ -179,7 +178,6 @@ internal class DefaultAudioCoordinator(
     private fun prepareDeactivation(): Deactivation? {
         val restoreAudioSession = audioSessionActive
         if (!restoreAudioSession && !audioFocusGranted) return null
-        val ticket = defaultAudioTeardownFence.begin()
         val deactivation = Deactivation(
             restoreAudioSession = restoreAudioSession,
             previousAudioMode = previousAudioMode,
@@ -188,7 +186,6 @@ internal class DefaultAudioCoordinator(
             bluetoothScoWasActive = bluetoothScoActive,
             focusWasGranted = audioFocusGranted,
             focusRequest = audioFocusRequest,
-            ticket = ticket,
         )
         audioSessionActive = false
         proximityEarpieceEnabled = true
@@ -204,21 +201,10 @@ internal class DefaultAudioCoordinator(
     }
 
     private fun finishDeactivation(deactivation: Deactivation) {
-        try {
-            if (!deactivation.ticket.awaitTurn(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)) {
-                logger?.log(
-                    SerenadaLogLevel.WARNING,
-                    "Audio",
-                    "Timed out waiting for the previous audio teardown",
-                )
-            }
-            if (deactivation.restoreAudioSession) {
-                restoreAudioSession(deactivation)
-            }
-            abandonAudioFocus(deactivation.focusWasGranted, deactivation.focusRequest)
-        } finally {
-            deactivation.ticket.complete()
+        if (deactivation.restoreAudioSession) {
+            restoreAudioSession(deactivation)
         }
+        abandonAudioFocus(deactivation.focusWasGranted, deactivation.focusRequest)
     }
 
     override fun shouldPauseVideoForProximity(isScreenSharing: Boolean): Boolean {
@@ -231,9 +217,6 @@ internal class DefaultAudioCoordinator(
     // MARK: - SerenadaAudioCoordinator Conformance
 
     override suspend fun activateCallSession(intent: AudioIntent) {
-        check(defaultAudioTeardownFence.awaitPending(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)) {
-            "Previous audio session teardown timed out"
-        }
         proximityEarpieceEnabled = intent.enableProximityEarpiece
         if (audioSessionActive) {
             updateProximityMonitoringForIntent()

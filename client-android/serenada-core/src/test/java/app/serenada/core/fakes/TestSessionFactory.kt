@@ -5,6 +5,7 @@ import app.serenada.core.SerenadaSession
 import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.call.SessionClock
+import app.serenada.core.call.audioCoordinatorTeardownFence
 import okhttp3.OkHttpClient
 import org.json.JSONObject
 import org.webrtc.PeerConnection
@@ -235,6 +236,14 @@ internal class TestSessionFactory(
 
     fun tearDown() {
         session.close()
+        val deadlineNs = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2)
+        while (audioCoordinatorTeardownFence.hasPending() && System.nanoTime() < deadlineNs) {
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(5)
+        }
         ShadowLooper.idleMainLooper()
+        check(!audioCoordinatorTeardownFence.hasPending()) {
+            "Audio coordinator teardown did not complete during test cleanup"
+        }
     }
 }

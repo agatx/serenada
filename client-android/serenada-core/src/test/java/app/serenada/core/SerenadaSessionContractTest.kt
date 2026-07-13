@@ -597,6 +597,55 @@ class SerenadaSessionContractTest {
         assertTrue(coordinator.deactivateCalls > 0)
     }
 
+    @Test
+    fun `next custom coordinator waits for previous custom deactivation`() {
+        val firstCoordinator = BlockingDeactivationAudioCoordinator()
+        val secondCoordinator = MutableAudioCoordinator()
+        val firstFactory = TestSessionFactory(
+            roomId = "first-room",
+            defaultVideoEnabled = false,
+            audioCoordinator = firstCoordinator,
+        )
+        val secondFactory = TestSessionFactory(
+            roomId = "second-room",
+            defaultVideoEnabled = false,
+            audioCoordinator = secondCoordinator,
+        )
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+            .grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+
+        try {
+            firstFactory.startSession()
+            ShadowLooper.idleMainLooper()
+            assertEquals(1, firstCoordinator.activateCalls)
+
+            firstFactory.session.leave()
+            ShadowLooper.idleMainLooper()
+            assertEquals(1, firstCoordinator.deactivateCalls)
+
+            secondFactory.startSession()
+            ShadowLooper.idleMainLooper()
+            assertEquals(
+                "The next custom coordinator must not activate during prior custom cleanup",
+                0,
+                secondCoordinator.activateCalls,
+            )
+
+            firstCoordinator.completeDeactivation()
+            val deadlineNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            while (secondCoordinator.activateCalls == 0 && System.nanoTime() < deadlineNs) {
+                ShadowLooper.idleMainLooper()
+                Thread.sleep(10)
+            }
+
+            assertEquals(1, secondCoordinator.activateCalls)
+        } finally {
+            firstCoordinator.completeDeactivation()
+            secondFactory.tearDown()
+            firstFactory.tearDown()
+        }
+    }
+
     // ── Reconnect backoff ───────────────────────────────────────────
 
     @Test
@@ -897,19 +946,56 @@ private class BlockingAudioCoordinator : SerenadaAudioCoordinator {
     override val events: SharedFlow<AudioCoordinatorEvent> = MutableSharedFlow()
 }
 
+private class BlockingDeactivationAudioCoordinator : SerenadaAudioCoordinator {
+    private val deactivation = CompletableDeferred<Unit>()
+    var activateCalls = 0
+        private set
+    var deactivateCalls = 0
+        private set
+
+    fun completeDeactivation() {
+        deactivation.complete(Unit)
+    }
+
+    override suspend fun activateCallSession(intent: AudioIntent) {
+        activateCalls += 1
+    }
+
+    override suspend fun deactivateCallSession() {
+        deactivateCalls += 1
+        deactivation.await()
+    }
+
+    override suspend fun applyRouting(device: AudioDevice) {}
+    override suspend fun setMicMuted(muted: Boolean) {}
+
+    override val availableDevices: StateFlow<List<AudioDevice>> = MutableStateFlow(emptyList())
+    override val effectiveInputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val effectiveOutputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val events: SharedFlow<AudioCoordinatorEvent> = MutableSharedFlow()
+}
+
 private class MutableAudioCoordinator : SerenadaAudioCoordinator {
     private val _availableDevices = MutableStateFlow<List<AudioDevice>>(emptyList())
     override val availableDevices: StateFlow<List<AudioDevice>> = _availableDevices
     override val effectiveInputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
     override val effectiveOutputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
     override val events: SharedFlow<AudioCoordinatorEvent> = MutableSharedFlow()
+    var activateCalls = 0
+        private set
+    var deactivateCalls = 0
+        private set
 
     fun publishAvailableDevices(devices: List<AudioDevice>) {
         _availableDevices.value = devices
     }
 
-    override suspend fun activateCallSession(intent: AudioIntent) {}
-    override suspend fun deactivateCallSession() {}
+    override suspend fun activateCallSession(intent: AudioIntent) {
+        activateCalls += 1
+    }
+    override suspend fun deactivateCallSession() {
+        deactivateCalls += 1
+    }
     override suspend fun applyRouting(device: AudioDevice) {}
     override suspend fun setMicMuted(muted: Boolean) {}
 }
