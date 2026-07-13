@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.Executor
 
 internal class DefaultAudioCoordinator(
@@ -49,6 +51,17 @@ internal class DefaultAudioCoordinator(
     private var bluetoothScoActive = false
     private var pinnedOutputDevice: AudioDevice? = null
     private var pinnedOutputRouteInventory: Set<String>? = null
+
+    private data class Deactivation(
+        val restoreAudioSession: Boolean,
+        val previousAudioMode: Int,
+        val previousSpeakerphoneOn: Boolean,
+        val previousMicrophoneMute: Boolean,
+        val bluetoothScoWasActive: Boolean,
+        val focusWasGranted: Boolean,
+        val focusRequest: AudioFocusRequest?,
+        val ticket: ProcessTeardownFence.Ticket,
+    )
     private val communicationDeviceExecutor = Executor { command ->
         handler.post(command)
     }
@@ -69,6 +82,7 @@ internal class DefaultAudioCoordinator(
     }
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        if (!audioSessionActive) return@OnAudioFocusChangeListener
         logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus changed: $focusChange")
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
@@ -112,6 +126,7 @@ internal class DefaultAudioCoordinator(
 
     private val proximitySensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
+            if (!audioSessionActive) return
             val maxRange = proximitySensor?.maximumRange ?: return
             val distance = event.values.firstOrNull() ?: return
             val near = distance < maxRange
@@ -157,10 +172,24 @@ internal class DefaultAudioCoordinator(
     }
 
     override fun deactivate() {
-        if (!audioSessionActive) {
-            abandonAudioFocus()
-            return
-        }
+        val deactivation = prepareDeactivation() ?: return
+        finishDeactivation(deactivation)
+    }
+
+    private fun prepareDeactivation(): Deactivation? {
+        val restoreAudioSession = audioSessionActive
+        if (!restoreAudioSession && !audioFocusGranted) return null
+        val ticket = defaultAudioTeardownFence.begin()
+        val deactivation = Deactivation(
+            restoreAudioSession = restoreAudioSession,
+            previousAudioMode = previousAudioMode,
+            previousSpeakerphoneOn = previousSpeakerphoneOn,
+            previousMicrophoneMute = previousMicrophoneMute,
+            bluetoothScoWasActive = bluetoothScoActive,
+            focusWasGranted = audioFocusGranted,
+            focusRequest = audioFocusRequest,
+            ticket = ticket,
+        )
         audioSessionActive = false
         proximityEarpieceEnabled = true
         pinnedOutputDevice = null
@@ -168,20 +197,28 @@ internal class DefaultAudioCoordinator(
         clearPlaybackDuckingFallback()
         stopProximityMonitoring()
         stopAudioDeviceMonitoring()
-        runCatching {
-            setLegacyBluetoothScoRouting(false)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                audioManager.clearCommunicationDevice()
+        bluetoothScoActive = false
+        audioFocusGranted = false
+        audioFocusRequest = null
+        return deactivation
+    }
+
+    private fun finishDeactivation(deactivation: Deactivation) {
+        try {
+            if (!deactivation.ticket.awaitTurn(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)) {
+                logger?.log(
+                    SerenadaLogLevel.WARNING,
+                    "Audio",
+                    "Timed out waiting for the previous audio teardown",
+                )
             }
-            audioManager.isMicrophoneMute = previousMicrophoneMute
-            setSpeakerphoneEnabled(previousSpeakerphoneOn)
-            audioManager.mode = previousAudioMode
-        }.onSuccess {
-            logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio session restored (mode=$previousAudioMode)")
-        }.onFailure { error ->
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to restore audio session: ${error.message}")
+            if (deactivation.restoreAudioSession) {
+                restoreAudioSession(deactivation)
+            }
+            abandonAudioFocus(deactivation.focusWasGranted, deactivation.focusRequest)
+        } finally {
+            deactivation.ticket.complete()
         }
-        abandonAudioFocus()
     }
 
     override fun shouldPauseVideoForProximity(isScreenSharing: Boolean): Boolean {
@@ -194,6 +231,9 @@ internal class DefaultAudioCoordinator(
     // MARK: - SerenadaAudioCoordinator Conformance
 
     override suspend fun activateCallSession(intent: AudioIntent) {
+        check(defaultAudioTeardownFence.awaitPending(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)) {
+            "Previous audio session teardown timed out"
+        }
         proximityEarpieceEnabled = intent.enableProximityEarpiece
         if (audioSessionActive) {
             updateProximityMonitoringForIntent()
@@ -207,7 +247,10 @@ internal class DefaultAudioCoordinator(
     }
 
     override suspend fun deactivateCallSession() {
-        deactivate()
+        val deactivation = prepareDeactivation() ?: return
+        withContext(Dispatchers.Default) {
+            finishDeactivation(deactivation)
+        }
     }
 
     override suspend fun applyRouting(device: AudioDevice) {
@@ -625,14 +668,50 @@ internal class DefaultAudioCoordinator(
         logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus request granted=$granted")
     }
 
-    private fun abandonAudioFocus() {
-        if (!audioFocusGranted) return
-        audioFocusGranted = false
+    @Suppress("DEPRECATION")
+    private fun restoreAudioSession(deactivation: Deactivation) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice()
+            } else {
+                if (deactivation.bluetoothScoWasActive) {
+                    audioManager.stopBluetoothSco()
+                }
+                audioManager.isBluetoothScoOn = false
+            }
+            audioManager.isMicrophoneMute = deactivation.previousMicrophoneMute
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (deactivation.previousSpeakerphoneOn) {
+                    val speaker = audioManager.availableCommunicationDevices.firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                    }
+                    if (speaker == null || !audioManager.setCommunicationDevice(speaker)) {
+                        logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to restore built-in speaker route")
+                    }
+                } else {
+                    audioManager.clearCommunicationDevice()
+                }
+            } else {
+                audioManager.isSpeakerphoneOn = deactivation.previousSpeakerphoneOn
+            }
+            audioManager.mode = deactivation.previousAudioMode
+        }.onSuccess {
+            logger?.log(
+                SerenadaLogLevel.DEBUG,
+                "Audio",
+                "Audio session restored (mode=${deactivation.previousAudioMode})",
+            )
+        }.onFailure { error ->
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to restore audio session: ${error.message}")
+        }
+    }
+
+    private fun abandonAudioFocus(focusWasGranted: Boolean, focusRequest: AudioFocusRequest?) {
+        if (!focusWasGranted) return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val request = audioFocusRequest
-                if (request != null) {
-                    audioManager.abandonAudioFocusRequest(request)
+                if (focusRequest != null) {
+                    audioManager.abandonAudioFocusRequest(focusRequest)
                 }
             } else {
                 @Suppress("DEPRECATION")

@@ -390,17 +390,17 @@ internal class WebRtcEngine(
     }
 
     private fun releaseLocalMedia(resources: LocalMediaResources) {
-        screenShareController.reset()
-        cameraController.disposeVideoCapturer()
-        resources.videoTrack?.dispose()
-        resources.contentVideoTrack?.dispose()
+        runCatching { screenShareController.reset() }
+        runCatching { cameraController.disposeVideoCapturer() }
+        runCatching { resources.videoTrack?.dispose() }
+        runCatching { resources.contentVideoTrack?.dispose() }
         // Tear down the primer before disposing its audio track — closing the
         // PC first releases the sender's reference to the track.
-        audioPipelinePrimer.stop()
-        resources.audioTrack?.dispose()
-        resources.videoSource?.dispose()
-        resources.contentVideoSource?.dispose()
-        resources.audioSource?.dispose()
+        runCatching { audioPipelinePrimer.stop() }
+        runCatching { resources.audioTrack?.dispose() }
+        runCatching { resources.videoSource?.dispose() }
+        runCatching { resources.contentVideoSource?.dispose() }
+        runCatching { resources.audioSource?.dispose() }
     }
 
     override fun release() {
@@ -409,15 +409,27 @@ internal class WebRtcEngine(
         val peerTeardowns = peerSlots.mapNotNull { slot -> slot.prepareTerminalClose() }
         peerSlots.clear()
         val localMedia = detachLocalMediaForRelease()
+        val teardownTicket = terminalMediaTeardownFence.begin()
         // Capturer/track/source disposal, PeerConnection.close/dispose, and the final
         // factory/ADM release synchronously wait on media and libwebrtc threads on some devices.
         // Sinks and session-visible state have already been detached on Main, so the remaining
         // native teardown can run without racing renderer unmounts or stale session callbacks.
-        peerConnectionDisposeQueue.post {
-            peerTeardowns.forEach(Runnable::run)
-            releaseLocalMedia(localMedia)
-            runCatching { peerConnectionFactory.dispose() }
-            runCatching { audioDeviceModule.release() }
+        peerConnectionDisposeQueue.enqueueForFlush {
+            try {
+                if (!teardownTicket.awaitTurn(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)) {
+                    logger?.log(
+                        SerenadaLogLevel.WARNING,
+                        "WebRTC",
+                        "Timed out waiting for the previous terminal media teardown",
+                    )
+                }
+                peerTeardowns.forEach { teardown -> runCatching { teardown.run() } }
+                releaseLocalMedia(localMedia)
+                runCatching { peerConnectionFactory.dispose() }
+                runCatching { audioDeviceModule.release() }
+            } finally {
+                teardownTicket.complete()
+            }
         }
         peerConnectionDisposeQueue.flush(shutdownAfterDrain = true)
         // eglBase is owned by SerenadaSession and outlives the engine — do not release it here.

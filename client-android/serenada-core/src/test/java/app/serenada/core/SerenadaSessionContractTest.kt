@@ -578,6 +578,25 @@ class SerenadaSessionContractTest {
         assertEquals("Local media must not start while activation is still suspended", 0, factory.fakeMedia.startLocalMediaCalls)
     }
 
+    @Test
+    fun `leave while audio activation is suspended does not start stale media`() {
+        val coordinator = BlockingAudioCoordinator()
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+            .grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+        factory.session.leave()
+        coordinator.completeActivation()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(CallPhase.Idle, factory.session.state.value.phase)
+        assertEquals(0, factory.fakeMedia.startLocalMediaCalls)
+        assertTrue(coordinator.deactivateCalls > 0)
+    }
+
     // ── Reconnect backoff ───────────────────────────────────────────
 
     @Test
@@ -854,13 +873,21 @@ private class BlockingAudioCoordinator : SerenadaAudioCoordinator {
     private val activation = CompletableDeferred<Unit>()
     var activateCalls = 0
         private set
+    var deactivateCalls = 0
+        private set
+
+    fun completeActivation() {
+        activation.complete(Unit)
+    }
 
     override suspend fun activateCallSession(intent: AudioIntent) {
         activateCalls += 1
         activation.await()
     }
 
-    override suspend fun deactivateCallSession() {}
+    override suspend fun deactivateCallSession() {
+        deactivateCalls += 1
+    }
     override suspend fun applyRouting(device: AudioDevice) {}
     override suspend fun setMicMuted(muted: Boolean) {}
 

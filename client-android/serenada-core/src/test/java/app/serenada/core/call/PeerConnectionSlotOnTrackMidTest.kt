@@ -182,6 +182,7 @@ class PeerConnectionSlotOnTrackMidTest {
         val h = Harness()
 
         val nativeTeardown = checkNotNull(h.slot.prepareTerminalClose())
+        assertNull("terminal close must be idempotent", h.slot.prepareTerminalClose())
 
         assertEquals("native close must be deferred", 0, h.fakePc.closeCalls)
         assertEquals("native dispose must be deferred", 0, h.fakePc.disposeCalls)

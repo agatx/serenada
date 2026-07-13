@@ -60,6 +60,9 @@ import app.serenada.core.call.SignalingMessage
 import app.serenada.core.call.WebRtcEngine
 import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.call.CameraCaptureController
+import app.serenada.core.call.PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS
+import app.serenada.core.call.defaultAudioTeardownFence
+import app.serenada.core.call.terminalMediaTeardownFence
 import app.serenada.core.call.toContentStatePayload
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
@@ -73,7 +76,6 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -1311,6 +1313,22 @@ class SerenadaSession internal constructor(
 
         acquirePerformanceLocks()
         providerScope.launch {
+            val previousMediaReleased =
+                terminalMediaTeardownFence.awaitPending(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)
+            val previousAudioRestored =
+                defaultAudioTeardownFence.awaitPending(PROCESS_TEARDOWN_HANDOFF_TIMEOUT_MS)
+            if (!previousMediaReleased || !previousAudioRestored) {
+                logger?.log(
+                    SerenadaLogLevel.ERROR,
+                    "Session",
+                    "Previous call teardown timed out before media activation",
+                )
+                handleError(CallError.Unknown("Previous call teardown timed out"))
+                return@launch
+            }
+            if (_state.value.phase != CallPhase.Joining || joinFlowCoordinator.joinAttemptSerial != joinAttemptId) {
+                return@launch
+            }
             try {
                 withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
                     audioCoordinatorMutex.withLock {
@@ -1327,7 +1345,14 @@ class SerenadaSession internal constructor(
                 handleError(CallError.Unknown(e.message ?: "Audio session activation failed"))
                 return@launch
             }
-            if (!isActive) return@launch
+            if (
+                !isActive ||
+                _state.value.phase != CallPhase.Joining ||
+                joinFlowCoordinator.joinAttemptSerial != joinAttemptId
+            ) {
+                runCatching { audioCoordinator.deactivateCallSession() }
+                return@launch
+            }
             joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
             try {
                 callAudioSessionController.activate()
@@ -2241,9 +2266,9 @@ class SerenadaSession internal constructor(
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
-        // Host-provided session controllers keep their established Main-thread callback. The
-        // SDK default coordinator is deactivated below on a worker because AudioManager route
-        // restoration can synchronously block Main for hundreds of milliseconds on some devices.
+        // Host-provided session controllers keep their established Main-thread callback. The SDK
+        // default coordinator synchronously detaches Main-owned callbacks inside
+        // deactivateCallSession(), then performs only the blocking AudioManager restore off Main.
         if (callAudioSessionController !== defaultAudioCoordinator) {
             callAudioSessionController.deactivate()
         }
@@ -2251,13 +2276,7 @@ class SerenadaSession internal constructor(
             try {
                 withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
                     audioCoordinatorMutex.withLock {
-                        if (audioCoordinator === defaultAudioCoordinator) {
-                            withContext(Dispatchers.Default) {
-                                audioCoordinator.deactivateCallSession()
-                            }
-                        } else {
-                            audioCoordinator.deactivateCallSession()
-                        }
+                        audioCoordinator.deactivateCallSession()
                     }
                 }
             } catch (e: TimeoutCancellationException) {
