@@ -1,8 +1,6 @@
 @testable import SerenadaCore
 import XCTest
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
 /// Regression coverage for the "mobile drops remote video" bug (commit
 /// b82088d0): `PeerConnectionSlot.routeRemoteVideoTrack` classified the inbound
@@ -26,7 +24,6 @@ import WebRTC
 ///
 /// Only reachable where WebRTC is linked (the `SerenadaiOSTests` app target). The
 /// pure-SPM `swift test` build links no WebRTC framework and compiles this out.
-#if canImport(WebRTC)
 @MainActor
 final class RemoteVideoTransceiverRoutingTests: XCTestCase {
 
@@ -267,4 +264,3 @@ final class RemoteVideoTransceiverRoutingTests: XCTestCase {
         slot.closePeerConnection()
     }
 }
-#endif

@@ -2,9 +2,7 @@ import AVFoundation
 import CoreImage
 import Foundation
 import UIKit
-#if canImport(WebRTC)
 @preconcurrency import WebRTC
-#endif
 
 public struct IceServerConfig: Equatable, Sendable {
     public let urls: [String]
@@ -143,11 +141,8 @@ internal final class WebRtcEngine: SessionMediaEngine {
     private var iceServers: [IceServerConfig]?
     private let rendererAttachmentQueue = DispatchQueue(label: "serenada.ios.webrtc.renderer-attachment", qos: .userInitiated)
 
-#if canImport(WebRTC)
     private static var sslInitialized = false
-#endif
 
-#if canImport(WebRTC)
     private var peerConnectionFactory: RTCPeerConnectionFactory?
     private var peerSlots: [PeerConnectionSlot] = []
 
@@ -169,7 +164,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
 
     private var localRenderers: [WeakAnyBox] = []
     private var localContentRenderers: [WeakAnyBox] = []
-#endif
 
     // Local build capability gate. When false (default), every peer uses the
     // legacy single-video screen-share path and behavior is byte-identical to
@@ -197,7 +191,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
         self.videoMediaEnabled = videoMediaEnabled
         self.enableIndependentContentVideo = enableIndependentContentVideo
 
-#if canImport(WebRTC)
         self.cameraController = CameraCaptureController(
             localVideoSource: nil,
             isHdVideoExperimentalEnabled: isHdVideoExperimentalEnabled,
@@ -209,29 +202,14 @@ internal final class WebRtcEngine: SessionMediaEngine {
             onFeatureDegradation: onFeatureDegradation,
             logger: logger
         )
-#else
-        self.cameraController = CameraCaptureController(
-            isHdVideoExperimentalEnabled: isHdVideoExperimentalEnabled,
-            availableCameraModes: availableCameraModes,
-            onCameraFacingChanged: onCameraFacingChanged,
-            onCameraModeChanged: onCameraModeChanged,
-            onFlashlightStateChanged: onFlashlightStateChanged,
-            onZoomFactorChanged: onZoomFactorChanged,
-            onFeatureDegradation: onFeatureDegradation,
-            logger: logger
-        )
-#endif
 
-#if canImport(WebRTC)
         Self.initializeSslIfNeeded()
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
         let factory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
         self.peerConnectionFactory = factory
         self.audioPipelinePrimer = LocalAudioPipelinePrimer(factory: factory, logger: logger)
-#endif
 
-#if canImport(WebRTC)
         self.screenShareController = ScreenShareController(
             cameraController: cameraController,
             localVideoSourceProvider: { [weak self] in self?.localVideoSource },
@@ -253,15 +231,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
             screenShareMode: screenShareMode,
             logger: logger
         )
-#else
-        self.screenShareController = ScreenShareController(
-            cameraController: cameraController,
-            setLocalVideoTrackEnabled: { _ in },
-            onScreenShareStopped: onScreenShareStopped,
-            onStateChanged: { _ in },
-            logger: logger
-        )
-#endif
 
         cameraController.canResumeCapturer = { [weak self] in
             self?.localVideoTrack != nil
@@ -299,7 +268,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
     }
 
     public func startLocalMedia(preferVideo: Bool = true) {
-#if canImport(WebRTC)
         guard let factory = peerConnectionFactory else { return }
         guard localAudioTrack == nil && localVideoTrack == nil else { return }
 
@@ -341,12 +309,8 @@ internal final class WebRtcEngine: SessionMediaEngine {
             audioPipelinePrimer?.start(localAudioTrack: localAudioTrack)
         }
         peerSlots.forEach { attachLocalTracksToSlot($0) }
-#else
-        cameraController.notifyCameraModeAndFlash()
-#endif
     }
 
-#if canImport(WebRTC)
     /// True only while a LEGACY single-video screen share is active (the display
     /// track has repurposed the single camera sender). In INDEPENDENT mode this is
     /// always false, so camera ops (toggle/flip) keep working during a share — the
@@ -436,10 +400,8 @@ internal final class WebRtcEngine: SessionMediaEngine {
         disposeLocalContentVideoTrack()
         peerSlots.forEach { attachLocalTracksToSlot($0) }
     }
-#endif
 
     public func stopLocalMedia() {
-#if canImport(WebRTC)
         cameraController.stopAllCapturers()
         detachTracksFromRegisteredRenderers()
 
@@ -468,7 +430,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
                 self.previousUseManualAudio = nil
             }
         }
-#endif
     }
 
     public func release() {
@@ -505,7 +466,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
         supportsIndependentContentVideo: Bool,
         isOfferOwner: @escaping () -> Bool
     ) -> (any PeerConnectionSlotProtocol)? {
-#if canImport(WebRTC)
         guard let peerConnectionFactory else { return nil }
         // Defense in depth: a slot is only independent-routed when the local
         // build flag is on too (the session already ANDs these, but keep the
@@ -538,21 +498,14 @@ internal final class WebRtcEngine: SessionMediaEngine {
             attachLocalTracksToSlot(slot)
         }
         return slot
-#else
-        return nil
-#endif
     }
 
     public func removeSlot(_ slot: any PeerConnectionSlotProtocol) {
-#if canImport(WebRTC)
         peerSlots.removeAll { $0 === (slot as AnyObject) }
-#endif
     }
 
     public func toggleAudio(_ enabled: Bool) {
-#if canImport(WebRTC)
         localAudioTrack?.isEnabled = enabled
-#endif
     }
 
     /// Restarts the audio unit by bouncing `RTCAudioSession.isAudioEnabled`, mirroring the
@@ -560,19 +513,16 @@ internal final class WebRtcEngine: SessionMediaEngine {
     /// owner held and released the session: that takeover posts no interruption notification, so
     /// WebRTC never restarts the unit on its own. No-op when local media is not running.
     public func restartAudioUnit() {
-#if canImport(WebRTC)
         guard localAudioTrack != nil else { return }
         let audioSession = RTCAudioSession.sharedInstance()
         audioSession.lockForConfiguration()
         defer { audioSession.unlockForConfiguration() }
         audioSession.isAudioEnabled = false
         audioSession.isAudioEnabled = true
-#endif
     }
 
     @discardableResult
     public func toggleVideo(_ enabled: Bool) -> Bool {
-#if canImport(WebRTC)
         guard videoMediaEnabled else {
             localVideoTrack?.isEnabled = false
             return false
@@ -602,9 +552,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
         let effectiveEnabled = enabled && (cameraController.hasActiveCapturer() || isLegacyScreenSharing)
         localVideoTrack?.isEnabled = effectiveEnabled
         return effectiveEnabled
-#else
-        return false
-#endif
     }
 
     public func setHdVideoExperimentalEnabled(_ enabled: Bool) {
@@ -620,7 +567,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
             onComplete?(false)
             return false
         }
-#if canImport(WebRTC)
         guard enableIndependentContentVideo else {
             // Legacy single-video path: the controller repurposes the camera
             // source/track. Byte-identical to today.
@@ -648,9 +594,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
                 onComplete?(started)
             }
         }
-#else
-        return screenShareController.startScreenShare(onComplete: onComplete)
-#endif
     }
 
     public func stopScreenShare() -> Bool {
@@ -672,7 +615,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
     }
 
     public func attachLocalRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
         localRenderers.append(WeakAnyBox(value: renderer))
         compactRenderers()
         if let renderer = renderer as? RTCVideoRenderer {
@@ -681,11 +623,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
                 track?.add(renderer)
             }
         }
-#endif
     }
 
     public func detachLocalRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
         if let renderer = renderer as? RTCVideoRenderer {
             let track = localVideoTrack
             rendererAttachmentQueue.async {
@@ -693,11 +633,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
             }
         }
         localRenderers.removeAll { $0.value === renderer || $0.value == nil }
-#endif
     }
 
     public func attachLocalContentRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
         localContentRenderers.append(WeakAnyBox(value: renderer))
         localContentRenderers.removeAll { $0.value == nil }
         if let renderer = renderer as? RTCVideoRenderer {
@@ -706,11 +644,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
                 track?.add(renderer)
             }
         }
-#endif
     }
 
     public func detachLocalContentRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
         if let renderer = renderer as? RTCVideoRenderer {
             let track = localContentVideoTrack
             rendererAttachmentQueue.async {
@@ -718,7 +654,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
             }
         }
         localContentRenderers.removeAll { $0.value === renderer || $0.value == nil }
-#endif
     }
 
     public func flipCamera() {
@@ -729,7 +664,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
         cameraController.compositeSupportDebugState()
     }
 
-#if canImport(WebRTC)
     private static func initializeSslIfNeeded() {
         guard !sslInitialized else { return }
         RTCInitializeSSL()
@@ -764,10 +698,8 @@ internal final class WebRtcEngine: SessionMediaEngine {
         }
     }
 
-#endif
 }
 
-#if canImport(WebRTC)
 private final class WeakAnyBox {
     weak var value: AnyObject?
 
@@ -776,4 +708,3 @@ private final class WeakAnyBox {
     }
 }
 
-#endif

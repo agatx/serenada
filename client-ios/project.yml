@@ -16,6 +16,12 @@ packages:
   Firebase:
     url: https://github.com/firebase/firebase-ios-sdk.git
     from: 11.11.0
+  # WebRTC version is pinned by SerenadaCore/Package.swift (exact:); this open
+  # range intersects with that pin. Declared here because app sources
+  # (JoinSnapshotFeature) import WebRTC directly.
+  ZelloWebRTC:
+    url: https://github.com/zelloptt/zello-ios-web-rtc
+    from: 0.0.1
   SerenadaCore:
     path: SerenadaCore
   SerenadaCallUI:
@@ -59,6 +65,8 @@ targets:
         product: SerenadaBroadcastExtensionSupport
       - package: SerenadaCallUI
         product: SerenadaCallUI
+      - package: ZelloWebRTC
+        product: WebRTC
       - target: SerenadaNotificationService
         embed: true
       - target: SerenadaBroadcast

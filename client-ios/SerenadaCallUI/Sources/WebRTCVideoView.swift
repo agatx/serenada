@@ -1,10 +1,7 @@
 import SwiftUI
 import UIKit
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
-#if canImport(WebRTC)
 final class MirroredRTCMTLVideoView: UIView, RTCVideoRenderer {
     private let metalView = RTCMTLVideoView(frame: .zero)
     private var pendingMirrorState: Bool?
@@ -78,7 +75,6 @@ final class MirroredRTCMTLVideoView: UIView, RTCVideoRenderer {
         }
     }
 }
-#endif
 
 struct WebRTCVideoView: UIViewRepresentable {
     enum Kind {
@@ -125,7 +121,6 @@ struct WebRTCVideoView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UIView {
-#if canImport(WebRTC)
         switch kind {
         case .local:
             let renderer = MirroredRTCMTLVideoView(frame: .zero)
@@ -184,39 +179,9 @@ struct WebRTCVideoView: UIViewRepresentable {
             context.coordinator.renderer = renderer
             return renderer
         }
-#else
-        let placeholder = UIView(frame: .zero)
-        placeholder.backgroundColor = .secondarySystemBackground
-
-        let label = UILabel(frame: .zero)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.textAlignment = .center
-        label.numberOfLines = 2
-        label.textColor = .label
-        label.font = UIFont.systemFont(ofSize: 13, weight: .medium)
-        switch kind {
-        case .local:
-            label.text = "Local video\n(WebRTC stub)"
-        case .remote, .remoteForCid:
-            label.text = "Remote video\n(WebRTC stub)"
-        case .localContent:
-            label.text = "Local content\n(WebRTC stub)"
-        case .remoteContentForCid:
-            label.text = "Remote content\n(WebRTC stub)"
-        }
-        placeholder.addSubview(label)
-
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: placeholder.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: placeholder.centerYAnchor)
-        ])
-
-        return placeholder
-#endif
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
-#if canImport(WebRTC)
         if let renderer = uiView as? MirroredRTCMTLVideoView {
             let mirrorChanged = context.coordinator.isMirrored != isMirrored
             context.coordinator.isMirrored = isMirrored
@@ -236,10 +201,8 @@ struct WebRTCVideoView: UIViewRepresentable {
                 animateContentModeTransition(renderer: renderer, targetMode: videoContentMode)
             }
         }
-#endif
     }
 
-#if canImport(WebRTC)
     private func animateContentModeTransition(renderer: RTCMTLVideoView, targetMode: UIView.ContentMode) {
         guard renderer.window != nil, !UIAccessibility.isReduceMotionEnabled else {
             renderer.videoContentMode = targetMode
@@ -265,10 +228,8 @@ struct WebRTCVideoView: UIViewRepresentable {
         }
         animator.startAnimation()
     }
-#endif
 
     public static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-#if canImport(WebRTC)
         guard let renderer = coordinator.renderer else { return }
         Task { @MainActor in
             switch coordinator.kind {
@@ -284,7 +245,6 @@ struct WebRTCVideoView: UIViewRepresentable {
                 coordinator.rendererProvider?.detachRemoteContentRenderer(renderer, forCid: cid)
             }
         }
-#endif
     }
 
     public final class Coordinator: NSObject {
@@ -303,10 +263,8 @@ struct WebRTCVideoView: UIViewRepresentable {
     }
 }
 
-#if canImport(WebRTC)
 extension WebRTCVideoView.Coordinator: RTCVideoViewDelegate {
     public func videoView(_ videoView: RTCVideoRenderer, didChangeVideoSize size: CGSize) {
         onVideoSizeChanged?(size)
     }
 }
-#endif

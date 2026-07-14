@@ -1,7 +1,5 @@
 import Foundation
-#if canImport(WebRTC)
 @preconcurrency import WebRTC
-#endif
 
 /// Holds a self-loopback pair of `RTCPeerConnection`s with the local audio
 /// track attached so WebRTC's full audio pipeline (capture → AEC/NS/AGC →
@@ -20,7 +18,6 @@ import Foundation
 final class LocalAudioPipelinePrimer {
     private let logger: SerenadaLogger?
 
-#if canImport(WebRTC)
     private let factory: RTCPeerConnectionFactory
     private var senderPc: RTCPeerConnection?
     private var receiverPc: RTCPeerConnection?
@@ -142,18 +139,8 @@ final class LocalAudioPipelinePrimer {
             onComplete(level)
         }
     }
-#else
-    init(factory: Any?, logger: SerenadaLogger?) {
-        self.logger = logger
-    }
-    func collectAudioLevel(_ onComplete: @escaping @Sendable (Float?) -> Void) {
-        onComplete(nil)
-    }
-    func stop() {}
-#endif
 }
 
-#if canImport(WebRTC)
 private final class PrimerPeerConnectionObserver: NSObject, RTCPeerConnectionDelegate {
     var onIceCandidate: ((RTCIceCandidate) -> Void)?
 
@@ -182,4 +169,3 @@ private final class PrimerPeerConnectionObserver: NSObject, RTCPeerConnectionDel
         track.isEnabled = false
     }
 }
-#endif

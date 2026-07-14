@@ -4,9 +4,7 @@ import CoreImage
 import SerenadaCore
 import SwiftUI
 import UIKit
-#if canImport(WebRTC)
 @preconcurrency import WebRTC
-#endif
 
 enum SystemPictureInPictureSource: Equatable {
     case local
@@ -468,7 +466,6 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         }
 
         func detachRenderer() {
-#if canImport(WebRTC)
             guard let videoView = contentController?.videoView else {
                 attachedSource = nil
                 return
@@ -486,9 +483,6 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
                 }
             }
             attachedSource = nil
-#else
-            attachedSource = nil
-#endif
         }
 
         func cleanup() {
@@ -526,7 +520,6 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         }
 
         private func attachRenderer(participant: SystemPictureInPictureParticipant) {
-#if canImport(WebRTC)
             guard participant.videoEnabled else {
                 detachRenderer()
                 return
@@ -547,7 +540,6 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
                 }
             }
             attachedSource = source
-#endif
         }
 
         func pictureInPictureController(
@@ -632,11 +624,7 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
 private final class SystemPictureInPictureContentController: AVPictureInPictureVideoCallViewController {
     private static let callAspectContentSize = CGSize(width: 360, height: 640)
 
-#if canImport(WebRTC)
     let videoView = SystemPictureInPictureVideoView(frame: .zero)
-#else
-    let videoView = UIView(frame: .zero)
-#endif
 
     private let placeholderView = UIView(frame: .zero)
     private let avatarImageView = UIImageView(frame: .zero)
@@ -776,7 +764,6 @@ private extension CallPhase {
     }
 }
 
-#if canImport(WebRTC)
 private final class SystemPictureInPictureVideoView: UIView, RTCVideoRenderer {
     override class var layerClass: AnyClass {
         AVSampleBufferDisplayLayer.self
@@ -988,4 +975,3 @@ private func cgOrientation(for rotation: RTCVideoRotation) -> CGImagePropertyOri
     default: return nil
     }
 }
-#endif

@@ -1,9 +1,7 @@
 import AVFoundation
 import Foundation
 import Network
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
 // MARK: - Report types
 
@@ -116,11 +114,9 @@ public final class SerenadaDiagnostics {
         } catch {
             preconditionFailure(error.localizedDescription)
         }
-        #if canImport(WebRTC)
         // Eagerly warm up the shared RTCPeerConnectionFactory so its network
         // thread is ready by the time the user runs an ICE probe.
         IceGatheringProbe.warmUpFactory()
-        #endif
     }
 
     // MARK: - High-level reports
@@ -329,7 +325,6 @@ public final class SerenadaDiagnostics {
     // MARK: - ICE probing
 
     private func gatherIceCandidates(iceServers: [IceServerConfig], onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
-#if canImport(WebRTC)
         guard !iceServers.isEmpty else {
             return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["No ICE servers"])
         }
@@ -344,9 +339,6 @@ public final class SerenadaDiagnostics {
             report = await retryProbe.run(iceServers: iceServers, onCandidateLog: onCandidateLog)
         }
         return report
-#else
-        return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["WebRTC not available"])
-#endif
     }
 
     // MARK: - Basic checks
@@ -499,7 +491,6 @@ public final class SerenadaDiagnostics {
 
 // MARK: - ICE Gathering Probe
 
-#if canImport(WebRTC)
 @MainActor
 private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
     /// Shared factory — creating a new one per probe and letting it be deallocated
@@ -611,4 +602,3 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason reason: String) {}
 }
-#endif

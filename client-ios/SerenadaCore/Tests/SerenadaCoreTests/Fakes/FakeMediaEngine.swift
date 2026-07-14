@@ -1,9 +1,7 @@
 import CoreGraphics
 import Foundation
 @testable import SerenadaCore
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
 @MainActor
 final class FakeMediaEngine: SessionMediaEngine {

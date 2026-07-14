@@ -1,8 +1,6 @@
 import Foundation
-#if canImport(WebRTC)
 import WebRTC
 import SerenadaBroadcastExtensionSupport
-#endif
 
 @MainActor
 final class ScreenShareController {
@@ -12,7 +10,6 @@ final class ScreenShareController {
     // Screen-share capturers. Both capture paths are compiled unconditionally;
     // the active one is selected at runtime from `screenShareMode` (this replaced
     // the former `BROADCAST_EXTENSION` compile flag).
-#if canImport(WebRTC)
     /// Shared-memory reader for the broadcast (full-device) path. Non-nil only
     /// while a broadcast share is pending or live.
     private var broadcastFrameReader: BroadcastFrameReading?
@@ -25,19 +22,16 @@ final class ScreenShareController {
     /// In-app ReplayKit capturer for the `.inAppOnly` path.
     private var replayKitCapturer: ReplayKitVideoCapturer?
 #endif
-#endif
 
     // MARK: - Dependencies
 
     private let cameraController: CameraCaptureController
-#if canImport(WebRTC)
     private let localVideoSourceProvider: () -> RTCVideoSource?
     /// CONTENT source for the independent path. The BroadcastFrameReader /
     /// ReplayKit capturer delegates to this source so the screen rides a
     /// separate content track, leaving the camera source untouched.
     private let localContentVideoSourceProvider: () -> RTCVideoSource?
     private let isLocalVideoTrackEnabled: () -> Bool
-#endif
     private let setLocalVideoTrackEnabled: (Bool) -> Void
     var onScreenShareStopped: () -> Void
     private let onStateChanged: (Bool) -> Void
@@ -46,7 +40,6 @@ final class ScreenShareController {
     private let independentContentEnabled: Bool
     private let logger: SerenadaLogger?
 
-#if canImport(WebRTC)
     /// Runtime capture selection (`.broadcast`/`.inAppOnly`/`.disabled`). Replaces
     /// the former `BROADCAST_EXTENSION` compile flag.
     private let screenShareMode: ScreenShareMode
@@ -54,7 +47,6 @@ final class ScreenShareController {
     /// the pending-broadcast window directly. `nil` in production, where the real
     /// reader is built from the `.broadcast` config.
     private let makeBroadcastFrameReader: ((RTCVideoSource) -> BroadcastFrameReading)?
-#endif
 
     /// Idempotency latch for the shared stop path (API / external broadcast
     /// finished). Ensures capture stops once and the reader is torn down once per
@@ -63,7 +55,6 @@ final class ScreenShareController {
 
     // MARK: - Init
 
-#if canImport(WebRTC)
     init(
         cameraController: CameraCaptureController,
         localVideoSourceProvider: @escaping () -> RTCVideoSource?,
@@ -117,25 +108,7 @@ final class ScreenShareController {
         self.makeBroadcastFrameReader = makeBroadcastFrameReader
         self.logger = logger
     }
-#else
-    init(
-        cameraController: CameraCaptureController,
-        setLocalVideoTrackEnabled: @escaping (Bool) -> Void,
-        onScreenShareStopped: @escaping () -> Void,
-        onStateChanged: @escaping (Bool) -> Void,
-        independentContentEnabled: Bool = false,
-        logger: SerenadaLogger? = nil
-    ) {
-        self.cameraController = cameraController
-        self.setLocalVideoTrackEnabled = setLocalVideoTrackEnabled
-        self.onScreenShareStopped = onScreenShareStopped
-        self.onStateChanged = onStateChanged
-        self.independentContentEnabled = independentContentEnabled
-        self.logger = logger
-    }
-#endif
 
-#if canImport(WebRTC)
     /// Build the broadcast frame reader for a start. Uses the injected test
     /// factory when present, otherwise the real shared-memory reader built from
     /// the `.broadcast` config. Returns `nil` if the mode is not `.broadcast`.
@@ -148,12 +121,10 @@ final class ScreenShareController {
         }
         return nil
     }
-#endif
 
     // MARK: - Screen Share
 
     func startScreenShare(onComplete: ((Bool) -> Void)? = nil) -> Bool {
-#if canImport(WebRTC)
         // `.disabled` exposes no capture path.
         if case .disabled = screenShareMode {
             onComplete?(false)
@@ -296,10 +267,6 @@ final class ScreenShareController {
         onComplete?(false)
         return false
 #endif
-#else
-        onComplete?(false)
-        return false
-#endif
     }
 
     /// Shared idempotent stop path (API, external broadcast finished). The latch
@@ -319,11 +286,7 @@ final class ScreenShareController {
     /// the broadcast path is observably pending (the ReplayKit path flips
     /// `isScreenSharing` from its start completion, so it is never pending here).
     private var hasPendingIndependentStart: Bool {
-#if canImport(WebRTC)
         return broadcastFrameReader != nil && !isScreenSharing
-#else
-        return false
-#endif
     }
 
     private func stopScreenShareIndependent() -> Bool {
@@ -336,7 +299,6 @@ final class ScreenShareController {
         guard !stopInFlight else { return true }
         stopInFlight = true
         isScreenSharing = false
-#if canImport(WebRTC)
         // Cancel a pending start: disarm the timeout and tear down the reader.
         // Nulling the reader also makes a late onBroadcastStarted a no-op (its
         // identity check fails), so a cancelled pending start cannot resurrect.
@@ -347,7 +309,6 @@ final class ScreenShareController {
 #if canImport(ReplayKit)
         replayKitCapturer?.stopCapture()
         replayKitCapturer = nil
-#endif
 #endif
         // Camera is intentionally left untouched (pitfall #6). onStateChanged
         // drives the engine's content teardown; onScreenShareStopped drives the
@@ -361,7 +322,6 @@ final class ScreenShareController {
     }
 
     private func stopScreenShareLegacy() -> Bool {
-#if canImport(WebRTC)
         // Tear down whichever capturer is active (only one is ever non-nil) and
         // disarm a pending broadcast start's timeout.
         startTimeoutTask?.cancel()
@@ -372,14 +332,12 @@ final class ScreenShareController {
         replayKitCapturer?.stopCapture()
         replayKitCapturer = nil
 #endif
-#endif
         if isScreenSharing {
             isScreenSharing = false
             cameraController.isScreenSharing = false
             onStateChanged(false)
             let restoreSource = cameraController.preScreenShareCameraSource
             cameraController.preScreenShareCameraSource = .selfie
-#if canImport(WebRTC)
             if !cameraController.canCaptureVideo {
                 setLocalVideoTrackEnabled(false)
                 cameraController.localCameraSource = restoreSource
@@ -390,7 +348,6 @@ final class ScreenShareController {
                 cameraController.localCameraSource = restoreSource
                 cameraController.notifyCameraModeAndFlash()
             }
-#endif
             onScreenShareStopped()
         }
         return true
@@ -399,7 +356,6 @@ final class ScreenShareController {
     /// Stop all screen share capturers without triggering state callbacks.
     /// Called by WebRtcEngine during stopLocalMedia cleanup.
     func stopAllCapturers() {
-#if canImport(WebRTC)
         // Disarm a pending start's timeout too (teardown may race the window).
         startTimeoutTask?.cancel()
         startTimeoutTask = nil
@@ -408,7 +364,6 @@ final class ScreenShareController {
 #if canImport(ReplayKit)
         replayKitCapturer?.stopCapture()
         replayKitCapturer = nil
-#endif
 #endif
         isScreenSharing = false
         cameraController.isScreenSharing = false

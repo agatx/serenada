@@ -1,9 +1,7 @@
 import AVFoundation
 import Foundation
 import UIKit
-#if canImport(WebRTC)
 @preconcurrency import WebRTC
-#endif
 
 #if compiler(>=6.2)
 private let bluetoothHandsFreeAudioSessionOption: AVAudioSession.CategoryOptions = .allowBluetoothHFP
@@ -387,7 +385,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
                     options: callAudioSessionOptions
                 )
                 try self.audioSession.setActive(true)
-#if canImport(WebRTC)
                 let rtcAudioSession = RTCAudioSession.sharedInstance()
                 do {
                     rtcAudioSession.lockForConfiguration()
@@ -395,7 +392,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
                     rtcAudioSession.isAudioEnabled = false
                     rtcAudioSession.isAudioEnabled = true
                 }
-#endif
                 self.updateDevicesAndRoute()
                 self.applyCallAudioRouting()
                 self.onAudioEnvironmentChanged()
@@ -569,7 +565,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     private func applyUserSelectedOutputRoute(for device: AudioDevice) async throws {
-#if canImport(WebRTC)
         let queue = routeConfigurationQueue
         let audioSession = audioSession
         try await withCheckedThrowingContinuation { continuation in
@@ -586,12 +581,8 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
                 }
             }
         }
-#else
-        try applyOutputRoute(for: device.kind)
-#endif
     }
 
-#if canImport(WebRTC)
     private nonisolated static func applyUserSelectedOutputRoute(
         for device: AudioDevice,
         audioSession: AVAudioSession,
@@ -680,7 +671,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             return [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE]
         }
     }
-#endif
 
     private func isBluetoothHeadsetConnected() -> Bool {
         audioSession.currentRoute.outputs.contains { output in

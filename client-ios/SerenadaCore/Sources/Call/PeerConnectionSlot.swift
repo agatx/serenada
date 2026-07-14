@@ -1,7 +1,5 @@
 import Foundation
-#if canImport(WebRTC)
 @preconcurrency import WebRTC
-#endif
 
 @MainActor
 internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
@@ -57,7 +55,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         iceRestartTask = nil
     }
 
-#if canImport(WebRTC)
     private struct RealtimeStatsSample {
         let timestampMs: Int64
         let audioRxBytes: Int64
@@ -192,9 +189,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         set { pathDirectLock.lock(); lastPathIsDirectBacking = newValue; pathDirectLock.unlock() }
     }
     private var freezeSamples: [FreezeSample] = []
-#endif
 
-#if canImport(WebRTC)
     public init(
         remoteCid: String,
         factory: RTCPeerConnectionFactory?,
@@ -232,15 +227,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             qos: .userInitiated
         )
     }
-#else
-    public init(remoteCid: String) {
-        self.remoteCid = remoteCid
-        self.supportsIndependentContentVideo = false
-    }
-#endif
 
     public func setIceServers(_ servers: [IceServerConfig]) {
-#if canImport(WebRTC)
         iceServers = servers
         if let peerConnection {
             // Apply refreshed credentials to the live connection so a later
@@ -257,12 +245,10 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             return
         }
         _ = ensurePeerConnection()
-#endif
     }
 
     @discardableResult
     public func ensurePeerConnection() -> Bool {
-#if canImport(WebRTC)
         if peerConnection != nil { return true }
         guard let factory else { return false }
         guard let iceServers else { return false }
@@ -352,9 +338,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         )
         ensureReceiveTransceivers(on: peerConnection)
         return true
-#else
-        return false
-#endif
     }
 
     public func attachLocalTracks(
@@ -364,7 +347,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         supportsIndependentContentVideo: Bool = false,
         legacyVideoCarriesContent: Bool = false
     ) {
-#if canImport(WebRTC)
         if let audioTrack = audioTrack as? RTCAudioTrack {
             self.localAudioTrack = audioTrack
         } else if audioTrack == nil {
@@ -408,10 +390,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             // so flag-off is byte-identical.
             applyLegacyVideoSenderEncoding(peerConnection)
         }
-#endif
     }
 
-#if canImport(WebRTC)
     /// Independent-capable peer attach: ensure the ordered camera/content
     /// transceivers exist (offer owner) or are bound (answerer), then attach the
     /// camera and pending/active content tracks via their bound senders.
@@ -688,13 +668,11 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         remoteContentTrack = track
         attachRemoteContentTrackToRegisteredRenderers()
     }
-#endif
 
     public func closePeerConnection() {
         cancelOfferTimeout()
         cancelIceRestartTask()
 
-#if canImport(WebRTC)
         detachRemoteTrackFromRegisteredRenderers()
         detachRemoteContentTrackFromRegisteredRenderers()
         peerConnection?.close()
@@ -712,7 +690,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         lastRealtimeStatsSample = nil
         freezeSamples.removeAll()
         onRemoteVideoTrack(remoteCid, nil)
-#endif
     }
 
     @discardableResult
@@ -721,7 +698,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         onSdp: @escaping (String) -> Void,
         onComplete: ((Bool) -> Void)? = nil
     ) -> Bool {
-#if canImport(WebRTC)
         guard let peerConnection = peerConnection ?? (ensurePeerConnection() ? self.peerConnection : nil) else {
             onComplete?(false)
             return false
@@ -752,14 +728,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             }
         }
         return true
-#else
-        onComplete?(false)
-        return false
-#endif
     }
 
     public func createAnswer(onSdp: @escaping (String) -> Void, onComplete: ((Bool) -> Void)? = nil) {
-#if canImport(WebRTC)
         guard let peerConnection = peerConnection ?? (ensurePeerConnection() ? self.peerConnection : nil) else {
             onComplete?(false)
             return
@@ -781,9 +752,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 }
             }
         }
-#else
-        onComplete?(false)
-#endif
     }
 
     public func setRemoteDescription(
@@ -791,7 +759,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         sdp: String,
         onComplete: ((Bool) -> Void)? = nil
     ) {
-#if canImport(WebRTC)
         guard let peerConnection = peerConnection ?? (ensurePeerConnection() ? self.peerConnection : nil) else {
             onComplete?(false)
             return
@@ -830,13 +797,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 }
             }
         }
-#else
-        onComplete?(false)
-#endif
     }
 
     public func rollbackLocalDescription(onComplete: ((Bool) -> Void)? = nil) {
-#if canImport(WebRTC)
         guard let peerConnection else {
             onComplete?(false)
             return
@@ -845,13 +808,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         peerConnection.setLocalDescription(RTCSessionDescription(type: .rollback, sdp: "")) { error in
             onComplete?(error == nil)
         }
-#else
-        onComplete?(false)
-#endif
     }
 
     public func addIceCandidate(_ candidate: IceCandidatePayload) {
-#if canImport(WebRTC)
         guard let safeCandidate = sanitizeIceCandidate(candidate, remoteCid: remoteCid) else {
             return
         }
@@ -873,11 +832,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 sdpMid: safeCandidate.sdpMid
             )
         ) { _ in }
-#endif
     }
 
     public func attachRemoteRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
         remoteRenderers.append(WeakRendererBox(value: renderer))
         compactRenderers()
         guard let renderer = renderer as? RTCVideoRenderer else { return }
@@ -885,11 +842,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         rendererAttachmentQueue.async {
             track?.add(renderer)
         }
-#endif
     }
 
     public func detachRemoteRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
         if let renderer = renderer as? RTCVideoRenderer {
             let track = remoteVideoTrack
             rendererAttachmentQueue.async {
@@ -897,11 +852,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             }
         }
         remoteRenderers.removeAll { $0.value === renderer || $0.value == nil }
-#endif
     }
 
     public func attachRemoteContentRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
         remoteContentRenderers.append(WeakRendererBox(value: renderer))
         compactContentRenderers()
         guard let renderer = renderer as? RTCVideoRenderer else { return }
@@ -909,11 +862,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         rendererAttachmentQueue.async {
             track?.add(renderer)
         }
-#endif
     }
 
     public func detachRemoteContentRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
         if let renderer = renderer as? RTCVideoRenderer {
             let track = remoteContentTrack
             rendererAttachmentQueue.async {
@@ -921,11 +872,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             }
         }
         remoteContentRenderers.removeAll { $0.value === renderer || $0.value == nil }
-#endif
     }
 
     public func collectRealtimeCallStats(onComplete: @escaping (RealtimeCallStats) -> Void) {
-#if canImport(WebRTC)
         guard let peerConnection else {
             onComplete(.empty)
             return
@@ -940,15 +889,11 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 onComplete(self.buildRealtimeCallStats(report))
             }
         }
-#else
-        onComplete(.empty)
-#endif
     }
 
     public func collectRealtimeCallStatsAndSummary(
         onComplete: @escaping (RealtimeCallStats, String) -> Void
     ) {
-#if canImport(WebRTC)
         guard let peerConnection else {
             onComplete(.empty, "pc=none")
             return
@@ -963,13 +908,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 onComplete(self.buildRealtimeCallStats(report), summary)
             }
         }
-#else
-        onComplete(.empty, "pc=stub")
-#endif
     }
 
     public func collectInboundLiveness(onComplete: @escaping (InboundLivenessSample) -> Void) {
-#if canImport(WebRTC)
         guard let peerConnection else {
             onComplete(InboundLivenessSample(
                 inboundBytes: 0,
@@ -1013,12 +954,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             )
             Task { @MainActor in onComplete(sample) }
         }
-#else
-        onComplete(InboundLivenessSample(
-            inboundBytes: 0,
-            roleBytes: RoleInboundBytes(cameraBytes: 0, contentBytes: 0)
-        ))
-#endif
     }
 
     public func collectInboundBytes(onComplete: @escaping (Int64) -> Void) {
@@ -1034,7 +969,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     }
 
     public func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void) {
-#if canImport(WebRTC)
         guard let peerConnection else {
             onComplete(nil)
             return
@@ -1074,13 +1008,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 ))
             }
         }
-#else
-        onComplete(nil)
-#endif
     }
 
     public func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
-#if canImport(WebRTC)
         guard let peerConnection else {
             onComplete(nil, nil)
             return
@@ -1104,78 +1034,48 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             }
             Task { @MainActor in onComplete(inbound, mediaSource) }
         }
-#else
-        onComplete(nil, nil)
-#endif
     }
 
     public func isReady() -> Bool {
-#if canImport(WebRTC)
         peerConnection != nil
-#else
-        false
-#endif
     }
 
     public func getConnectionState() -> SerenadaPeerConnectionState {
-#if canImport(WebRTC)
         guard let peerConnection else { return .new }
         return peerConnectionState(peerConnection.connectionState)
-#else
-        return .new
-#endif
     }
 
     public func isPathDirect() -> Bool? { lastPathIsDirectValue }
 
     public func getIceConnectionState() -> String {
-#if canImport(WebRTC)
         guard let peerConnection else { return "NEW" }
         return iceConnectionStateString(peerConnection.iceConnectionState)
-#else
-        return "NEW"
-#endif
     }
 
     public func getSignalingState() -> String {
-#if canImport(WebRTC)
         guard let peerConnection else { return "STABLE" }
         return signalingStateString(peerConnection.signalingState)
-#else
-        return "STABLE"
-#endif
     }
 
     public func hasRemoteDescription() -> Bool {
-#if canImport(WebRTC)
         peerConnection?.remoteDescription != nil
-#else
-        false
-#endif
     }
 
     public func isRemoteVideoTrackEnabled() -> Bool {
-#if canImport(WebRTC)
         remoteVideoTrack?.isEnabled ?? false
-#else
-        false
-#endif
     }
 
     public func duckPlayback(ducked: Bool) {
         playbackDucked = ducked
-#if canImport(WebRTC)
         guard let peerConnection = peerConnection else { return }
         for receiver in peerConnection.receivers {
             if let audioTrack = receiver.track as? RTCAudioTrack {
                 applyPlaybackDuck(to: audioTrack)
             }
         }
-#endif
     }
 }
 
-#if canImport(WebRTC)
 private extension PeerConnectionSlot {
     private func applyPlaybackDuck(to track: RTCAudioTrack) {
         track.source.volume = playbackDucked ? 0.15 : 1.0
@@ -1683,5 +1583,4 @@ extension PeerConnectionSlot {
     /// The remote CONTENT (screen share) track currently bound by the classifier.
     var _test_remoteContentTrack: RTCVideoTrack? { remoteContentTrack }
 }
-#endif
 #endif

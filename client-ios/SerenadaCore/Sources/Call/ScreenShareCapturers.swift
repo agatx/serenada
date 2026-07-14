@@ -4,11 +4,8 @@ import os.log
 #if canImport(ReplayKit)
 import ReplayKit
 #endif
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
-#if canImport(WebRTC)
 import SerenadaBroadcastExtensionSupport
 
 /// Listening seam for the broadcast frame reader. The concrete
@@ -534,4 +531,3 @@ final class ReplayKitVideoCapturer: RTCVideoCapturer {
 }
 #endif
 
-#endif

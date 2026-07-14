@@ -38,6 +38,7 @@
 		60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */; };
 		6198802831401A13687DDCA9 /* FeedbackScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CAF324C3A37900C769BB9F /* FeedbackScreen.swift */; };
 		64A7BCD5402B626283D5F7A7 /* AudioLevelMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CE28EAA8E90B562F29DF6DB /* AudioLevelMonitorTests.swift */; };
+		655770750BDEE85724665B07 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 11BBAEA8E95D5376A822A1F9 /* WebRTC */; };
 		65AD76EF24108797F74DA6CF /* SnapshotCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF6DFD71F64E86AEEFE9DFDC /* SnapshotCaptureTests.swift */; };
 		6B5F236A91FDD3905C7AFD49 /* IceCandidateSanitizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258D6A80A3E3F6FBE06D77B8 /* IceCandidateSanitizerTests.swift */; };
 		6D7CC8795CCE4899285777B4 /* SerenadaDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */; };
@@ -269,6 +270,7 @@
 				FEEA9BD167C38B0698BE668E /* SerenadaCore in Frameworks */,
 				A166AEDB8228E8C0BB59B927 /* SerenadaBroadcastExtensionSupport in Frameworks */,
 				4A18E5E799BA54FF55141F92 /* SerenadaCallUI in Frameworks */,
+				655770750BDEE85724665B07 /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -609,6 +611,7 @@
 				1BF429546EEA7FBEB5796155 /* SerenadaCore */,
 				5010B18934D00FB7363928E1 /* SerenadaBroadcastExtensionSupport */,
 				7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */,
+				11BBAEA8E95D5376A822A1F9 /* WebRTC */,
 			);
 			productName = SerenadaiOS;
 			productReference = 6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */;
@@ -733,6 +736,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				B01E382DAF8A44F6B4B1BD0A /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				B83BBC413795163E0D1C8530 /* XCRemoteSwiftPackageReference "zello-ios-web-rtc" */,
 				AAEB240FA7DACD0D49D37E32 /* XCLocalSwiftPackageReference "SerenadaCallUI" */,
 				43A2742C161A8E846B61ACFE /* XCLocalSwiftPackageReference "SerenadaCore" */,
 			);
@@ -1344,9 +1348,22 @@
 				minimumVersion = 11.11.0;
 			};
 		};
+		B83BBC413795163E0D1C8530 /* XCRemoteSwiftPackageReference "zello-ios-web-rtc" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/zelloptt/zello-ios-web-rtc";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.0.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		11BBAEA8E95D5376A822A1F9 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B83BBC413795163E0D1C8530 /* XCRemoteSwiftPackageReference "zello-ios-web-rtc" */;
+			productName = WebRTC;
+		};
 		1BF429546EEA7FBEB5796155 /* SerenadaCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SerenadaCore;

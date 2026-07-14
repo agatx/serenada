@@ -1,9 +1,7 @@
 import CoreImage
 import Foundation
 import UIKit
-#if canImport(WebRTC)
 @preconcurrency import WebRTC
-#endif
 
 /// Captures a single full-resolution JPEG frame from a renderer-attachable
 /// source — used by `SerenadaSession.captureSnapshot` for both local and
@@ -26,7 +24,6 @@ internal final class FrameSnapshotCapturer {
     }
 
     func capture(timeoutMs: Int) async throws -> (jpegData: Data, width: Int, height: Int) {
-#if canImport(WebRTC)
         let outcome = await captureFrame(timeoutMs: timeoutMs, quality: jpegQuality)
         switch outcome {
         case .success(let data, let width, let height):
@@ -36,12 +33,8 @@ internal final class FrameSnapshotCapturer {
         case .failed(let reason):
             throw SnapshotError.captureFailed(reason)
         }
-#else
-        throw SnapshotError.captureFailed("WebRTC not available")
-#endif
     }
 
-#if canImport(WebRTC)
     fileprivate enum CaptureOutcome {
         case success(Data, Int, Int)
         case timeout
@@ -80,10 +73,8 @@ internal final class FrameSnapshotCapturer {
             state.timeoutTask = timeoutTask
         }
     }
-#endif
 }
 
-#if canImport(WebRTC)
 /// Owns the lifecycle for a single in-flight snapshot capture: renderer,
 /// timeout, and the resume-once continuation. All accesses are main-actor
 /// isolated so the renderer/timeout race is decided on a single queue.
@@ -247,4 +238,3 @@ private func cgOrientation(for rotation: RTCVideoRotation) -> CGImagePropertyOri
     default: return nil
     }
 }
-#endif

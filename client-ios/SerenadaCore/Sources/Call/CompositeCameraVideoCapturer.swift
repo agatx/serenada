@@ -2,11 +2,8 @@ import AVFoundation
 import CoreImage
 import Foundation
 import UIKit
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
-#if canImport(WebRTC)
 final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVideoDataOutputSampleBufferDelegate {
     private enum Constants {
         static let overlayDiameterRatio: CGFloat = 0.36
@@ -581,4 +578,3 @@ final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVideoDataOu
         captureQueue.sync(execute: block)
     }
 }
-#endif

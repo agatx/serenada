@@ -1,9 +1,6 @@
 import Foundation
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
-#if canImport(WebRTC)
 func mediaKind(for stat: RTCStatistics) -> String? {
     let kind = memberString(stat, key: "kind") ?? memberString(stat, key: "mediaType")
     if kind == "audio" || kind == "video" {
@@ -147,4 +144,3 @@ func signalingStateString(_ state: RTCSignalingState) -> String {
         return "UNKNOWN"
     }
 }
-#endif

@@ -1,9 +1,7 @@
 import AVFoundation
 import CoreImage
 import Foundation
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
 @MainActor
 final class CameraCaptureController {
@@ -35,10 +33,8 @@ final class CameraCaptureController {
     /// True when this device has at least one camera mode available to capture video with.
     var canCaptureVideo: Bool { !availableCameraModes.isEmpty }
 
-#if canImport(WebRTC)
     private(set) var localVideoCapturer: RTCCameraVideoCapturer?
     private(set) var compositeVideoCapturer: CompositeCameraVideoCapturer?
-#endif
 
     // MARK: - External State (set by WebRtcEngine)
 
@@ -46,9 +42,7 @@ final class CameraCaptureController {
 
     // MARK: - Dependencies
 
-#if canImport(WebRTC)
     private weak var localVideoSource: RTCVideoSource?
-#endif
     private(set) var isHdVideoExperimentalEnabled: Bool
 
     // MARK: - Callbacks
@@ -66,7 +60,6 @@ final class CameraCaptureController {
 
     // MARK: - Init
 
-#if canImport(WebRTC)
     init(
         localVideoSource: RTCVideoSource?,
         isHdVideoExperimentalEnabled: Bool,
@@ -89,28 +82,6 @@ final class CameraCaptureController {
         self.logger = logger
         self.localCameraSource = cameraSource(from: availableCameraModes.first ?? .selfie)
     }
-#else
-    init(
-        isHdVideoExperimentalEnabled: Bool,
-        availableCameraModes: [LocalCameraMode] = defaultCameraModes,
-        onCameraFacingChanged: @escaping (Bool) -> Void,
-        onCameraModeChanged: @escaping (LocalCameraMode) -> Void,
-        onFlashlightStateChanged: @escaping (Bool, Bool) -> Void,
-        onZoomFactorChanged: @escaping (Double) -> Void,
-        onFeatureDegradation: @escaping (FeatureDegradationState) -> Void,
-        logger: SerenadaLogger? = nil
-    ) {
-        self.isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled
-        self.availableCameraModes = availableCameraModes
-        self.onCameraFacingChanged = onCameraFacingChanged
-        self.onCameraModeChanged = onCameraModeChanged
-        self.onFlashlightStateChanged = onFlashlightStateChanged
-        self.onZoomFactorChanged = onZoomFactorChanged
-        self.onFeatureDegradation = onFeatureDegradation
-        self.logger = logger
-        self.localCameraSource = cameraSource(from: availableCameraModes.first ?? .selfie)
-    }
-#endif
 
     // MARK: - Callback Setters
 
@@ -138,11 +109,9 @@ final class CameraCaptureController {
     func setOnDebugTrace(_ handler: ((String) -> Void)?) {
     }
 
-#if canImport(WebRTC)
     func updateLocalVideoSource(_ source: RTCVideoSource?) {
         localVideoSource = source
     }
-#endif
 
     // MARK: - Public Interface
 
@@ -155,7 +124,6 @@ final class CameraCaptureController {
     }
 
     func stopAllCapturers() {
-#if canImport(WebRTC)
         setTorchEnabled(false)
         localVideoCapturer?.stopCapture()
         localVideoCapturer = nil
@@ -164,7 +132,6 @@ final class CameraCaptureController {
         activeCaptureDevice = nil
         currentZoomFactor = 1
         onZoomFactorChanged(1)
-#endif
     }
 
     @discardableResult
@@ -209,7 +176,6 @@ final class CameraCaptureController {
             "webrtc flipCamera current=\(activeCameraMode().rawValue) target=\(targetMode.rawValue) compositeAvailable=\(compositeAvailable) allowed=\(availableCameraModes.map(\.rawValue))"
         )
 
-#if canImport(WebRTC)
         let fallbackSource: LocalCameraSource? = {
             guard targetMode == .composite else { return nil }
             if availableCameraModes.contains(.selfie) { return .selfie }
@@ -217,10 +183,6 @@ final class CameraCaptureController {
             return nil
         }()
         switchVideoCapturer(source: targetSource, fallbackSource: fallbackSource)
-#else
-        localCameraSource = targetSource
-        notifyCameraModeAndFlash()
-#endif
     }
 
     func toggleFlashlight() -> Bool {
@@ -274,21 +236,15 @@ final class CameraCaptureController {
 
     func setHdVideoExperimentalEnabled(_ enabled: Bool) {
         isHdVideoExperimentalEnabled = enabled
-#if canImport(WebRTC)
         if !isScreenSharing {
             switchVideoCapturer(source: localCameraSource)
         }
-#endif
     }
 
     func compositeSupportDebugState() -> String {
-#if canImport(WebRTC)
         let snapshot = Self.compositeSupportSnapshot()
         let cached = cachedCompositeSupport.map(String.init(describing:)) ?? "nil"
         return "disabled=\(compositeDisabledAfterFailure) cached=\(cached) switching=\(isSwitchingCameraSource) multi=\(snapshot.hasMultiCam) front=\(snapshot.hasFrontCamera) back=\(snapshot.hasBackCamera) supported=\(snapshot.supported)"
-#else
-        return "unavailable"
-#endif
     }
 
     func notifyCameraModeAndFlash() {
@@ -302,14 +258,9 @@ final class CameraCaptureController {
     // MARK: - Internal Camera Logic
 
     static func isCompositeCameraModeAvailable() -> Bool {
-#if canImport(WebRTC)
         return compositeSupportSnapshot().supported
-#else
-        return false
-#endif
     }
 
-#if canImport(WebRTC)
     @discardableResult
     func restartVideoCapturer(source: LocalCameraSource) -> Bool {
         guard let localVideoSource else { return false }
@@ -483,10 +434,8 @@ final class CameraCaptureController {
         }
         return min(maxFps, 24)
     }
-#endif
 
     private func canUseCompositeSource() -> Bool {
-#if canImport(WebRTC)
         if compositeDisabledAfterFailure {
             debugTrace("webrtc composite support disabledAfterFailure=true")
             return false
@@ -502,17 +451,10 @@ final class CameraCaptureController {
             "webrtc composite support multiCam=\(snapshot.hasMultiCam) front=\(snapshot.hasFrontCamera) back=\(snapshot.hasBackCamera) supported=\(supported)"
         )
         return supported
-#else
-        return false
-#endif
     }
 
     private func hasActiveCameraCapturer() -> Bool {
-#if canImport(WebRTC)
         localVideoCapturer != nil || compositeVideoCapturer != nil
-#else
-        false
-#endif
     }
 
     private func activeCameraMode() -> LocalCameraMode {

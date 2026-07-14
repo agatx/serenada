@@ -18,13 +18,18 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(path: "../SerenadaCore")
+        .package(path: "../SerenadaCore"),
+        // WebRTC version is pinned by SerenadaCore (exact:); the open range here
+        // intersects with that pin, so SerenadaCore/Package.swift stays the single
+        // bump site.
+        .package(url: "https://github.com/zelloptt/zello-ios-web-rtc", from: "0.0.1")
     ],
     targets: [
         .target(
             name: "SerenadaCallUI",
             dependencies: [
-                .product(name: "SerenadaCore", package: "SerenadaCore")
+                .product(name: "SerenadaCore", package: "SerenadaCore"),
+                .product(name: "WebRTC", package: "zello-ios-web-rtc")
             ],
             path: "Sources"
         ),

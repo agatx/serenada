@@ -1,8 +1,6 @@
 @testable import SerenadaCore
 import XCTest
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
 /// Controller-level coverage for the independent screen-share PENDING-start
 /// window on the broadcast path: `ScreenShareController` returns true
@@ -17,7 +15,6 @@ import WebRTC
 /// target). The pure-SPM `swift test` build links no WebRTC framework, so the
 /// whole capturer path compiles out there. The controller is driven in broadcast
 /// mode via the injected `makeBroadcastFrameReader` factory.
-#if canImport(WebRTC)
 @MainActor
 final class ScreenShareControllerPendingStopTests: XCTestCase {
 
@@ -182,4 +179,3 @@ final class ScreenShareControllerPendingStopTests: XCTestCase {
         XCTAssertEqual(box.stoppedCount, stoppedAfterFirst)
     }
 }
-#endif

@@ -2,9 +2,7 @@ import CryptoKit
 import Foundation
 import SerenadaCore
 import UIKit
-#if canImport(WebRTC)
 import WebRTC
-#endif
 
 final class JoinSnapshotFeature {
     private struct SnapshotImage {
@@ -99,7 +97,6 @@ final class JoinSnapshotFeature {
     }
 
     private func captureJoinSnapshot() async -> SnapshotImage? {
-        #if canImport(WebRTC)
         return await withTaskGroup(of: SnapshotImage?.self) { group in
             group.addTask { [weak self] in
                 guard let self else { return nil }
@@ -114,12 +111,8 @@ final class JoinSnapshotFeature {
             group.cancelAll()
             return first
         }
-        #else
-        return nil
-        #endif
     }
 
-    #if canImport(WebRTC)
     private func captureSingleFrameSnapshot() async -> SnapshotImage? {
         await withCheckedContinuation { continuation in
             let lock = NSLock()
@@ -247,7 +240,6 @@ final class JoinSnapshotFeature {
             (0.0722 * Double(bitmap[2]))
         return luminance < 8.0
     }
-    #endif
 
     private func encryptSnapshotForRecipients(
         snapshot: SnapshotImage,
@@ -367,7 +359,6 @@ final class JoinSnapshotFeature {
     }
 }
 
-#if canImport(WebRTC)
 private final class LocalFrameSnapshotRenderer: NSObject, RTCVideoRenderer {
     private let onFrame: (RTCVideoFrame) -> Bool
     private let lock = NSLock()
@@ -395,7 +386,6 @@ private final class LocalFrameSnapshotRenderer: NSObject, RTCVideoRenderer {
         }
     }
 }
-#endif
 
 private extension Data {
     init?(base64URLEncoded input: String) {
