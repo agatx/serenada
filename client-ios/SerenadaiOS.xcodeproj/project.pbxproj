@@ -595,6 +595,7 @@
 				6A244A834479079D8A68C055 /* Resources */,
 				3867865F694935FA05848873 /* Frameworks */,
 				549F8A7A8C4D26D436470DAC /* Embed Foundation Extensions */,
+				1ECD930C77143F9CD825C47B /* Copy GoogleService-Info.plist (optional) */,
 			);
 			buildRules = (
 			);
@@ -768,6 +769,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		1ECD930C77143F9CD825C47B /* Copy GoogleService-Info.plist (optional) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy GoogleService-Info.plist (optional)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "SRC=\"${SRCROOT}/Resources/GoogleService-Info.plist\"\nDST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -f \"$SRC\" ]; then\n  cp \"$SRC\" \"$DST/\"\n  echo \"Copied GoogleService-Info.plist into app bundle.\"\nelse\n  rm -f \"$DST/GoogleService-Info.plist\"\n  echo \"warning: GoogleService-Info.plist not found; Firebase Messaging will be unavailable in this build.\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4705090E0EE23C3874EEA8F1 /* Sources */ = {

@@ -31,6 +31,7 @@ targets:
       - path: Resources
         excludes:
           - Info.plist
+          - GoogleService-Info.plist
     info:
       path: Resources/Info.plist
       properties:
@@ -62,6 +63,23 @@ targets:
         embed: true
       - target: SerenadaBroadcast
         embed: true
+    postBuildScripts:
+      # GoogleService-Info.plist is gitignored (per-developer Firebase config), so it
+      # must stay out of Copy Bundle Resources or the committed pbxproj flip-flops
+      # depending on whether the generating machine has the file. Copy it into the
+      # bundle here instead; absent file = push disabled, never a build failure.
+      - name: Copy GoogleService-Info.plist (optional)
+        basedOnDependencyAnalysis: false
+        script: |
+          SRC="${SRCROOT}/Resources/GoogleService-Info.plist"
+          DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          if [ -f "$SRC" ]; then
+            cp "$SRC" "$DST/"
+            echo "Copied GoogleService-Info.plist into app bundle."
+          else
+            rm -f "$DST/GoogleService-Info.plist"
+            echo "warning: GoogleService-Info.plist not found; Firebase Messaging will be unavailable in this build."
+          fi
     settings:
       base:
         INFOPLIST_FILE: Resources/Info.plist
