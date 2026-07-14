@@ -401,11 +401,15 @@ else
     if grep -q "zello-ios-web-rtc" "$MANIFEST" 2>/dev/null; then
         check_pass "WebRTC SPM dependency declared (zello-ios-web-rtc)"
         MANIFEST_VERSION=$(sed -n 's/.*zello-ios-web-rtc[^)]*exact: *"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)
-        RESOLVED_VERSION=$(grep -A6 '"identity" : "zello-ios-web-rtc"' "$RESOLVED" 2>/dev/null | sed -n 's/.*"version" : "\([^"]*\)".*/\1/p' | head -1)
+        # grep exits non-zero on no match; guard it or set -e kills the script
+        # before the missing-lockfile branches below can report FAIL.
+        RESOLVED_VERSION=$(grep -A6 '"identity" : "zello-ios-web-rtc"' "$RESOLVED" 2>/dev/null | sed -n 's/.*"version" : "\([^"]*\)".*/\1/p' | head -1 || true)
         if [ -z "$MANIFEST_VERSION" ]; then
             check_warn "WebRTC dependency is not pinned with exact: in SerenadaCore/Package.swift"
+        elif [ ! -f "$RESOLVED" ]; then
+            check_fail "SerenadaCore/Package.resolved missing (re-resolve and commit the lockfile)"
         elif [ -z "$RESOLVED_VERSION" ]; then
-            check_fail "SerenadaCore/Package.resolved missing zello-ios-web-rtc pin (re-resolve and commit)"
+            check_fail "SerenadaCore/Package.resolved has no zello-ios-web-rtc pin (re-resolve and commit)"
         elif [ "$MANIFEST_VERSION" = "$RESOLVED_VERSION" ]; then
             check_pass "WebRTC pin consistent (exact: $MANIFEST_VERSION == resolved $RESOLVED_VERSION)"
         else

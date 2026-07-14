@@ -11,10 +11,8 @@ import WebRTC
 /// report stop so the session clears its pending-start latch — and a late
 /// `onBroadcastStarted` must be a no-op (no resurrection of the share).
 ///
-/// Only reachable where the seam exists: WebRTC linked (the SerenadaiOSTests app
-/// target). The pure-SPM `swift test` build links no WebRTC framework, so the
-/// whole capturer path compiles out there. The controller is driven in broadcast
-/// mode via the injected `makeBroadcastFrameReader` factory.
+/// The controller is driven in broadcast mode via the injected
+/// `makeBroadcastFrameReader` factory.
 @MainActor
 final class ScreenShareControllerPendingStopTests: XCTestCase {
 

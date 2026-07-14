@@ -21,9 +21,6 @@ import WebRTC
 /// `mid` is stable. We bind camera/content from one access, then deliver to the
 /// receive path a wrapper from a SECOND access (distinct identity, identical mid)
 /// and assert the track still routes to the correct role.
-///
-/// Only reachable where WebRTC is linked (the `SerenadaiOSTests` app target). The
-/// pure-SPM `swift test` build links no WebRTC framework and compiles this out.
 @MainActor
 final class RemoteVideoTransceiverRoutingTests: XCTestCase {
 
