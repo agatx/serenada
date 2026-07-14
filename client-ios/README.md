@@ -41,7 +41,11 @@ vendored artifact or checksum script is needed.
 
 To bump the WebRTC version, update the `exact:` version in
 `SerenadaCore/Package.swift`, re-resolve packages, and re-verify call
-resilience on physical devices.
+resilience on physical devices. Two committed lockfiles must move in
+lockstep with the manifest: `SerenadaCore/Package.resolved` and
+`SerenadaiOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
+(both record the pinned revision). Standalone `SerenadaCallUI` builds
+generate their own `Package.resolved`, which is gitignored.
 
 ## Universal links
 - Associated domains are configured for:
