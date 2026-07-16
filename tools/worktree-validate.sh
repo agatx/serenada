@@ -394,29 +394,32 @@ else
         check_warn "Xcode project not generated (run: cd client-ios && xcodegen generate)"
     fi
 
-    # WebRTC SPM dependency (zello-ios-web-rtc): manifest declares it and the
-    # committed lockfile pins the same version the manifest asks for.
-    MANIFEST="$IOS/SerenadaCore/Package.swift"
-    RESOLVED="$IOS/SerenadaCore/Package.resolved"
+    # WebRTC SPM dependency (zello-ios-web-rtc): the single root Package.swift
+    # must declare it with an exact: pin. The generated xcodeproj and its
+    # Package.resolved are not tracked (transitive versions float by design),
+    # so a lockfile only exists after a local resolve — when it does, verify
+    # it agrees with the manifest pin.
+    MANIFEST="$TARGET/Package.swift"
+    RESOLVED="$IOS/SerenadaiOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
     if grep -q "zello-ios-web-rtc" "$MANIFEST" 2>/dev/null; then
         check_pass "WebRTC SPM dependency declared (zello-ios-web-rtc)"
         MANIFEST_VERSION=$(sed -n 's/.*zello-ios-web-rtc[^)]*exact: *"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)
         # grep exits non-zero on no match; guard it or set -e kills the script
-        # before the missing-lockfile branches below can report FAIL.
+        # before the branches below can report.
         RESOLVED_VERSION=$(grep -A6 '"identity" : "zello-ios-web-rtc"' "$RESOLVED" 2>/dev/null | sed -n 's/.*"version" : "\([^"]*\)".*/\1/p' | head -1 || true)
         if [ -z "$MANIFEST_VERSION" ]; then
-            check_warn "WebRTC dependency is not pinned with exact: in SerenadaCore/Package.swift"
+            check_warn "WebRTC dependency is not pinned with exact: in Package.swift"
         elif [ ! -f "$RESOLVED" ]; then
-            check_fail "SerenadaCore/Package.resolved missing (re-resolve and commit the lockfile)"
+            check_pass "WebRTC pin exact: $MANIFEST_VERSION (no local resolve yet)"
         elif [ -z "$RESOLVED_VERSION" ]; then
-            check_fail "SerenadaCore/Package.resolved has no zello-ios-web-rtc pin (re-resolve and commit)"
+            check_warn "local Package.resolved has no zello-ios-web-rtc pin (stale resolve?)"
         elif [ "$MANIFEST_VERSION" = "$RESOLVED_VERSION" ]; then
             check_pass "WebRTC pin consistent (exact: $MANIFEST_VERSION == resolved $RESOLVED_VERSION)"
         else
-            check_fail "WebRTC pin drift: manifest exact: $MANIFEST_VERSION vs resolved $RESOLVED_VERSION"
+            check_fail "WebRTC pin drift: manifest exact: $MANIFEST_VERSION vs locally resolved $RESOLVED_VERSION (re-resolve packages)"
         fi
     else
-        check_fail "WebRTC SPM dependency missing from SerenadaCore/Package.swift"
+        check_fail "WebRTC SPM dependency missing from Package.swift"
     fi
 
     # GoogleService-Info.plist (gitignored — bootstrap copies from main repo)

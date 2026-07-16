@@ -10,10 +10,9 @@ settings:
     DEVELOPMENT_TEAM: ""
     TARGETED_DEVICE_FAMILY: "1,2"
 packages:
-  SerenadaCore:
-    path: ../../client-ios/SerenadaCore
-  SerenadaCallUI:
-    path: ../../client-ios/SerenadaCallUI
+  # Single manifest at the repo root exposes SerenadaCore and SerenadaCallUI.
+  Serenada:
+    path: ../..
 targets:
   SerenadaiOSSample:
     type: application
@@ -38,9 +37,9 @@ targets:
         NSMicrophoneUsageDescription: Serenada Sample needs microphone access for audio calls.
         NSLocalNetworkUsageDescription: Serenada Sample may access local network interfaces for call connectivity checks.
     dependencies:
-      - package: SerenadaCore
+      - package: Serenada
         product: SerenadaCore
-      - package: SerenadaCallUI
+      - package: Serenada
         product: SerenadaCallUI
     settings:
       base:

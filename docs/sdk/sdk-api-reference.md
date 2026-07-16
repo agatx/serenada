@@ -157,9 +157,9 @@ Diagnostics now distinguish between provider-safe TURN probing and server-only c
 Swift Package Manager has built-in DocC support:
 
 ```bash
-cd client-ios
-swift package --package-path SerenadaCore generate-documentation --target SerenadaCore
-swift package --package-path SerenadaCallUI generate-documentation --target SerenadaCallUI
+# Run from the repo root — the single Package.swift there defines all iOS targets.
+swift package generate-documentation --target SerenadaCore
+swift package generate-documentation --target SerenadaCallUI
 ```
 
 Or from Xcode: Product → Build Documentation.

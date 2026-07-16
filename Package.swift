@@ -2,12 +2,13 @@
 
 import PackageDescription
 
-// WebRTC comes from the zello-ios-web-rtc SPM package, which ships the
-// prebuilt XCFramework as a binary target. Pinned to an exact version for
-// reproducible builds; bump deliberately and re-verify call resilience.
+// Single manifest for the repo's iOS packages. External consumers depend on
+// it via this repo's Git URL (SwiftPM requires Package.swift at the repo
+// root); the local SerenadaiOS app consumes the same package through
+// client-ios/project.yml (path: ..).
 
 let package = Package(
-    name: "SerenadaCore",
+    name: "Serenada",
     platforms: [
         .iOS(.v16)
     ],
@@ -23,6 +24,10 @@ let package = Package(
         .library(
             name: "SerenadaBroadcastExtensionSupport",
             targets: ["SerenadaBroadcastExtensionSupport"]
+        ),
+        .library(
+            name: "SerenadaCallUI",
+            targets: ["SerenadaCallUI"]
         )
     ],
     dependencies: [
@@ -31,7 +36,7 @@ let package = Package(
     targets: [
         .target(
             name: "SerenadaBroadcastExtensionSupport",
-            path: "BroadcastSupport"
+            path: "client-ios/SerenadaCore/BroadcastSupport"
         ),
         .target(
             name: "SerenadaCore",
@@ -39,12 +44,28 @@ let package = Package(
                 .product(name: "WebRTC", package: "zello-ios-web-rtc"),
                 "SerenadaBroadcastExtensionSupport"
             ],
-            path: "Sources"
+            path: "client-ios/SerenadaCore/Sources"
+        ),
+        .target(
+            name: "SerenadaCallUI",
+            dependencies: [
+                "SerenadaCore",
+                .product(name: "WebRTC", package: "zello-ios-web-rtc")
+            ],
+            path: "client-ios/SerenadaCallUI/Sources"
         ),
         .testTarget(
             name: "SerenadaCoreTests",
             dependencies: ["SerenadaCore"],
-            path: "Tests/SerenadaCoreTests"
+            path: "client-ios/SerenadaCore/Tests/SerenadaCoreTests"
+        ),
+        .testTarget(
+            name: "SerenadaCallUITests",
+            dependencies: [
+                "SerenadaCallUI",
+                "SerenadaCore"
+            ],
+            path: "client-ios/SerenadaCallUI/Tests/SerenadaCallUITests"
         )
     ]
 )

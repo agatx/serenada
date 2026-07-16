@@ -99,34 +99,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Both schemes come from the single root Package.swift, so docbuild runs
+      # at the repo root; outputs stay under client-ios/ for the later steps.
       - name: Build SerenadaCore documentation
-        working-directory: client-ios/SerenadaCore
         run: |
           xcodebuild docbuild \
             -scheme SerenadaCore \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath ../.docbuild/core
+            -derivedDataPath client-ios/.docbuild/core
 
-          ARCHIVE=$(find ../.docbuild/core -name 'SerenadaCore.doccarchive' -type d | head -1)
+          ARCHIVE=$(find client-ios/.docbuild/core -name 'SerenadaCore.doccarchive' -type d | head -1)
           REPO_NAME=$(echo "${{ github.repository }}" | cut -d/ -f2)
           $(xcrun --find docc) process-archive transform-for-static-hosting \
             "$ARCHIVE" \
-            --output-path ../docs-core \
+            --output-path client-ios/docs-core \
             --hosting-base-path "$REPO_NAME/ios/core"
 
       - name: Build SerenadaCallUI documentation
-        working-directory: client-ios/SerenadaCallUI
         run: |
           xcodebuild docbuild \
             -scheme SerenadaCallUI \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath ../.docbuild/callui
+            -derivedDataPath client-ios/.docbuild/callui
 
           REPO_NAME=$(echo "${{ github.repository }}" | cut -d/ -f2)
-          ARCHIVE=$(find ../.docbuild/callui -name 'SerenadaCallUI.doccarchive' -type d | head -1)
+          ARCHIVE=$(find client-ios/.docbuild/callui -name 'SerenadaCallUI.doccarchive' -type d | head -1)
           $(xcrun --find docc) process-archive transform-for-static-hosting \
             "$ARCHIVE" \
-            --output-path ../docs-callui \
+            --output-path client-ios/docs-callui \
             --hosting-base-path "$REPO_NAME/ios/call-ui"
 
       - name: Fix DocC asset paths for GitHub Pages

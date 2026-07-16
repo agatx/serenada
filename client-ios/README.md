@@ -25,27 +25,32 @@ This native client mirrors Android/web call flow and signaling semantics:
 - `xcodegen` (installed at `/opt/homebrew/bin/xcodegen` on this machine)
 
 ## Project setup
-1. Generate the Xcode project:
+The Xcode project is generated from `project.yml` and is **not** checked in —
+generate it after every clone or `project.yml` change:
 ```bash
 cd client-ios
 xcodegen generate
 ```
 
-2. Open `SerenadaiOS.xcodeproj` and run `SerenadaiOS` on a simulator/device.
+Then open `SerenadaiOS.xcodeproj` and run `SerenadaiOS` on a simulator/device.
 
 ## WebRTC dependency pinning
 WebRTC comes from the [zello-ios-web-rtc](https://github.com/zelloptt/zello-ios-web-rtc)
-SPM package, declared in `SerenadaCore/Package.swift` and pinned to an exact
+SPM package, declared in the repo-root `Package.swift` and pinned to an exact
 version. SPM resolves and unzips the prebuilt XCFramework automatically — no
 vendored artifact or checksum script is needed.
 
-To bump the WebRTC version, update the `exact:` version in
-`SerenadaCore/Package.swift`, re-resolve packages, and re-verify call
-resilience on physical devices. Two committed lockfiles must move in
-lockstep with the manifest: `SerenadaCore/Package.resolved` and
-`SerenadaiOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
-(both record the pinned revision). Standalone `SerenadaCallUI` builds
-generate their own `Package.resolved`, which is gitignored.
+The root `Package.swift` is the single manifest for all iOS packages
+(`SerenadaCore`, `SerenadaCallUI`, `SerenadaBroadcastExtensionSupport`).
+External consumers depend on it via this repo's Git URL; `SerenadaiOS`
+consumes it as a local package (`path: ..` in `project.yml`).
+
+To bump the WebRTC version, update the `exact:` version in the root
+`Package.swift`, keep the matching `exactVersion:` in `project.yml` in sync,
+re-resolve packages, and re-verify call resilience on physical devices. The
+generated Xcode project and its `Package.resolved` are not tracked, so there is
+no committed lockfile to move in lockstep — transitive dependency versions
+float at SwiftPM resolution time by design.
 
 ## Universal links
 - Associated domains are configured for:

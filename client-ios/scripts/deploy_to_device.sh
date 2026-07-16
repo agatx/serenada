@@ -3,6 +3,13 @@ set -eu
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="${PROJECT:-SerenadaiOS.xcodeproj}"
+
+# The Xcode project is generated, not tracked — always regenerate first.
+if ! command -v xcodegen >/dev/null 2>&1; then
+  echo "error: xcodegen not found (brew install xcodegen)" >&2
+  exit 1
+fi
+(cd "$ROOT_DIR" && xcodegen generate -q)
 SCHEME="${SCHEME:-SerenadaiOS}"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/connected-ios-device-build}"

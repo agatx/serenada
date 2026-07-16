@@ -11,14 +11,19 @@ Minimal iOS host app demonstrating Serenada SDK integration with SwiftUI.
 - Demonstrates injecting a custom `SerenadaAudioCoordinator` for host-owned audio policy
 - Enables system Picture in Picture so the sample covers foreground return from PiP
 - Runs as a standalone XcodeGen app inside this repository
-- Resolves `SerenadaCore` and `SerenadaCallUI` directly from local source in `client-ios/`
+- Resolves the `SerenadaCore` and `SerenadaCallUI` products from the single `Serenada` package at the repo root
 
 The sample intentionally hides screen sharing and waiting-room invite actions. Those features depend on first-party app wiring such as the Broadcast Upload extension and push notification plumbing, which are outside the scope of a minimal SDK host sample.
 
 ## Run in this repo
 
+The Xcode project is generated from `project.yml` and is **not** checked in.
+Generate it first (needs [XcodeGen](https://github.com/yonaskolb/XcodeGen):
+`brew install xcodegen`):
+
 ```bash
 cd samples/ios
+xcodegen generate
 open SerenadaiOSSample.xcodeproj
 ```
 
@@ -26,6 +31,7 @@ Or build from the command line:
 
 ```bash
 cd samples/ios
+xcodegen generate
 xcodebuild \
   -project SerenadaiOSSample.xcodeproj \
   -scheme SerenadaiOSSample \
@@ -45,16 +51,23 @@ xcodegen generate
 
 ## Standalone setup outside this repo
 
-If you want to copy the sample into another project instead of using the repo-local packages, vendor or clone [agatx/serenada](https://github.com/agatx/serenada) and reference the iOS packages by local path:
+If you want to copy the sample into another project instead of using the repo-local package, depend on the `Serenada` package (its manifest lives at the repo root) via the repo's Git URL:
 
 ```swift
 dependencies: [
-    .package(path: "../serenada/client-ios/SerenadaCore"),
-    .package(path: "../serenada/client-ios/SerenadaCallUI"),
+    .package(url: "https://github.com/agatx/serenada", branch: "main"),
 ]
 ```
 
-There is not currently a separate public Git URL for each iOS package.
+or vendor/clone the repo and reference it by local path:
+
+```swift
+dependencies: [
+    .package(path: "../serenada"),
+]
+```
+
+Then add the `SerenadaCore` and `SerenadaCallUI` products from that single package to your target.
 
 ## Integration pattern
 

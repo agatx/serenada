@@ -91,7 +91,7 @@ The native iOS app lives in `client-ios/`.
    ```
 3. Open `SerenadaiOS.xcodeproj` in Xcode.
 4. Run `SerenadaiOS` on iOS 16+ simulator/device.
-5. WebRTC is resolved automatically via SPM from the [zello-ios-web-rtc](https://github.com/zelloptt/zello-ios-web-rtc) package (pinned in `client-ios/SerenadaCore/Package.swift`) — no vendored XCFramework step is needed.
+5. WebRTC is resolved automatically via SPM from the [zello-ios-web-rtc](https://github.com/zelloptt/zello-ios-web-rtc) package (pinned in the root `Package.swift`) — no vendored XCFramework step is needed.
 6. For local-only device signing overrides (without committing team IDs), use `client-ios/LocalSigning.xcconfig`. See `client-ios/README.md`.
 
 iOS universal links are enabled for `serenada.app` and `serenada-app.ru` via associated domains plus `/.well-known/apple-app-site-association`.

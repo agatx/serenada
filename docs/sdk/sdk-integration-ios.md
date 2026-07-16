@@ -10,26 +10,38 @@
 
 ### Swift Package Manager
 
-Today the iOS SDK packages are consumed from a local checkout of the Serenada monorepo:
+The iOS SDK ships as a single `Serenada` package whose manifest lives at the repo root and exposes the `SerenadaCore` and `SerenadaCallUI` products. Depend on it via the repo's Git URL:
 
 ```swift
 dependencies: [
-    .package(path: "../serenada/client-ios/SerenadaCore"),
-    .package(path: "../serenada/client-ios/SerenadaCallUI"),
+    .package(url: "https://github.com/agatx/serenada", branch: "main"),
 ]
 ```
 
-If you are starting from scratch, first vendor or clone [agatx/serenada](https://github.com/agatx/serenada), then point Xcode or `Package.swift` at `client-ios/SerenadaCore` and `client-ios/SerenadaCallUI`.
+or vendor/clone [agatx/serenada](https://github.com/agatx/serenada) and point Xcode or `Package.swift` at the repo root by local path:
 
-For local development within the Serenada monorepo, use path references:
+```swift
+dependencies: [
+    .package(path: "../serenada"),
+]
+```
+
+Then add the `SerenadaCore` and `SerenadaCallUI` products from that package to your target.
+
+For local development within the Serenada monorepo, use a path reference to the repo root:
 
 ```yaml
 # project.yml (XcodeGen)
 packages:
-  SerenadaCore:
-    path: client-ios/SerenadaCore
-  SerenadaCallUI:
-    path: client-ios/SerenadaCallUI
+  Serenada:
+    path: <path to repo root>
+targets:
+  MyApp:
+    dependencies:
+      - package: Serenada
+        product: SerenadaCore
+      - package: Serenada
+        product: SerenadaCallUI
 ```
 
 When you construct `SerenadaConfig` directly, provide exactly one of `serverHost` or `signalingProvider`.

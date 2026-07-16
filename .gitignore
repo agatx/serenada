@@ -42,8 +42,6 @@ client-ios/Resources/GoogleService-Info.plist
 /client-android/serenada-call-ui/build/
 /client-android/serenada-core/.gradle/
 /client-android/serenada-call-ui/.gradle/
-/client-ios/SerenadaCallUI/.build
-/client-ios/SerenadaCore/.build
 /client-ios/.docbuild
 
 # TypeDoc generated docs
@@ -51,9 +49,15 @@ client-ios/Resources/GoogleService-Info.plist
 /client/packages/react-ui/docs/
 /client-android/serenada-webrtc/build
 /.autoplanner
-/client-ios/SerenadaCore/.swiftpm
-/client-ios/SerenadaCallUI/.swiftpm
-/client-ios/SerenadaCallUI/Package.resolved
+# Xcode projects are generated with `xcodegen generate` and not tracked. Direct
+# dependency versions are pinned in project.yml and the root Package.swift;
+# transitive versions are left to SwiftPM resolution (no committed lockfile).
+/client-ios/SerenadaiOS.xcodeproj
+/samples/ios/SerenadaiOSSample.xcodeproj
+# Root SwiftPM package (single manifest for the whole repo).
+/Package.resolved
+/.swiftpm
+/.build
 /.reviewlens
 .gstack/
 xcuserdata/

@@ -13,19 +13,22 @@ settings:
     MARKETING_VERSION: 0.4.2
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 packages:
+  # Direct dependencies are pinned exact; the generated xcodeproj (and its
+  # Package.resolved lockfile) is not tracked, so transitive versions float
+  # at SwiftPM resolution time by design.
   Firebase:
     url: https://github.com/firebase/firebase-ios-sdk.git
-    from: 11.11.0
-  # WebRTC version is pinned by SerenadaCore/Package.swift (exact:); this open
-  # range intersects with that pin. Declared here because app sources
-  # (JoinSnapshotFeature) import WebRTC directly.
+    exactVersion: 11.15.0
+  # Must match the exact: pin in the root Package.swift. Declared here because
+  # app sources (JoinSnapshotFeature) import WebRTC directly.
   ZelloWebRTC:
     url: https://github.com/zelloptt/zello-ios-web-rtc
-    from: 0.0.1
-  SerenadaCore:
-    path: SerenadaCore
-  SerenadaCallUI:
-    path: SerenadaCallUI
+    exactVersion: 0.0.1
+  # Single manifest at the repo root exposes SerenadaCore, SerenadaCallUI, and
+  # SerenadaBroadcastExtensionSupport; external consumers use the same package
+  # via this repo's Git URL.
+  Serenada:
+    path: ..
 targets:
   SerenadaiOS:
     type: application
@@ -59,11 +62,11 @@ targets:
     dependencies:
       - package: Firebase
         product: FirebaseMessaging
-      - package: SerenadaCore
+      - package: Serenada
         product: SerenadaCore
-      - package: SerenadaCore
+      - package: Serenada
         product: SerenadaBroadcastExtensionSupport
-      - package: SerenadaCallUI
+      - package: Serenada
         product: SerenadaCallUI
       - package: ZelloWebRTC
         product: WebRTC
@@ -122,7 +125,7 @@ targets:
         excludes:
           - Info.plist
     dependencies:
-      - package: SerenadaCore
+      - package: Serenada
         product: SerenadaBroadcastExtensionSupport
     info:
       path: BroadcastUpload/Info.plist
