@@ -34,7 +34,7 @@ services:
   coturn:
     image: coturn/coturn:latest
     container_name: serenada-coturn
-    restart: unless-stopped
+    restart: always
     volumes:
       - ./coturn/turnserver.dev.conf:/etc/coturn/turnserver.conf
     command:
