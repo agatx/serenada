@@ -32,11 +32,19 @@ jobs:
     steps:
       - name: Check ${{ matrix.host }}:${{ matrix.port }} cert has >= 21 days left
         run: |
-          set -o pipefail
           MIN_DAYS=21
-          CERT=$(echo | timeout 30 openssl s_client \
+          if ! TLS_OUTPUT=$(echo | timeout 30 openssl s_client \
             -connect "${{ matrix.host }}:${{ matrix.port }}" \
-            -servername "${{ matrix.host }}" 2>/dev/null | openssl x509)
+            -servername "${{ matrix.host }}" 2>&1); then
+            echo "$TLS_OUTPUT"
+            echo "::error::Unable to establish TLS connection to ${{ matrix.host }}:${{ matrix.port }}"
+            exit 1
+          fi
+          if ! CERT=$(echo "$TLS_OUTPUT" | openssl x509); then
+            echo "$TLS_OUTPUT"
+            echo "::error::TLS endpoint ${{ matrix.host }}:${{ matrix.port }} did not provide a readable certificate"
+            exit 1
+          fi
           echo "$CERT" | openssl x509 -noout -subject -enddate
           if ! echo "$CERT" | openssl x509 -noout -checkend $((MIN_DAYS * 24 * 3600)); then
             echo "::error::Certificate on ${{ matrix.host }}:${{ matrix.port }} expires within ${MIN_DAYS} days — auto-renewal is likely broken. SSH to the VPS and run: certbot renew --dry-run"

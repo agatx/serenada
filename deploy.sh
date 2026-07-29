@@ -188,7 +188,10 @@ fi
 #!/bin/bash
 set -e
 docker exec serenada-nginx nginx -s reload || true
-docker kill -s USR2 serenada-coturn || true
+# Send SIGUSR2 from inside the container. `docker kill` marks the container
+# manually stopped even for non-terminating signals, which prevents an
+# `unless-stopped` container from returning after a host reboot.
+docker exec serenada-coturn sh -c 'kill -USR2 1' || true
 HOOK_EOF
 \$SUDO chmod +x /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh
 
