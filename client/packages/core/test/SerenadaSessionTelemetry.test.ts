@@ -22,8 +22,10 @@ if (typeof globalThis.navigator === 'undefined') {
 function makeStats(partial: Partial<CallStats>): CallStats {
     return {
         transportPath: null, rttMs: null, availableOutgoingKbps: null,
+        audioRxCodec: null, audioTxCodec: null,
         audioRxPacketLossPct: null, audioTxPacketLossPct: null, audioJitterMs: null,
         audioPlayoutDelayMs: null, audioConcealedPct: null, audioRxKbps: null, audioTxKbps: null,
+        videoRxCodec: null, videoTxCodec: null,
         videoRxPacketLossPct: null, videoTxPacketLossPct: null, videoRxKbps: null, videoTxKbps: null,
         videoFps: null, videoResolution: null, videoFreezeCount60s: null, videoFreezeDuration60s: null,
         videoRetransmitPct: null, videoFramesDecoded: null, videoFramesDropped: null,

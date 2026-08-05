@@ -75,6 +75,8 @@ internal class PeerConnectionSlot(
     private var localContentTrack: VideoTrack? = null
 
     private data class MediaTotals(
+        val inboundCodecMimeTypes: MutableSet<String> = linkedSetOf(),
+        val outboundCodecMimeTypes: MutableSet<String> = linkedSetOf(),
         var inboundPacketsReceived: Long = 0L,
         var inboundPacketsLost: Long = 0L,
         var inboundBytes: Long = 0L,
@@ -1284,6 +1286,7 @@ internal class PeerConnectionSlot(
 
             when (stat.type) {
                 "inbound-rtp" -> {
+                    resolveCodecMimeType(stat, statsById)?.let(bucket.inboundCodecMimeTypes::add)
                     bucket.inboundRtpCount += 1
                     memberLong(stat, "packetsReceived")?.let { bucket.inboundPacketsReceived += it; bucket.sawPacketsReceived = true }
                     memberLong(stat, "packetsLost")?.let { bucket.inboundPacketsLost += max(0L, it); bucket.sawPacketsLost = true }
@@ -1321,6 +1324,7 @@ internal class PeerConnectionSlot(
                 }
 
                 "outbound-rtp" -> {
+                    resolveCodecMimeType(stat, statsById)?.let(bucket.outboundCodecMimeTypes::add)
                     bucket.outboundPacketsSent += memberLong(stat, "packetsSent") ?: 0L
                     bucket.outboundBytes += memberLong(stat, "bytesSent") ?: 0L
                     bucket.outboundPacketsRetransmitted += memberLong(stat, "retransmittedPacketsSent") ?: 0L
@@ -1507,6 +1511,8 @@ internal class PeerConnectionSlot(
             transportPath = transportPath,
             rttMs = rttMs,
             availableOutgoingKbps = availableOutgoingKbps,
+            audioRxCodec = joinCodecMimeTypes(audio.inboundCodecMimeTypes),
+            audioTxCodec = joinCodecMimeTypes(audio.outboundCodecMimeTypes),
             audioRxPacketLossPct = audioRxPacketLossPct,
             audioTxPacketLossPct = audioTxPacketLossPct,
             audioJitterMs = audioJitterMs,
@@ -1514,6 +1520,8 @@ internal class PeerConnectionSlot(
             audioConcealedPct = audioConcealedPct,
             audioRxKbps = audioRxKbps,
             audioTxKbps = audioTxKbps,
+            videoRxCodec = joinCodecMimeTypes(video.inboundCodecMimeTypes),
+            videoTxCodec = joinCodecMimeTypes(video.outboundCodecMimeTypes),
             videoRxPacketLossPct = videoRxPacketLossPct,
             videoTxPacketLossPct = videoTxPacketLossPct,
             videoRxKbps = videoRxKbps,
@@ -1561,11 +1569,14 @@ internal class PeerConnectionSlot(
         return (numerator.toDouble() / denominator.toDouble()) * 100.0
     }
 
-    private fun resolveCodecName(rtpStat: RTCStats?, statsById: Map<String, RTCStats>): String? {
+    private fun resolveCodecMimeType(rtpStat: RTCStats?, statsById: Map<String, RTCStats>): String? {
         val codecId = memberString(rtpStat, "codecId") ?: return null
         val codecStat = statsById[codecId] ?: return null
-        val mimeType = memberString(codecStat, "mimeType") ?: return null
-        return mimeType.removePrefix("video/")
+        return memberString(codecStat, "mimeType")
+    }
+
+    private fun resolveCodecName(rtpStat: RTCStats?, statsById: Map<String, RTCStats>): String? {
+        return resolveCodecMimeType(rtpStat, statsById)?.removePrefix("video/")
     }
 
 }

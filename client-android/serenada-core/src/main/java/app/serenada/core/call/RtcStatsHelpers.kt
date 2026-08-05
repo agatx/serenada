@@ -39,6 +39,17 @@ internal fun getMediaKind(stat: RTCStats?): String? {
     return if (kind == "audio" || kind == "video") kind else null
 }
 
+internal fun joinCodecMimeTypes(values: Iterable<String>): String? {
+    return values
+        .flatMap { it.split(" | ") }
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinct()
+        .sorted()
+        .joinToString(" | ")
+        .ifBlank { null }
+}
+
 internal fun formatNumber(value: Double?, decimals: Int): String {
     val current = value ?: return "n/a"
     if (!current.isFinite()) return "n/a"

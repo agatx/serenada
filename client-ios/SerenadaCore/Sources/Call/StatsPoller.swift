@@ -103,6 +103,8 @@ final class StatsPoller {
         }
         merged.rttMs = stats.compactMap(\.rttMs).max()
         merged.availableOutgoingKbps = stats.compactMap(\.availableOutgoingKbps).min()
+        merged.audioRxCodec = joinCodecMimeTypes(stats.compactMap(\.audioRxCodec))
+        merged.audioTxCodec = joinCodecMimeTypes(stats.compactMap(\.audioTxCodec))
         merged.audioRxPacketLossPct = stats.compactMap(\.audioRxPacketLossPct).max()
         merged.audioTxPacketLossPct = stats.compactMap(\.audioTxPacketLossPct).max()
         merged.audioJitterMs = stats.compactMap(\.audioJitterMs).max()
@@ -110,6 +112,8 @@ final class StatsPoller {
         merged.audioConcealedPct = stats.compactMap(\.audioConcealedPct).max()
         merged.audioRxKbps = sumNonNil(stats.compactMap(\.audioRxKbps))
         merged.audioTxKbps = sumNonNil(stats.compactMap(\.audioTxKbps))
+        merged.videoRxCodec = joinCodecMimeTypes(stats.compactMap(\.videoRxCodec))
+        merged.videoTxCodec = joinCodecMimeTypes(stats.compactMap(\.videoTxCodec))
         merged.videoRxPacketLossPct = stats.compactMap(\.videoRxPacketLossPct).max()
         merged.videoTxPacketLossPct = stats.compactMap(\.videoTxPacketLossPct).max()
         merged.videoRxKbps = sumNonNil(stats.compactMap(\.videoRxKbps))

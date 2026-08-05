@@ -9,6 +9,29 @@ func mediaKind(for stat: RTCStatistics) -> String? {
     return nil
 }
 
+func resolveCodecMimeType(
+    for rtpStat: RTCStatistics,
+    statsById: [String: RTCStatistics]
+) -> String? {
+    guard let codecId = memberString(rtpStat, key: "codecId"),
+          let codecStat = statsById[codecId]
+    else {
+        return nil
+    }
+    return memberString(codecStat, key: "mimeType")
+}
+
+func joinCodecMimeTypes(_ values: [String]) -> String? {
+    let codecs = Set(
+        values
+            .flatMap { $0.components(separatedBy: " | ") }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    )
+    guard !codecs.isEmpty else { return nil }
+    return codecs.sorted().joined(separator: " | ")
+}
+
 func memberString(_ stat: RTCStatistics?, key: String) -> String? {
     guard let value = stat?.values[key] else { return nil }
     if let str = value as? String {

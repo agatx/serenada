@@ -382,6 +382,10 @@ export interface CallStats {
     transportPath: string | null;
     rttMs: number | null;
     availableOutgoingKbps: number | null;
+    /** Active inbound audio codec MIME type(s), e.g. `audio/red` or `audio/opus`. */
+    audioRxCodec?: string | null;
+    /** Active outbound audio codec MIME type(s), e.g. `audio/red` or `audio/opus`. */
+    audioTxCodec?: string | null;
     audioRxPacketLossPct: number | null;
     audioTxPacketLossPct: number | null;
     audioJitterMs: number | null;
@@ -389,6 +393,10 @@ export interface CallStats {
     audioConcealedPct: number | null;
     audioRxKbps: number | null;
     audioTxKbps: number | null;
+    /** Active inbound video codec MIME type(s), e.g. `video/VP8`. */
+    videoRxCodec?: string | null;
+    /** Active outbound video codec MIME type(s), e.g. `video/VP8`. */
+    videoTxCodec?: string | null;
     videoRxPacketLossPct: number | null;
     videoTxPacketLossPct: number | null;
     videoRxKbps: number | null;

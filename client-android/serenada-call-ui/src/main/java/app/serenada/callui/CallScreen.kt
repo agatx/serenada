@@ -1308,6 +1308,11 @@ internal fun buildDebugPanelSections(
             metrics =
                 listOf(
                     DebugPanelMetric(
+                        "Codec \u21F5",
+                        "${realtimeStats?.audioRxCodec ?: "n/a"} / ${realtimeStats?.audioTxCodec ?: "n/a"}",
+                        DebugStatus.NA
+                    ),
+                    DebugPanelMetric(
                         "Packet loss \u21F5",
                         "${formatPercent(realtimeStats?.audioRxPacketLossPct)} / ${formatPercent(realtimeStats?.audioTxPacketLossPct)}",
                         audioLossStatus
@@ -1338,6 +1343,11 @@ internal fun buildDebugPanelSections(
             title = "Video Quality",
             metrics =
                 listOf(
+                    DebugPanelMetric(
+                        "Codec \u21F5",
+                        "${realtimeStats?.videoRxCodec ?: "n/a"} / ${realtimeStats?.videoTxCodec ?: "n/a"}",
+                        DebugStatus.NA
+                    ),
                     DebugPanelMetric(
                         "Packet loss \u21F5",
                         "${formatPercent(realtimeStats?.videoRxPacketLossPct)} / ${formatPercent(realtimeStats?.videoTxPacketLossPct)}",

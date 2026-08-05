@@ -74,6 +74,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     }
 
     private struct MediaTotals {
+        var inboundCodecMimeTypes: Set<String> = []
+        var outboundCodecMimeTypes: Set<String> = []
         var inboundPacketsReceived: Int64 = 0
         var inboundPacketsLost: Int64 = 0
         var inboundBytes: Int64 = 0
@@ -1215,6 +1217,11 @@ private extension PeerConnectionSlot {
 
             guard let kind = mediaKind(for: stat) else { continue }
             if kind == "audio" {
+                if stat.type == "inbound-rtp", let codec = resolveCodecMimeType(for: stat, statsById: report.statistics) {
+                    audio.inboundCodecMimeTypes.insert(codec)
+                } else if stat.type == "outbound-rtp", let codec = resolveCodecMimeType(for: stat, statsById: report.statistics) {
+                    audio.outboundCodecMimeTypes.insert(codec)
+                }
                 collectMediaStat(
                     stat,
                     into: &audio,
@@ -1222,6 +1229,11 @@ private extension PeerConnectionSlot {
                     remoteInboundRttCount: &remoteInboundRttCount
                 )
             } else {
+                if stat.type == "inbound-rtp", let codec = resolveCodecMimeType(for: stat, statsById: report.statistics) {
+                    video.inboundCodecMimeTypes.insert(codec)
+                } else if stat.type == "outbound-rtp", let codec = resolveCodecMimeType(for: stat, statsById: report.statistics) {
+                    video.outboundCodecMimeTypes.insert(codec)
+                }
                 collectMediaStat(
                     stat,
                     into: &video,
@@ -1368,6 +1380,8 @@ private extension PeerConnectionSlot {
             transportPath: transportPath,
             rttMs: rttMs,
             availableOutgoingKbps: availableOutgoingKbps,
+            audioRxCodec: joinCodecMimeTypes(Array(audio.inboundCodecMimeTypes)),
+            audioTxCodec: joinCodecMimeTypes(Array(audio.outboundCodecMimeTypes)),
             audioRxPacketLossPct: audioRxPacketLossPct,
             audioTxPacketLossPct: audioTxPacketLossPct,
             audioJitterMs: audioJitterMs,
@@ -1375,6 +1389,8 @@ private extension PeerConnectionSlot {
             audioConcealedPct: audioConcealedPct,
             audioRxKbps: audioRxKbps,
             audioTxKbps: audioTxKbps,
+            videoRxCodec: joinCodecMimeTypes(Array(video.inboundCodecMimeTypes)),
+            videoTxCodec: joinCodecMimeTypes(Array(video.outboundCodecMimeTypes)),
             videoRxPacketLossPct: videoRxPacketLossPct,
             videoTxPacketLossPct: videoTxPacketLossPct,
             videoRxKbps: videoRxKbps,

@@ -30,6 +30,25 @@ async function collectOnce(report: RTCStatsReport): Promise<ReturnType<CallStats
 }
 
 describe('CallStatsCollector counter surface', () => {
+    it('resolves active inbound and outbound codec MIME types from RTP codec references', async () => {
+        const report = makeReport([
+            { id: 'audio-red', type: 'codec', mimeType: 'audio/red' },
+            { id: 'audio-opus', type: 'codec', mimeType: 'audio/opus' },
+            { id: 'video-vp8', type: 'codec', mimeType: 'video/VP8' },
+            { id: 'audio-in', type: 'inbound-rtp', kind: 'audio', codecId: 'audio-red', bytesReceived: 1000 },
+            { id: 'audio-out', type: 'outbound-rtp', kind: 'audio', codecId: 'audio-opus', bytesSent: 1000 },
+            { id: 'video-in', type: 'inbound-rtp', kind: 'video', codecId: 'video-vp8', bytesReceived: 2000 },
+            { id: 'video-out', type: 'outbound-rtp', kind: 'video', codecId: 'video-vp8', bytesSent: 2000 },
+        ]);
+
+        const stats = await collectOnce(report);
+
+        expect(stats!.audioRxCodec).toBe('audio/red');
+        expect(stats!.audioTxCodec).toBe('audio/opus');
+        expect(stats!.videoRxCodec).toBe('video/VP8');
+        expect(stats!.videoTxCodec).toBe('video/VP8');
+    });
+
     it('surfaces framesDecoded/framesDropped and audio packet counters, summed across slots', async () => {
         const report = makeReport([
             {
