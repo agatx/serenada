@@ -150,7 +150,7 @@ async function main() {
     throw error;
   } finally {
     if (chrome) await stopChrome(chrome);
-    await rm(profilePath, { recursive: true, force: true });
+    await rm(profilePath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 
