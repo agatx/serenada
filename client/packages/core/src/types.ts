@@ -289,6 +289,11 @@ export interface SerenadaConfig {
     transports?: TransportKind[];
     /** When `true`, only use TURNS (TLS) relay candidates. */
     turnsOnly?: boolean;
+    /**
+     * Whether to prefer/enable Opus RED (RFC 2198 redundancy for Opus audio codec)
+     * on audio transceivers for audio loss resilience. Defaults to `false`.
+     */
+    enableOpusRed?: boolean;
     /** Custom logger for SDK diagnostic output. */
     logger?: SerenadaLogger;
 }

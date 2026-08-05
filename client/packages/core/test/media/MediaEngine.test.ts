@@ -187,6 +187,7 @@ class FakeRtcRtpSender {
 class FakeRtcRtpTransceiver {
     readonly receiver: RTCRtpReceiver;
     currentDirection: RTCRtpTransceiverDirection | null = null;
+    preferredCodecs: RTCRtpCodecCapability[] = [];
 
     constructor(
         kind: 'audio' | 'video',
@@ -197,6 +198,10 @@ class FakeRtcRtpTransceiver {
         this.receiver = {
             track: createMediaTrack(kind),
         } as RTCRtpReceiver;
+    }
+
+    setCodecPreferences(codecs: RTCRtpCodecCapability[]): void {
+        this.preferredCodecs = codecs;
     }
 }
 
@@ -299,6 +304,28 @@ async function flushPromises(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
+}
+
+function installAudioCodecCapabilities(): () => void {
+    const originalRtcRtpSender = (globalThis as Record<string, unknown>).RTCRtpSender;
+    (globalThis as Record<string, unknown>).RTCRtpSender = {
+        getCapabilities: (kind: string) => {
+            if (kind !== 'audio') return null;
+            return {
+                codecs: [
+                    { mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
+                    { mimeType: 'audio/red', clockRate: 48000, channels: 2 },
+                ],
+            };
+        },
+    };
+    return () => {
+        if (originalRtcRtpSender === undefined) {
+            delete (globalThis as Record<string, unknown>).RTCRtpSender;
+        } else {
+            (globalThis as Record<string, unknown>).RTCRtpSender = originalRtcRtpSender;
+        }
+    };
 }
 
 describe('MediaEngine', () => {
@@ -2107,5 +2134,75 @@ describe('MediaEngine', () => {
         }
 
         expect(handled).toEqual(new Set(readSharedNegotiationScenarios().map(scenario => scenario.id)));
+    });
+
+    it('configures receive-only audio transceiver with Opus RED when enabled', () => {
+        const restoreCapabilities = installAudioCodecCapabilities();
+        try {
+            const engine = new MediaEngine({ enableOpusRed: true }, vi.fn());
+            engine.updateRoomState({ roomId: 'room-1', participants: [{ cid: 'peer-red' }] }, 'local-cid');
+
+            const peer = engine.getPeerConnectionsMap().get('peer-red') as FakeRtcPeerConnection | undefined;
+            expect(peer).toBeDefined();
+
+            const audioTransceiver = peer?.transceivers.find(transceiver => transceiver.receiver.track.kind === 'audio');
+            expect(audioTransceiver).toBeDefined();
+            expect(audioTransceiver?.preferredCodecs).toEqual([
+                { mimeType: 'audio/red', clockRate: 48000, channels: 2 },
+                { mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
+            ]);
+
+            engine.destroy();
+        } finally {
+            restoreCapabilities();
+        }
+    });
+
+    it('configures addTrack audio transceiver with Opus RED when local media starts first', async () => {
+        const restoreCapabilities = installAudioCodecCapabilities();
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia: vi.fn().mockResolvedValue(createMediaStream()),
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+
+        try {
+            const engine = new MediaEngine({ enableOpusRed: true, initialVideoEnabled: false }, vi.fn());
+            await engine.startLocalMedia();
+            engine.updateRoomState({ roomId: 'room-1', participants: [{ cid: 'peer-red' }] }, 'local-cid');
+
+            const peer = engine.getPeerConnectionsMap().get('peer-red') as FakeRtcPeerConnection | undefined;
+            const audioTransceiver = peer?.transceivers.find(transceiver => transceiver.sender.track?.kind === 'audio');
+            expect(audioTransceiver?.preferredCodecs).toEqual([
+                { mimeType: 'audio/red', clockRate: 48000, channels: 2 },
+                { mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
+            ]);
+
+            engine.destroy();
+        } finally {
+            restoreCapabilities();
+        }
+    });
+
+    it('leaves audio codec preferences unchanged when Opus RED is disabled', () => {
+        const restoreCapabilities = installAudioCodecCapabilities();
+        try {
+            const engine = new MediaEngine({}, vi.fn());
+            engine.updateRoomState({ roomId: 'room-1', participants: [{ cid: 'peer-opus' }] }, 'local-cid');
+
+            const peer = engine.getPeerConnectionsMap().get('peer-opus') as FakeRtcPeerConnection | undefined;
+            const audioTransceiver = peer?.transceivers.find(transceiver => transceiver.receiver.track.kind === 'audio');
+            expect(audioTransceiver?.preferredCodecs).toEqual([]);
+
+            engine.destroy();
+        } finally {
+            restoreCapabilities();
+        }
     });
 });

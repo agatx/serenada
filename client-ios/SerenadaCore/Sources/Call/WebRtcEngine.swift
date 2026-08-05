@@ -170,6 +170,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
     // today. When true, screen share rides a SEPARATE content track/transceiver
     // for capable peers (per-peer routing decided at slot creation).
     private let enableIndependentContentVideo: Bool
+    private let enableOpusRed: Bool
 
     private var audioPipelinePrimer: LocalAudioPipelinePrimer?
 
@@ -184,12 +185,14 @@ internal final class WebRtcEngine: SessionMediaEngine {
         isHdVideoExperimentalEnabled: Bool,
         videoMediaEnabled: Bool = true,
         enableIndependentContentVideo: Bool = false,
+        enableOpusRed: Bool = false,
         screenShareMode: ScreenShareMode = .disabled,
         availableCameraModes: [LocalCameraMode] = defaultCameraModes
     ) {
         self.logger = logger
         self.videoMediaEnabled = videoMediaEnabled
         self.enableIndependentContentVideo = enableIndependentContentVideo
+        self.enableOpusRed = enableOpusRed
 
         self.cameraController = CameraCaptureController(
             localVideoSource: nil,
@@ -480,6 +483,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
             videoReceiveEnabled: videoMediaEnabled,
             supportsIndependentContentVideo: independentRouted,
             isOfferOwner: isOfferOwner,
+            enableOpusRed: enableOpusRed,
             onLocalIceCandidate: onLocalIceCandidate,
             onRemoteVideoTrack: { remoteCid, track in
                 onRemoteVideoTrack(remoteCid, track)

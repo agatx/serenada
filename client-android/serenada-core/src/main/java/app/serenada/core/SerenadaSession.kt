@@ -1482,6 +1482,7 @@ class SerenadaSession internal constructor(
             isHdVideoExperimentalEnabled = config.isHdVideoExperimentalEnabled,
             videoMediaEnabled = videoMediaEnabled,
             enableIndependentContentVideo = config.enableIndependentContentVideo,
+            enableOpusRed = config.enableOpusRed,
             availableCameraModes = availableCameraModes,
             logger = logger,
         )

@@ -140,6 +140,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private let onSignalingStateChange: (String, String) -> Void
     private let onRenegotiationNeeded: (String) -> Void
     private let videoReceiveEnabled: Bool
+    private let enableOpusRed: Bool
     private let logger: SerenadaLogger?
     private let rendererAttachmentQueue: DispatchQueue
     /// Whether the local participant is the deterministic offer owner for this
@@ -199,6 +200,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         videoReceiveEnabled: Bool = true,
         supportsIndependentContentVideo: Bool = false,
         isOfferOwner: @escaping () -> Bool = { false },
+        enableOpusRed: Bool = false,
         onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
         onRemoteVideoTrack: @escaping (String, RTCVideoTrack?) -> Void,
         onConnectionStateChange: @escaping (String, String) -> Void,
@@ -215,6 +217,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         self.videoReceiveEnabled = videoReceiveEnabled
         self.supportsIndependentContentVideo = supportsIndependentContentVideo
         self.isOfferOwner = isOfferOwner
+        self.enableOpusRed = enableOpusRed
         self.onLocalIceCandidate = onLocalIceCandidate
         self.onRemoteVideoTrack = onRemoteVideoTrack
         self.onConnectionStateChange = onConnectionStateChange
@@ -567,6 +570,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         mediaType: RTCRtpMediaType
     ) {
         if let transceiver = peerConnection.transceivers.first(where: { $0.mediaType == mediaType }) {
+            if mediaType == .audio {
+                applyOpusRedCodecPreferences(to: transceiver)
+            }
             if transceiver.sender.track !== track {
                 transceiver.sender.track = track
             }
@@ -576,6 +582,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             }
         } else if let track {
             _ = peerConnection.add(track, streamIds: ["serenada"])
+            if mediaType == .audio, let transceiver = peerConnection.transceivers.first(where: { $0.mediaType == .audio }) {
+                applyOpusRedCodecPreferences(to: transceiver)
+            }
         }
     }
 
@@ -1085,7 +1094,9 @@ private extension PeerConnectionSlot {
         if peerConnection.transceivers.contains(where: { $0.mediaType == .audio }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
             transceiverInit.direction = .recvOnly
-            _ = peerConnection.addTransceiver(of: .audio, init: transceiverInit)
+            if let transceiver = peerConnection.addTransceiver(of: .audio, init: transceiverInit) {
+                applyOpusRedCodecPreferences(to: transceiver)
+            }
         }
         // Capable peers manage their own video m-lines: the owner pre-creates the
         // ordered camera+content transceivers, and the answerer materializes them
@@ -1097,6 +1108,18 @@ private extension PeerConnectionSlot {
             transceiverInit.direction = .recvOnly
             _ = peerConnection.addTransceiver(of: .video, init: transceiverInit)
         }
+    }
+
+    private func applyOpusRedCodecPreferences(to transceiver: RTCRtpTransceiver) {
+        guard enableOpusRed else { return }
+        guard let factory else { return }
+        let codecs = factory.rtpSenderCapabilities(forKind: kRTCMediaStreamTrackKindAudio).codecs
+        guard let redCodec = codecs.first(where: {
+            $0.name.caseInsensitiveCompare("red") == .orderedSame ||
+            $0.mimeType.caseInsensitiveCompare("audio/red") == .orderedSame
+        }) else { return }
+        let preferredCodecs = [redCodec] + codecs.filter { $0 != redCodec }
+        transceiver.setCodecPreferences(preferredCodecs)
     }
 
     private func flushPendingIceCandidates() {

@@ -438,6 +438,7 @@ public final class SerenadaSession: ObservableObject {
             logger: logger, isHdVideoExperimentalEnabled: false,
             videoMediaEnabled: config.videoMediaEnabled,
             enableIndependentContentVideo: config.enableIndependentContentVideo,
+            enableOpusRed: config.enableOpusRed,
             screenShareMode: config.screenShareMode,
             availableCameraModes: self.availableCameraModes
         )

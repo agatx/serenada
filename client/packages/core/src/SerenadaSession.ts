@@ -403,6 +403,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 videoCaptureSupported: this.availableCameraModes.length > 0,
                 videoMediaEnabled,
                 enableIndependentContentVideo: config.enableIndependentContentVideo === true,
+                enableOpusRed: config.enableOpusRed === true,
                 deferInitialAnswer: config.deferInitialAnswer === true,
             },
             (type, payload, to) => {

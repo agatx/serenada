@@ -84,6 +84,8 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
     public var audioCoordinator: SerenadaAudioCoordinator?
     /// Audio policy passed to the coordinator when a call session activates.
     public var audioIntent: AudioIntent
+    /// Whether to prefer/enable Opus RED (RFC 2198 audio redundancy) on audio transceivers for audio loss resilience. Defaults to `false`.
+    public var enableOpusRed: Bool
 
     public init(
         serverHost: String? = nil,
@@ -98,7 +100,8 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
         transports: [SerenadaTransport] = [.ws, .sse],
         proximityMonitoringEnabled: Bool = false,
         audioCoordinator: SerenadaAudioCoordinator? = nil,
-        audioIntent: AudioIntent = AudioIntent()
+        audioIntent: AudioIntent = AudioIntent(),
+        enableOpusRed: Bool = false
     ) {
         self.serverHost = serverHost
         self.signalingProvider = signalingProvider
@@ -113,6 +116,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
         self.proximityMonitoringEnabled = proximityMonitoringEnabled
         self.audioCoordinator = audioCoordinator
         self.audioIntent = audioIntent
+        self.enableOpusRed = enableOpusRed
     }
 
     public static func == (lhs: SerenadaConfig, rhs: SerenadaConfig) -> Bool {
@@ -129,6 +133,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
             && haveSameProvider(lhs.signalingProvider, rhs.signalingProvider)
             && lhs.audioCoordinator === rhs.audioCoordinator
             && lhs.audioIntent == rhs.audioIntent
+            && lhs.enableOpusRed == rhs.enableOpusRed
     }
 }
 

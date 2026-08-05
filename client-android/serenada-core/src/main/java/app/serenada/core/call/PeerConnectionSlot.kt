@@ -52,6 +52,7 @@ internal class PeerConnectionSlot(
     // content sender so a typical display track fits the negotiated envelope.
     private val contentSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy =
         { WebRtcEngine.VideoSenderPolicy(null, null, null, null) },
+    private val enableOpusRed: Boolean = false,
     private val logger: SerenadaLogger? = null,
 ) : PeerConnectionSlotProtocol {
     private companion object {
@@ -567,6 +568,9 @@ internal class PeerConnectionSlot(
     ) {
         val transceiver = pc.transceivers.firstOrNull { it.mediaType == mediaType }
         if (transceiver != null) {
+            if (mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO) {
+                applyOpusRedCodecPreferences(transceiver)
+            }
             val sender = transceiver.sender
             if (sender.track() !== track) {
                 sender.setTrack(track, false)
@@ -582,6 +586,11 @@ internal class PeerConnectionSlot(
             onAttached(sender)
         } else if (track != null) {
             val sender = pc.addTrack(track, listOf("serenada"))
+            if (mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO) {
+                pc.transceivers.firstOrNull { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO }?.let {
+                    applyOpusRedCodecPreferences(it)
+                }
+            }
             onAttached(sender)
         }
     }
@@ -1128,10 +1137,11 @@ internal class PeerConnectionSlot(
 
     private fun ensureReceiveTransceivers(pc: PeerConnection) {
         if (localAudioTrack == null) {
-            pc.addTransceiver(
+            val audioTransceiver = pc.addTransceiver(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
                 RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
             )
+            audioTransceiver?.let { applyOpusRedCodecPreferences(it) }
         }
         // Capable peers manage their own video m-lines: the owner pre-creates the
         // ordered camera+content transceivers, and the answerer materializes them
@@ -1143,6 +1153,19 @@ internal class PeerConnectionSlot(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
                 RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
             )
+        }
+    }
+
+    private fun applyOpusRedCodecPreferences(transceiver: RtpTransceiver) {
+        if (!enableOpusRed) return
+        val senderCapabilities = factory?.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO) ?: return
+        val codecs = senderCapabilities.codecs ?: return
+        val redCodec = codecs.find { it.name.equals("red", ignoreCase = true) || it.mimeType.equals("audio/red", ignoreCase = true) } ?: return
+        val preferredCodecs = listOf(redCodec) + codecs.filter { it != redCodec }
+        runCatching {
+            transceiver.setCodecPreferences(preferredCodecs)
+        }.onFailure { err ->
+            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "Failed to apply Opus RED codec preferences: ${err.message}")
         }
     }
 

@@ -137,6 +137,8 @@ export interface MediaEngineConfig {
     initialContentRevision?: number;
     /** Defer initial offer timeout/ICE restart while awaiting the first answer. */
     deferInitialAnswer?: boolean;
+    /** When `true`, prefer/enable Opus RED (RFC 2198 audio redundancy) on audio transceivers. */
+    enableOpusRed?: boolean;
 }
 
 /**
@@ -159,6 +161,7 @@ export class MediaEngine {
     readonly videoCaptureSupported: boolean;
     readonly videoMediaEnabled: boolean;
     readonly enableIndependentContentVideo: boolean;
+    readonly enableOpusRed: boolean;
     // Independent-content mode: remote tracks split by role. Empty for legacy
     // peers (those keep using `remoteStreams` / `remoteStream`). Exposed via
     // getRemoteCameraStream / getRemoteContentStream.
@@ -250,6 +253,7 @@ export class MediaEngine {
         this.initialVideoEnabled = config.initialVideoEnabled !== false;
         this.videoMediaEnabled = config.videoMediaEnabled !== false;
         this.enableIndependentContentVideo = this.videoMediaEnabled && config.enableIndependentContentVideo === true;
+        this.enableOpusRed = config.enableOpusRed === true;
         this.videoCaptureSupported = this.videoMediaEnabled && config.videoCaptureSupported !== false;
         this.canScreenShare = this.videoMediaEnabled && !!navigator.mediaDevices?.getDisplayMedia;
         this.seedContentRevision(config.initialContentRevision);
@@ -1495,6 +1499,9 @@ export class MediaEngine {
         } else if (!this.findTransceiver(pc, 'audio') && !pc.getSenders().some(sender => sender.track?.kind === 'audio')) {
             peer.mediaRoles.audio = pc.addTransceiver('audio', { direction: 'recvonly' });
         }
+        if (peer.mediaRoles.audio) {
+            this.applyAudioCodecPreferences(peer.mediaRoles.audio);
+        }
 
         this.ensureOwnerVideoTransceivers(peer);
     }
@@ -1692,6 +1699,7 @@ export class MediaEngine {
             ?? peer.pc.getTransceivers().find(t => t.sender.track?.kind === 'audio');
         if (audioTransceiver) {
             peer.mediaRoles.audio = audioTransceiver;
+            this.applyAudioCodecPreferences(audioTransceiver);
             if (audioTransceiver.sender.track !== audioTrack) {
                 void audioTransceiver.sender.replaceTrack(audioTrack).catch(err =>
                     this.logger?.log('warning', 'WebRTC', `Failed to attach audio to capable peer: ${formatError(err)}`));
@@ -2219,6 +2227,25 @@ export class MediaEngine {
         }
     }
 
+    private applyAudioCodecPreferences(transceiver: RTCRtpTransceiver): void {
+        if (!this.enableOpusRed) return;
+        if (typeof transceiver.setCodecPreferences !== 'function') return;
+        try {
+            const senderCaps = typeof RTCRtpSender !== 'undefined' && RTCRtpSender.getCapabilities ? RTCRtpSender.getCapabilities('audio') : null;
+            const receiverCaps = typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities ? RTCRtpReceiver.getCapabilities('audio') : null;
+            const capabilities = senderCaps ?? receiverCaps;
+            if (!capabilities || !capabilities.codecs) return;
+
+            const redCodec = capabilities.codecs.find(c => c.mimeType.toLowerCase() === 'audio/red');
+            if (!redCodec) return;
+
+            const otherCodecs = capabilities.codecs.filter(c => c !== redCodec);
+            transceiver.setCodecPreferences([redCodec, ...otherCodecs]);
+        } catch (err) {
+            this.logger?.log('warning', 'WebRTC', `Failed to apply audio codec preferences: ${formatError(err)}`);
+        }
+    }
+
     private async acquireCameraTrack(targetFacingMode: 'user' | 'environment', enabled: boolean): Promise<MediaStreamTrack> {
         let cameraStream: MediaStream;
         try {
@@ -2457,6 +2484,10 @@ export class MediaEngine {
     private ensureMediaTransceivers(pc: RTCPeerConnection): void {
         if (!this.findTransceiver(pc, 'audio') && !pc.getSenders().some(sender => sender.track?.kind === 'audio')) {
             pc.addTransceiver('audio', { direction: 'recvonly' });
+        }
+        const audioTransceiver = this.findTransceiver(pc, 'audio');
+        if (audioTransceiver) {
+            this.applyAudioCodecPreferences(audioTransceiver);
         }
         if (this.videoMediaEnabled && !this.findTransceiver(pc, 'video') && !pc.getSenders().some(sender => sender.track?.kind === 'video')) {
             pc.addTransceiver('video', { direction: this.videoCaptureSupported ? 'sendrecv' : 'recvonly' });

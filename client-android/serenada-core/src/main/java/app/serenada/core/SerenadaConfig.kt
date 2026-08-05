@@ -68,6 +68,8 @@ data class SerenadaConfig(
     val audioCoordinator: SerenadaAudioCoordinator? = null,
     /** Audio policy passed to the coordinator when a call session activates. */
     val audioIntent: AudioIntent = AudioIntent(),
+    /** Whether to prefer/enable Opus RED (RFC 2198 audio redundancy) on audio transceivers for audio loss resilience (default false). */
+    val enableOpusRed: Boolean = false,
 )
 
 /** Available signaling transport types. */
