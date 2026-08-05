@@ -333,6 +333,8 @@ public final class SerenadaSession: ObservableObject {
 
     /// Test-only counter incremented on each `media_liveness` broadcast.
     internal var mediaLivenessBroadcastCount: Int { mediaLivenessEmitCount }
+    /// Test-only accessor for the effective per-session Opus RED setting.
+    internal var effectiveOpusRedEnabled: Bool { config.enableOpusRed }
 
     private let recoveryStorage: RecoveryStorage
     private var sessionStartTs: Int64?
@@ -362,7 +364,8 @@ public final class SerenadaSession: ObservableObject {
                 transports: config.transports,
                 proximityMonitoringEnabled: config.proximityMonitoringEnabled,
                 audioCoordinator: config.audioCoordinator,
-                audioIntent: config.audioIntent
+                audioIntent: config.audioIntent,
+                enableOpusRed: config.enableOpusRed
             )
             : config
         self.init(
