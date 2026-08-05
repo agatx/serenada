@@ -442,7 +442,9 @@ final class CallManager: ObservableObject {
                     )
                 ),
                 cameraModes: cameraModes,
-                proximityMonitoringEnabled: true
+                proximityMonitoringEnabled: true,
+                // Bundled iOS app opt-in; the SDK default remains disabled for integrators.
+                enableOpusRed: true
             )
         )
         core.logger = PrintSerenadaLogger()

@@ -288,10 +288,10 @@ const CallRoom: React.FC = () => {
             serverHost: getConfiguredServerHost(),
             logger: new ConsoleSerenadaLogger(),
             turnsOnly,
-            // Bundled web app opt-in: the headless SDK default remains false for
-            // external integrators, but this app intentionally ships the
-            // independent screen-share media path.
+            // Bundled web app opt-ins: the headless SDK defaults remain false
+            // for external integrators.
             enableIndependentContentVideo: BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED,
+            enableOpusRed: true,
         });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
         const nextSession = core.join(callUrl, { displayName: displayNameRef.current.trim() || undefined });
