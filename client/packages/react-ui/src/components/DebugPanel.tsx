@@ -47,6 +47,9 @@ const fmtMs = (v: number | null): string => (v === null ? 'n/a' : `${Math.round(
 const fmtPct = (v: number | null): string => (v === null ? 'n/a' : `${v.toFixed(1)}%`);
 const fmtKbps = (v: number | null): string => (v === null ? 'n/a' : `${Math.round(v)} kbps`);
 const fmtFps = (v: number | null): string => (v === null ? 'n/a' : `${v.toFixed(1)} fps`);
+const fmtCodec = (v: string | null | undefined): string => (
+    v?.split(' | ').map(codec => codec.replace(/^(?:audio|video)\//i, '')).join(' | ') ?? 'n/a'
+);
 const fmtFreezeWindow = (count: number | null, durationSeconds: number | null): string => {
     if (count === null || durationSeconds === null) return 'n/a';
     return `${count} / ${durationSeconds.toFixed(1)}s`;
@@ -158,7 +161,7 @@ function buildSections(
         {
             title: 'Audio Quality',
             metrics: [
-                { label: 'Codec ⇵', value: `${stats.audioRxCodec ?? 'n/a'} / ${stats.audioTxCodec ?? 'n/a'}`, status: 'na' },
+                { label: 'Codec ⇵', value: `${fmtCodec(stats.audioRxCodec)} / ${fmtCodec(stats.audioTxCodec)}`, status: 'na' },
                 { label: 'Packet loss ⇵', value: `${fmtPct(stats.audioRxPacketLossPct)} / ${fmtPct(stats.audioTxPacketLossPct)}`, status: worst(lowerIsBetter(stats.audioRxPacketLossPct, 1, 3), lowerIsBetter(stats.audioTxPacketLossPct, 1, 3)) },
                 { label: 'Jitter', value: fmtMs(stats.audioJitterMs), status: lowerIsBetter(stats.audioJitterMs, 20, 40) },
                 { label: 'Playout delay', value: fmtMs(stats.audioPlayoutDelayMs), status: lowerIsBetter(stats.audioPlayoutDelayMs, 80, 180) },
@@ -169,7 +172,7 @@ function buildSections(
         {
             title: 'Video Quality',
             metrics: [
-                { label: 'Codec ⇵', value: `${stats.videoRxCodec ?? 'n/a'} / ${stats.videoTxCodec ?? 'n/a'}`, status: 'na' },
+                { label: 'Codec ⇵', value: `${fmtCodec(stats.videoRxCodec)} / ${fmtCodec(stats.videoTxCodec)}`, status: 'na' },
                 { label: 'Packet loss ⇵', value: `${fmtPct(stats.videoRxPacketLossPct)} / ${fmtPct(stats.videoTxPacketLossPct)}`, status: worst(lowerIsBetter(stats.videoRxPacketLossPct, 1, 3), lowerIsBetter(stats.videoTxPacketLossPct, 1, 3)) },
                 { label: 'Bitrate ⇵', value: `${fmtKbps(stats.videoRxKbps)} / ${fmtKbps(stats.videoTxKbps)}`, status: worst(higherIsBetter(stats.videoRxKbps, 900, 350), higherIsBetter(stats.videoTxKbps, 900, 350)) },
                 { label: 'Render FPS', value: fmtFps(stats.videoFps), status: higherIsBetter(stats.videoFps, 24, 15) },

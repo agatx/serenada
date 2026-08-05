@@ -32,6 +32,40 @@ func joinCodecMimeTypes(_ values: [String]) -> String? {
     return codecs.sorted().joined(separator: " | ")
 }
 
+func firstAudioCodecMimeType(in sdp: String?) -> String? {
+    guard let sdp, !sdp.isEmpty else { return nil }
+    let lines = sdp.components(separatedBy: .newlines).map {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    guard let audioLineIndex = lines.firstIndex(where: { $0.hasPrefix("m=audio ") }) else { return nil }
+    let audioLineParts = lines[audioLineIndex].split(whereSeparator: \Character.isWhitespace)
+    guard audioLineParts.count > 3 else { return nil }
+    let firstPayloadType = String(audioLineParts[3])
+
+    for line in lines.dropFirst(audioLineIndex + 1) {
+        if line.hasPrefix("m=") { break }
+        guard line.lowercased().hasPrefix("a=rtpmap:") else { continue }
+        let mapping = line.dropFirst("a=rtpmap:".count).split(maxSplits: 1, whereSeparator: \Character.isWhitespace)
+        guard mapping.count == 2, mapping[0] == firstPayloadType else { continue }
+        guard let codec = mapping[1].split(separator: "/").first else { return nil }
+        return "audio/\(codec.lowercased())"
+    }
+    return nil
+}
+
+// Native WebRTC stats report the inner Opus codec for an RTP stream wrapped
+// in RED. The negotiated answer carries the outer codec that is actually sent.
+func effectiveAudioCodecMimeType(
+    statsCodecMimeType: String?,
+    negotiatedAnswerCodecMimeType: String?
+) -> String? {
+    if statsCodecMimeType?.lowercased() == "audio/opus",
+       negotiatedAnswerCodecMimeType?.lowercased() == "audio/red" {
+        return negotiatedAnswerCodecMimeType
+    }
+    return statsCodecMimeType
+}
+
 func memberString(_ stat: RTCStatistics?, key: String) -> String? {
     guard let value = stat?.values[key] else { return nil }
     if let str = value as? String {

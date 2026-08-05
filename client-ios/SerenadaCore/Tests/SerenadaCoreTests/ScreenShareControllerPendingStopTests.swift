@@ -47,6 +47,7 @@ final class ScreenShareControllerPendingStopTests: XCTestCase {
     }
 
     private func makeContentSource() -> RTCVideoSource {
+        initializeSerenadaWebRtcFieldTrialsIfNeeded()
         let encoder = RTCDefaultVideoEncoderFactory()
         let decoder = RTCDefaultVideoDecoderFactory()
         let factory = RTCPeerConnectionFactory(encoderFactory: encoder, decoderFactory: decoder)

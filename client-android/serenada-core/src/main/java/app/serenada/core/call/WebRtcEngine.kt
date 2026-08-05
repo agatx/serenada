@@ -156,6 +156,7 @@ internal class WebRtcEngine(
         val encoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, false)
         val decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
         peerConnectionFactory = PeerConnectionFactory.builder()
+            .setFieldTrials(SERENADA_WEBRTC_FIELD_TRIALS)
             .setAudioDeviceModule(audioDeviceModule)
             .setVideoEncoderFactory(encoderFactory)
             .setVideoDecoderFactory(decoderFactory)

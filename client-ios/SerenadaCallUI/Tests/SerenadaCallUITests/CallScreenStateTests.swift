@@ -16,8 +16,8 @@ final class CallScreenStateTests: XCTestCase {
         let audioCodec = sections.first { $0.title == "Audio Quality" }?.metrics.first { $0.label == "Codec ⇵" }
         let videoCodec = sections.first { $0.title == "Video Quality" }?.metrics.first { $0.label == "Codec ⇵" }
 
-        XCTAssertEqual(audioCodec?.value, "audio/red / audio/opus")
-        XCTAssertEqual(videoCodec?.value, "video/VP8 / video/H264")
+        XCTAssertEqual(audioCodec?.value, "red / opus")
+        XCTAssertEqual(videoCodec?.value, "VP8 / H264")
     }
 
     func testRouteOptionsKeepActiveEarpieceWhenBluetoothIsOnlyAvailable() {

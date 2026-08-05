@@ -41,6 +41,7 @@ final class RemoteVideoTransceiverRoutingTests: XCTestCase {
     }
 
     private func makeNegotiatedPeer() throws -> NegotiatedPeer {
+        initializeSerenadaWebRtcFieldTrialsIfNeeded()
         let factory = RTCPeerConnectionFactory(
             encoderFactory: RTCDefaultVideoEncoderFactory(),
             decoderFactory: RTCDefaultVideoDecoderFactory()

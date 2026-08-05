@@ -26,7 +26,7 @@ class DebugPanelSectionsTest {
         val audioCodec = sections.first { it.title == "Audio Quality" }.metrics.first { it.label == "Codec \u21F5" }
         val videoCodec = sections.first { it.title == "Video Quality" }.metrics.first { it.label == "Codec \u21F5" }
 
-        assertEquals("audio/red / audio/opus", audioCodec.value)
-        assertEquals("video/VP8 / video/H264", videoCodec.value)
+        assertEquals("red / opus", audioCodec.value)
+        assertEquals("VP8 / H264", videoCodec.value)
     }
 }

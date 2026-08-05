@@ -501,6 +501,7 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
 
     static func warmUpFactory() {
         if sharedFactory == nil {
+            initializeSerenadaWebRtcFieldTrialsIfNeeded()
             let encoderFactory = RTCDefaultVideoEncoderFactory()
             let decoderFactory = RTCDefaultVideoDecoderFactory()
             sharedFactory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)

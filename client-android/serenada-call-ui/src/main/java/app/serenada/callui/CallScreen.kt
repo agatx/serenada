@@ -1309,7 +1309,7 @@ internal fun buildDebugPanelSections(
                 listOf(
                     DebugPanelMetric(
                         "Codec \u21F5",
-                        "${realtimeStats?.audioRxCodec ?: "n/a"} / ${realtimeStats?.audioTxCodec ?: "n/a"}",
+                        "${formatCodec(realtimeStats?.audioRxCodec)} / ${formatCodec(realtimeStats?.audioTxCodec)}",
                         DebugStatus.NA
                     ),
                     DebugPanelMetric(
@@ -1345,7 +1345,7 @@ internal fun buildDebugPanelSections(
                 listOf(
                     DebugPanelMetric(
                         "Codec \u21F5",
-                        "${realtimeStats?.videoRxCodec ?: "n/a"} / ${realtimeStats?.videoTxCodec ?: "n/a"}",
+                        "${formatCodec(realtimeStats?.videoRxCodec)} / ${formatCodec(realtimeStats?.videoTxCodec)}",
                         DebugStatus.NA
                     ),
                     DebugPanelMetric(
@@ -1405,6 +1405,13 @@ private fun formatKbps(value: Double?): String {
 
 private fun formatFps(value: Double?): String {
     return if (value == null) "n/a" else "%.1f fps".format(Locale.US, value)
+}
+
+private fun formatCodec(value: String?): String {
+    return value
+        ?.split(" | ")
+        ?.joinToString(" | ") { codec -> codec.replace(Regex("^(audio|video)/", RegexOption.IGNORE_CASE), "") }
+        ?: "n/a"
 }
 
 private fun formatFreezeWindow(count: Long?, durationSeconds: Double?): String {

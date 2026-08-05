@@ -196,6 +196,8 @@ Set `SerenadaConfig.enableOpusRed` to `true` to prefer Opus RED (RFC 2198) for a
 
 The setting changes only WebRTC audio codec preference; it does not add or change Serenada signaling fields. When the peer's WebRTC runtime supports `audio/red`, offer/answer negotiation can select RED. If the peer does not support RED, negotiation excludes it and continues with plain Opus. This makes incremental rollout safe across mixed old and new SDK versions: an older endpoint either negotiates the RED support already present in its WebRTC runtime or falls back to Opus.
 
+The native SDKs enable the bundled libwebrtc RED capability when creating their peer-connection factories. This only makes `audio/red` available for negotiation; `enableOpusRed` remains the selection gate that promotes RED ahead of plain Opus.
+
 Roll out the flag incrementally and monitor outbound audio bitrate, packet loss, concealed samples, and call-quality metrics. RED sends redundant audio data and therefore trades additional bandwidth for better recovery from packet loss.
 
 ## Camera Modes

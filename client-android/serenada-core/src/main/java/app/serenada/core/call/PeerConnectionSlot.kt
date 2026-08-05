@@ -1262,6 +1262,13 @@ internal class PeerConnectionSlot(
         val statsById = report.statsMap
         val audio = MediaTotals()
         val video = MediaTotals()
+        val connection = peerConnection
+        val answerDescription = when {
+            connection?.localDescription?.type == SessionDescription.Type.ANSWER -> connection.localDescription
+            connection?.remoteDescription?.type == SessionDescription.Type.ANSWER -> connection.remoteDescription
+            else -> null
+        }
+        val negotiatedAudioCodecMimeType = firstAudioCodecMimeType(answerDescription?.description)
 
         var selectedCandidatePair: RTCStats? = null
         var fallbackCandidatePair: RTCStats? = null
@@ -1286,7 +1293,13 @@ internal class PeerConnectionSlot(
 
             when (stat.type) {
                 "inbound-rtp" -> {
-                    resolveCodecMimeType(stat, statsById)?.let(bucket.inboundCodecMimeTypes::add)
+                    val reportedCodecMimeType = resolveCodecMimeType(stat, statsById)
+                    val codecMimeType = if (kind == "audio") {
+                        effectiveAudioCodecMimeType(reportedCodecMimeType, negotiatedAudioCodecMimeType)
+                    } else {
+                        reportedCodecMimeType
+                    }
+                    codecMimeType?.let(bucket.inboundCodecMimeTypes::add)
                     bucket.inboundRtpCount += 1
                     memberLong(stat, "packetsReceived")?.let { bucket.inboundPacketsReceived += it; bucket.sawPacketsReceived = true }
                     memberLong(stat, "packetsLost")?.let { bucket.inboundPacketsLost += max(0L, it); bucket.sawPacketsLost = true }
@@ -1324,7 +1337,13 @@ internal class PeerConnectionSlot(
                 }
 
                 "outbound-rtp" -> {
-                    resolveCodecMimeType(stat, statsById)?.let(bucket.outboundCodecMimeTypes::add)
+                    val reportedCodecMimeType = resolveCodecMimeType(stat, statsById)
+                    val codecMimeType = if (kind == "audio") {
+                        effectiveAudioCodecMimeType(reportedCodecMimeType, negotiatedAudioCodecMimeType)
+                    } else {
+                        reportedCodecMimeType
+                    }
+                    codecMimeType?.let(bucket.outboundCodecMimeTypes::add)
                     bucket.outboundPacketsSent += memberLong(stat, "packetsSent") ?: 0L
                     bucket.outboundBytes += memberLong(stat, "bytesSent") ?: 0L
                     bucket.outboundPacketsRetransmitted += memberLong(stat, "retransmittedPacketsSent") ?: 0L

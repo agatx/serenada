@@ -1196,6 +1196,12 @@ private extension PeerConnectionSlot {
         let stats = Array(report.statistics.values)
         var audio = MediaTotals()
         var video = MediaTotals()
+        let localDescription = peerConnection?.localDescription
+        let remoteDescription = peerConnection?.remoteDescription
+        let answerDescription = localDescription?.type == .answer
+            ? localDescription
+            : (remoteDescription?.type == .answer ? remoteDescription : nil)
+        let negotiatedAudioCodecMimeType = firstAudioCodecMimeType(in: answerDescription?.sdp)
 
         var selectedCandidatePair: RTCStatistics?
         var fallbackCandidatePair: RTCStatistics?
@@ -1217,9 +1223,14 @@ private extension PeerConnectionSlot {
 
             guard let kind = mediaKind(for: stat) else { continue }
             if kind == "audio" {
-                if stat.type == "inbound-rtp", let codec = resolveCodecMimeType(for: stat, statsById: report.statistics) {
+                let reportedCodec = resolveCodecMimeType(for: stat, statsById: report.statistics)
+                let effectiveCodec = effectiveAudioCodecMimeType(
+                    statsCodecMimeType: reportedCodec,
+                    negotiatedAnswerCodecMimeType: negotiatedAudioCodecMimeType
+                )
+                if stat.type == "inbound-rtp", let codec = effectiveCodec {
                     audio.inboundCodecMimeTypes.insert(codec)
-                } else if stat.type == "outbound-rtp", let codec = resolveCodecMimeType(for: stat, statsById: report.statistics) {
+                } else if stat.type == "outbound-rtp", let codec = effectiveCodec {
                     audio.outboundCodecMimeTypes.insert(codec)
                 }
                 collectMediaStat(

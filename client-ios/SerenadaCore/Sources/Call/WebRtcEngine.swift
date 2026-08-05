@@ -206,6 +206,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
             logger: logger
         )
 
+        initializeSerenadaWebRtcFieldTrialsIfNeeded()
         Self.initializeSslIfNeeded()
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
@@ -711,4 +712,3 @@ private final class WeakAnyBox {
         self.value = value
     }
 }
-

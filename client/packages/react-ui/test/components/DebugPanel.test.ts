@@ -19,10 +19,10 @@ function makeStats(): CallStats {
 }
 
 describe('DebugPanel codec metrics', () => {
-    it('shows inbound and outbound codec MIME types for audio and video', () => {
+    it('shows inbound and outbound codec names without media prefixes', () => {
         const markup = renderToStaticMarkup(createElement(DebugPanel, { stats: makeStats() }));
 
-        expect(markup).toContain('audio/red / audio/opus');
-        expect(markup).toContain('video/VP8 / video/H264');
+        expect(markup).toContain('red / opus');
+        expect(markup).toContain('VP8 / H264');
     });
 });
