@@ -4,8 +4,7 @@ import XCTest
 
 @MainActor
 final class AudioRedCapabilityTests: XCTestCase {
-    func testFieldTrialMakesAudioRedAvailableToCodecPreferences() {
-        initializeSerenadaWebRtcFieldTrialsIfNeeded()
+    func testAudioRedIsAvailableToCodecPreferences() {
         let factory = RTCPeerConnectionFactory(
             encoderFactory: RTCDefaultVideoEncoderFactory(),
             decoderFactory: RTCDefaultVideoDecoderFactory()
@@ -17,7 +16,6 @@ final class AudioRedCapabilityTests: XCTestCase {
     }
 
     func testRedPreferenceProducesRedFirstAudioOffer() throws {
-        initializeSerenadaWebRtcFieldTrialsIfNeeded()
         let factory = RTCPeerConnectionFactory(
             encoderFactory: RTCDefaultVideoEncoderFactory(),
             decoderFactory: RTCDefaultVideoDecoderFactory()
