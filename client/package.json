@@ -12,7 +12,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:opus-red-interop": "node ../scripts/test-opus-red-mixed-fleet.mjs"
   },
   "dependencies": {
     "@agatx/serenada-core": "0.9.3",

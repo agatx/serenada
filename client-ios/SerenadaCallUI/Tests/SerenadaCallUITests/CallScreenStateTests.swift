@@ -3,6 +3,23 @@ import SerenadaCore
 import XCTest
 
 final class CallScreenStateTests: XCTestCase {
+    func testDebugPanelShowsInboundAndOutboundAudioAndVideoCodecs() {
+        var uiState = CallUiState()
+        uiState.realtimeStats = RealtimeCallStats(
+            audioRxCodec: "audio/red",
+            audioTxCodec: "audio/opus",
+            videoRxCodec: "video/VP8",
+            videoTxCodec: "video/H264"
+        )
+
+        let sections = buildDebugPanelSections(uiState: uiState)
+        let audioCodec = sections.first { $0.title == "Audio Quality" }?.metrics.first { $0.label == "Codec ⇵" }
+        let videoCodec = sections.first { $0.title == "Video Quality" }?.metrics.first { $0.label == "Codec ⇵" }
+
+        XCTAssertEqual(audioCodec?.value, "red / opus")
+        XCTAssertEqual(videoCodec?.value, "VP8 / H264")
+    }
+
     func testRouteOptionsKeepActiveEarpieceWhenBluetoothIsOnlyAvailable() {
         let earpiece = AudioDevice(
             id: "earpiece",

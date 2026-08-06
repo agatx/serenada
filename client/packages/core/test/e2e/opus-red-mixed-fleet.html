@@ -1,0 +1,229 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Opus RED and DTX mixed-fleet interop</title>
+<pre id="result">RUNNING</pre>
+<script type="module">
+const resultElement = document.querySelector('#result');
+
+const timeout = (promise, ms, label) => Promise.race([
+  promise,
+  new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
+]);
+
+function audioCodecs() {
+  return RTCRtpSender.getCapabilities('audio')?.codecs ?? [];
+}
+
+// `old-default` models the SDK before enableOpusRed/enableOpusDtx: it leaves
+// runtime codec preferences and SDP untouched. `old-no-red` additionally
+// models an older runtime without RED.
+function configure(transceiver, mode) {
+  const codecs = audioCodecs();
+  const red = codecs.find(codec => codec.mimeType.toLowerCase() === 'audio/red');
+  if (!red) throw new Error('audio/red is not available in this browser');
+
+  if (mode === 'new-enabled') {
+    transceiver.setCodecPreferences([red, ...codecs.filter(codec => codec !== red)]);
+  } else if (mode === 'old-no-red') {
+    transceiver.setCodecPreferences(codecs.filter(codec => codec !== red));
+  }
+}
+
+function enableOpusDtx(sdp) {
+  const lines = sdp.split(/\r?\n/);
+  const opusPayloads = new Set(lines.flatMap(line => {
+    const match = line.match(/^a=rtpmap:(\d+) opus\/48000\/2$/i);
+    return match ? [match[1]] : [];
+  }));
+  return lines.map(line => {
+    const match = line.match(/^a=fmtp:(\d+) (.*)$/i);
+    if (!match || !opusPayloads.has(match[1])) return line;
+    const parameters = match[2].split(';').map(value => value.trim()).filter(Boolean);
+    const dtxIndex = parameters.findIndex(value => value.split('=', 1)[0].toLowerCase() === 'usedtx');
+    if (dtxIndex >= 0) parameters[dtxIndex] = 'usedtx=1';
+    else parameters.push('usedtx=1');
+    return `a=fmtp:${match[1]} ${parameters.join(';')}`;
+  }).join('\r\n');
+}
+
+function hasOpusDtx(sdp) {
+  return /^a=fmtp:\d+ .*\busedtx=1\b/im.test(sdp);
+}
+
+async function waitForIceGathering(peerConnection) {
+  if (peerConnection.iceGatheringState === 'complete') return;
+  await timeout(new Promise(resolve => {
+    const onStateChange = () => {
+      if (peerConnection.iceGatheringState === 'complete') {
+        peerConnection.removeEventListener('icegatheringstatechange', onStateChange);
+        resolve();
+      }
+    };
+    peerConnection.addEventListener('icegatheringstatechange', onStateChange);
+  }), 5000, 'ICE gathering');
+}
+
+async function waitForConnected(peerConnection) {
+  if (peerConnection.connectionState === 'connected') return;
+  await timeout(new Promise((resolve, reject) => {
+    const onStateChange = () => {
+      if (peerConnection.connectionState === 'connected') {
+        peerConnection.removeEventListener('connectionstatechange', onStateChange);
+        resolve();
+      } else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'closed') {
+        reject(new Error(`peer connection ${peerConnection.connectionState}`));
+      }
+    };
+    peerConnection.addEventListener('connectionstatechange', onStateChange);
+  }), 10000, 'peer connection');
+}
+
+async function waitForFlowingAudio(senderPeer, receiverPeer) {
+  return timeout(new Promise(resolve => {
+    const poll = async () => {
+      const senderStats = await senderPeer.getStats();
+      const receiverStats = await receiverPeer.getStats();
+      const outbound = [...senderStats.values()].find(report =>
+        report.type === 'outbound-rtp'
+        && (report.kind === 'audio' || report.mediaType === 'audio')
+        && report.packetsSent > 2
+      );
+      const inbound = [...receiverStats.values()].find(report =>
+        report.type === 'inbound-rtp'
+        && (report.kind === 'audio' || report.mediaType === 'audio')
+        && report.packetsReceived > 2
+      );
+
+      if (outbound && inbound) {
+        resolve({
+          outboundCodec: senderStats.get(outbound.codecId)?.mimeType?.toLowerCase(),
+          inboundCodec: receiverStats.get(inbound.codecId)?.mimeType?.toLowerCase(),
+          packetsSent: outbound.packetsSent,
+          packetsReceived: inbound.packetsReceived,
+        });
+        return;
+      }
+      setTimeout(poll, 100);
+    };
+    poll();
+  }), 10000, 'audio flow');
+}
+
+async function outboundAudioPackets(peerConnection) {
+  const stats = await peerConnection.getStats();
+  const outbound = [...stats.values()].find(report =>
+    report.type === 'outbound-rtp'
+    && (report.kind === 'audio' || report.mediaType === 'audio')
+  );
+  return outbound?.packetsSent ?? 0;
+}
+
+async function mutedPacketDelta(peerConnection, track) {
+  track.enabled = false;
+  // Let the encoder transition from active audio to DTX before measuring.
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  const start = await outboundAudioPackets(peerConnection);
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  return (await outboundAudioPackets(peerConnection)) - start;
+}
+
+function audioCodecOrder(sdp) {
+  const lines = sdp.split(/\r?\n/);
+  const audioLine = lines.find(line => line.startsWith('m=audio '));
+  if (!audioLine) return [];
+
+  const codecByPayload = new Map(lines.flatMap(line => {
+    const match = line.match(/^a=rtpmap:(\d+) ([^/]+)/);
+    return match ? [[match[1], match[2].toLowerCase()]] : [];
+  }));
+  return audioLine.split(' ').slice(3).map(payload => codecByPayload.get(payload) ?? payload);
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function runCase(name, offererMode, answererMode, expectedOuterCodec, verifyMutedDtx = false) {
+  const audioContext = new AudioContext();
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  const destination = audioContext.createMediaStreamDestination();
+  gain.gain.value = 0.01;
+  oscillator.connect(gain).connect(destination);
+  oscillator.start();
+  await audioContext.resume();
+
+  const offerer = new RTCPeerConnection();
+  const answerer = new RTCPeerConnection();
+  const audioTrack = destination.stream.getAudioTracks()[0];
+  const offererTransceiver = offerer.addTransceiver(audioTrack, {
+    direction: 'sendonly',
+    streams: [destination.stream],
+  });
+  configure(offererTransceiver, offererMode);
+
+  try {
+    const createdOffer = await offerer.createOffer();
+    const localOffer = offererMode === 'new-enabled'
+      ? { type: createdOffer.type, sdp: enableOpusDtx(createdOffer.sdp) }
+      : createdOffer;
+    await offerer.setLocalDescription(localOffer);
+    await waitForIceGathering(offerer);
+    await answerer.setRemoteDescription(offerer.localDescription);
+    configure(answerer.getTransceivers()[0], answererMode);
+    const createdAnswer = await answerer.createAnswer();
+    const localAnswer = answererMode === 'new-enabled'
+      ? { type: createdAnswer.type, sdp: enableOpusDtx(createdAnswer.sdp) }
+      : createdAnswer;
+    await answerer.setLocalDescription(localAnswer);
+    await waitForIceGathering(answerer);
+    await offerer.setRemoteDescription(answerer.localDescription);
+    await Promise.all([waitForConnected(offerer), waitForConnected(answerer)]);
+
+    const offerCodecOrder = audioCodecOrder(offerer.localDescription.sdp);
+    const answerCodecOrder = audioCodecOrder(answerer.localDescription.sdp);
+    const offerDtx = hasOpusDtx(offerer.localDescription.sdp);
+    const answerDtx = hasOpusDtx(answerer.localDescription.sdp);
+    const stats = await waitForFlowingAudio(offerer, answerer);
+
+    assert(
+      answerCodecOrder[0] === expectedOuterCodec,
+      `${name}: expected negotiated ${expectedOuterCodec}, got ${answerCodecOrder.join(', ')}`
+    );
+    if (expectedOuterCodec === 'opus') {
+      assert(!answerCodecOrder.includes('red'), `${name}: RED must be absent from the fallback answer`);
+    }
+    // WebRTC stats expose the inner Opus codec when RTP uses the RED wrapper.
+    assert(stats.outboundCodec === 'audio/opus', `${name}: outbound audio did not use Opus`);
+    assert(stats.inboundCodec === 'audio/opus', `${name}: inbound audio did not use Opus`);
+    if (offererMode === 'new-enabled') assert(offerDtx, `${name}: new offer did not request Opus DTX`);
+    if (answererMode === 'new-enabled') assert(answerDtx, `${name}: new answer did not request Opus DTX`);
+    const mutedPacketsSent = verifyMutedDtx ? await mutedPacketDelta(offerer, audioTrack) : undefined;
+    if (verifyMutedDtx) {
+      assert(mutedPacketsSent < 20, `${name}: muted sender emitted ${mutedPacketsSent} RTP packets in 2 seconds`);
+    }
+
+    return {
+      name, offererMode, answererMode, offerCodecOrder, answerCodecOrder,
+      offerDtx, answerDtx, mutedPacketsSent, ...stats,
+    };
+  } finally {
+    offerer.close();
+    answerer.close();
+    oscillator.stop();
+    await audioContext.close();
+  }
+}
+
+try {
+  const results = [];
+  results.push(await runCase('new offers to old RED-capable runtime', 'new-enabled', 'old-default', 'red'));
+  results.push(await runCase('old RED-capable runtime offers to new', 'old-default', 'new-enabled', 'red'));
+  results.push(await runCase('new offers to old runtime without RED', 'new-enabled', 'old-no-red', 'opus'));
+  results.push(await runCase('old runtime without RED offers to new', 'old-no-red', 'new-enabled', 'opus'));
+  results.push(await runCase('new offers to new with muted DTX', 'new-enabled', 'new-enabled', 'red', true));
+  resultElement.textContent = `PASS\n${JSON.stringify(results, null, 2)}`;
+} catch (error) {
+  resultElement.textContent = `FAIL\n${error.stack ?? error}`;
+}
+</script>

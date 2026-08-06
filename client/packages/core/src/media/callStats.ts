@@ -1,6 +1,8 @@
 import type { CallStats, SerenadaLogger } from '../types.js';
 
 interface MediaTotals {
+    inboundCodecMimeTypes: Set<string>;
+    outboundCodecMimeTypes: Set<string>;
     inboundPacketsReceived: number;
     inboundPacketsLost: number;
     inboundBytes: number;
@@ -51,6 +53,7 @@ interface FreezeSample {
 }
 
 const createMediaTotals = (): MediaTotals => ({
+    inboundCodecMimeTypes: new Set(), outboundCodecMimeTypes: new Set(),
     inboundPacketsReceived: 0, inboundPacketsLost: 0, inboundBytes: 0,
     inboundJitterSumSeconds: 0, inboundJitterCount: 0,
     inboundJitterBufferDelaySeconds: 0, inboundJitterBufferEmittedCount: 0,
@@ -83,6 +86,53 @@ const getMediaKind = (stat: RTCStats): 'audio' | 'video' | null => {
     const kind = getStatString(stat, 'kind') ?? getStatString(stat, 'mediaType');
     return kind === 'audio' || kind === 'video' ? kind : null;
 };
+
+const resolveCodecMimeType = (rtpStat: RTCStats, statsById: Map<string, RTCStats>): string | null => {
+    const codecId = getStatString(rtpStat, 'codecId');
+    if (!codecId) return null;
+    const separatorIndex = rtpStat.id.indexOf(':');
+    const prefix = separatorIndex >= 0 ? rtpStat.id.substring(0, separatorIndex + 1) : '';
+    const codecStat = statsById.get(prefix + codecId) ?? statsById.get(codecId);
+    return codecStat ? getStatString(codecStat, 'mimeType') : null;
+};
+
+const firstAudioCodecMimeType = (sdp: string): string | null => {
+    const lines = sdp.split(/\r?\n/).map(line => line.trim());
+    const audioLineIndex = lines.findIndex(line => line.startsWith('m=audio '));
+    if (audioLineIndex < 0) return null;
+
+    const firstAudioPayloadType = lines[audioLineIndex].split(/\s+/)[3];
+    if (!firstAudioPayloadType) return null;
+    const nextMediaLineIndex = lines.findIndex((line, index) => index > audioLineIndex && line.startsWith('m='));
+    const audioSection = lines.slice(audioLineIndex + 1, nextMediaLineIndex < 0 ? lines.length : nextMediaLineIndex);
+    const codecByPayloadType = new Map<string, string>();
+    audioSection.forEach(line => {
+        const match = /^a=rtpmap:(\S+)\s+([^/\s]+)/i.exec(line);
+        if (match) codecByPayloadType.set(match[1], match[2]);
+    });
+
+    const codec = codecByPayloadType.get(firstAudioPayloadType);
+    return codec ? `audio/${codec.toLowerCase()}` : null;
+};
+
+const negotiatedAnswerAudioCodecMimeType = (pc: RTCPeerConnection): string | null => {
+    const answer = pc.localDescription?.type === 'answer'
+        ? pc.localDescription
+        : (pc.remoteDescription?.type === 'answer' ? pc.remoteDescription : null);
+    return answer ? firstAudioCodecMimeType(answer.sdp) : null;
+};
+
+// Chromium/WebRTC stats report the inner Opus codec for an RTP stream wrapped
+// in RED. The negotiated answer carries the outer codec that is actually sent.
+const effectiveAudioCodecMimeType = (statsCodec: string | null, negotiatedCodec: string | null): string | null => (
+    statsCodec?.toLowerCase() === 'audio/opus' && negotiatedCodec?.toLowerCase() === 'audio/red'
+        ? negotiatedCodec
+        : statsCodec
+);
+
+const joinCodecMimeTypes = (values: Set<string>): string | null => (
+    values.size > 0 ? [...values].sort().join(' | ') : null
+);
 
 const calculateBitrateKbps = (previousBytes: number, currentBytes: number, elapsedSeconds: number): number | null => {
     if (elapsedSeconds <= 0 || currentBytes < previousBytes) return null;
@@ -135,8 +185,11 @@ export class CallStatsCollector {
         try {
             const reports = await Promise.all(pcs.map(pc => pc.getStats()));
             const statsById = new Map<string, RTCStats>();
+            const negotiatedAudioCodecByPrefix = new Map<string, string>();
             reports.forEach((r, i) => {
                 const prefix = `p${i}:`;
+                const negotiatedAudioCodec = negotiatedAnswerAudioCodecMimeType(pcs[i]);
+                if (negotiatedAudioCodec) negotiatedAudioCodecByPrefix.set(prefix, negotiatedAudioCodec);
                 r.forEach(stat => {
                     const namespacedId = prefix + stat.id;
                     statsById.set(namespacedId, { ...stat, id: namespacedId } as RTCStats);
@@ -162,8 +215,15 @@ export class CallStatsCollector {
                 const kind = getMediaKind(stat);
                 if (!kind) return;
                 const bucket = media[kind];
+                const separatorIndex = stat.id.indexOf(':');
+                const prefix = separatorIndex >= 0 ? stat.id.substring(0, separatorIndex + 1) : '';
 
                 if (stat.type === 'inbound-rtp') {
+                    const reportedCodecMimeType = resolveCodecMimeType(stat, statsById);
+                    const codecMimeType = kind === 'audio'
+                        ? effectiveAudioCodecMimeType(reportedCodecMimeType, negotiatedAudioCodecByPrefix.get(prefix) ?? null)
+                        : reportedCodecMimeType;
+                    if (codecMimeType) bucket.inboundCodecMimeTypes.add(codecMimeType);
                     bucket.inboundRtpCount += 1;
                     const packetsReceived = getStatNumber(stat, 'packetsReceived');
                     if (packetsReceived !== null) { bucket.inboundPacketsReceived += packetsReceived; bucket.sawPacketsReceived = true; }
@@ -190,6 +250,11 @@ export class CallStatsCollector {
                     return;
                 }
                 if (stat.type === 'outbound-rtp') {
+                    const reportedCodecMimeType = resolveCodecMimeType(stat, statsById);
+                    const codecMimeType = kind === 'audio'
+                        ? effectiveAudioCodecMimeType(reportedCodecMimeType, negotiatedAudioCodecByPrefix.get(prefix) ?? null)
+                        : reportedCodecMimeType;
+                    if (codecMimeType) bucket.outboundCodecMimeTypes.add(codecMimeType);
                     bucket.outboundPacketsSent += getStatNumber(stat, 'packetsSent') ?? 0;
                     bucket.outboundBytes += getStatNumber(stat, 'bytesSent') ?? 0;
                     bucket.outboundPacketsRetransmitted += getStatNumber(stat, 'retransmittedPacketsSent') ?? 0;
@@ -260,8 +325,12 @@ export class CallStatsCollector {
 
             this._stats = {
                 transportPath, rttMs, availableOutgoingKbps,
+                audioRxCodec: joinCodecMimeTypes(media.audio.inboundCodecMimeTypes),
+                audioTxCodec: joinCodecMimeTypes(media.audio.outboundCodecMimeTypes),
                 audioRxPacketLossPct, audioTxPacketLossPct, audioJitterMs, audioPlayoutDelayMs, audioConcealedPct,
                 audioRxKbps, audioTxKbps,
+                videoRxCodec: joinCodecMimeTypes(media.video.inboundCodecMimeTypes),
+                videoTxCodec: joinCodecMimeTypes(media.video.outboundCodecMimeTypes),
                 videoRxPacketLossPct, videoTxPacketLossPct, videoRxKbps, videoTxKbps,
                 videoFps, videoResolution, videoFreezeCount60s, videoFreezeDuration60s, videoRetransmitPct,
                 // Surface `null` (unknown) when the

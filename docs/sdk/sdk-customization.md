@@ -190,6 +190,18 @@ SerenadaCallFlow(
 
 Frontline v1 shows the current audio route as the first More sheet item. Android and iOS open a simple checkmarked route picker backed by `availableAudioDevices`, `currentAudioDevice`, and `selectAudioDevice(...)`. On iOS, the built-in Phone route is hidden while Bluetooth audio is present because iOS cannot reliably expose Phone as an app-selectable communication route in that state. Built-in earpiece routes are labeled as "Phone"; named external routes such as Bluetooth devices use the device name when the coordinator provides one. Controls that are not backed by the SDK call UI contract today, including report-quality and placeholder add-person flows, remain hidden. Screen sharing, invite/share actions, mute, video, camera mode, flashlight, snapshot, PiP swap, end call, debug overlay, reconnect badge, and local pinch zoom use existing SDK callbacks. The standard waiting-screen QR code is not shown in the Frontline variant.
 
+## Opus RED audio resilience
+
+Set `SerenadaConfig.enableOpusRed` to `true` to prefer Opus RED (RFC 2198) for audio packet-loss resilience. The default is `false`, so upgrading the SDK does not change codec preference until an integrator opts in.
+
+The setting changes only WebRTC audio codec preference; it does not add or change Serenada signaling fields. When the peer's WebRTC runtime supports `audio/red`, offer/answer negotiation can select RED. If the peer does not support RED, negotiation excludes it and continues with plain Opus. This makes incremental rollout safe across mixed old and new SDK versions: an older endpoint either negotiates the RED support already present in its WebRTC runtime or falls back to Opus.
+
+The native SDKs enable the bundled libwebrtc RED capability when creating their peer-connection factories. This only makes `audio/red` available for negotiation; `enableOpusRed` remains the selection gate that promotes RED ahead of plain Opus.
+
+Roll out the flag incrementally and monitor outbound audio bitrate, packet loss, concealed samples, and call-quality metrics. RED sends redundant audio data and therefore trades additional bandwidth for better recovery from packet loss.
+
+Set `SerenadaConfig.enableOpusDtx` to `true` to request Opus discontinuous transmission. DTX suppresses most encoded packets during silence, including while the SDK microphone control is muted, while keeping the RTP sender attached for a fast unmute. The default is `false` so SDK upgrades preserve existing audio behavior. DTX is negotiated through the standard Opus `usedtx=1` format parameter independently in each direction; an older peer may ignore or omit it without preventing the call from falling back to continuous Opus transmission.
+
 ## Camera Modes
 
 `SerenadaConfig.cameraModes` is a core-level setting that restricts which camera modes (`selfie`, `world`, `composite`) are available and in what order. It controls camera capture only; set `videoMediaEnabled` to `false` for strict audio-only calls where the SDK must not negotiate or receive video media. It affects the call UI in three ways:

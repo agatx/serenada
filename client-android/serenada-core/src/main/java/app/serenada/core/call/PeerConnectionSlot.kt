@@ -52,6 +52,8 @@ internal class PeerConnectionSlot(
     // content sender so a typical display track fits the negotiated envelope.
     private val contentSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy =
         { WebRtcEngine.VideoSenderPolicy(null, null, null, null) },
+    private val enableOpusRed: Boolean = false,
+    private val enableOpusDtx: Boolean = false,
     private val logger: SerenadaLogger? = null,
 ) : PeerConnectionSlotProtocol {
     private companion object {
@@ -74,6 +76,8 @@ internal class PeerConnectionSlot(
     private var localContentTrack: VideoTrack? = null
 
     private data class MediaTotals(
+        val inboundCodecMimeTypes: MutableSet<String> = linkedSetOf(),
+        val outboundCodecMimeTypes: MutableSet<String> = linkedSetOf(),
         var inboundPacketsReceived: Long = 0L,
         var inboundPacketsLost: Long = 0L,
         var inboundBytes: Long = 0L,
@@ -567,6 +571,9 @@ internal class PeerConnectionSlot(
     ) {
         val transceiver = pc.transceivers.firstOrNull { it.mediaType == mediaType }
         if (transceiver != null) {
+            if (mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO) {
+                applyOpusRedCodecPreferences(transceiver)
+            }
             val sender = transceiver.sender
             if (sender.track() !== track) {
                 sender.setTrack(track, false)
@@ -582,6 +589,11 @@ internal class PeerConnectionSlot(
             onAttached(sender)
         } else if (track != null) {
             val sender = pc.addTrack(track, listOf("serenada"))
+            if (mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO) {
+                pc.transceivers.firstOrNull { it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO }?.let {
+                    applyOpusRedCodecPreferences(it)
+                }
+            }
             onAttached(sender)
         }
     }
@@ -698,10 +710,15 @@ internal class PeerConnectionSlot(
                     onComplete?.invoke(false)
                     return
                 }
+                val localDescription = if (enableOpusDtx) {
+                    SessionDescription(desc.type, enableOpusDtxInSdp(desc.description))
+                } else {
+                    desc
+                }
                 pc.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
                         if (!isCurrentPeerConnection(pc)) return
-                        onSdp(desc.description)
+                        onSdp(localDescription.description)
                         onComplete?.invoke(true)
                     }
 
@@ -710,7 +727,7 @@ internal class PeerConnectionSlot(
                         logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set local offer: $error")
                         onComplete?.invoke(false)
                     }
-                }, desc)
+                }, localDescription)
             }
 
             override fun onCreateFailure(error: String?) {
@@ -746,10 +763,15 @@ internal class PeerConnectionSlot(
                     onComplete?.invoke(false)
                     return
                 }
+                val localDescription = if (enableOpusDtx) {
+                    SessionDescription(desc.type, enableOpusDtxInSdp(desc.description))
+                } else {
+                    desc
+                }
                 pc.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
                         if (!isCurrentPeerConnection(pc)) return
-                        onSdp(desc.description)
+                        onSdp(localDescription.description)
                         onComplete?.invoke(true)
                     }
 
@@ -758,7 +780,7 @@ internal class PeerConnectionSlot(
                         logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set local answer: $error")
                         onComplete?.invoke(false)
                     }
-                }, desc)
+                }, localDescription)
             }
 
             override fun onCreateFailure(error: String?) {
@@ -1128,10 +1150,11 @@ internal class PeerConnectionSlot(
 
     private fun ensureReceiveTransceivers(pc: PeerConnection) {
         if (localAudioTrack == null) {
-            pc.addTransceiver(
+            val audioTransceiver = pc.addTransceiver(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
                 RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
             )
+            audioTransceiver?.let { applyOpusRedCodecPreferences(it) }
         }
         // Capable peers manage their own video m-lines: the owner pre-creates the
         // ordered camera+content transceivers, and the answerer materializes them
@@ -1143,6 +1166,19 @@ internal class PeerConnectionSlot(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
                 RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
             )
+        }
+    }
+
+    private fun applyOpusRedCodecPreferences(transceiver: RtpTransceiver) {
+        if (!enableOpusRed) return
+        val senderCapabilities = factory?.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO) ?: return
+        val codecs = senderCapabilities.codecs ?: return
+        val redCodec = codecs.find { it.name.equals("red", ignoreCase = true) || it.mimeType.equals("audio/red", ignoreCase = true) } ?: return
+        val preferredCodecs = listOf(redCodec) + codecs.filter { it != redCodec }
+        runCatching {
+            transceiver.setCodecPreferences(preferredCodecs)
+        }.onFailure { err ->
+            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "Failed to apply Opus RED codec preferences: ${err.message}")
         }
     }
 
@@ -1237,6 +1273,13 @@ internal class PeerConnectionSlot(
         val statsById = report.statsMap
         val audio = MediaTotals()
         val video = MediaTotals()
+        val connection = peerConnection
+        val answerDescription = when {
+            connection?.localDescription?.type == SessionDescription.Type.ANSWER -> connection.localDescription
+            connection?.remoteDescription?.type == SessionDescription.Type.ANSWER -> connection.remoteDescription
+            else -> null
+        }
+        val negotiatedAudioCodecMimeType = firstAudioCodecMimeType(answerDescription?.description)
 
         var selectedCandidatePair: RTCStats? = null
         var fallbackCandidatePair: RTCStats? = null
@@ -1261,6 +1304,13 @@ internal class PeerConnectionSlot(
 
             when (stat.type) {
                 "inbound-rtp" -> {
+                    val reportedCodecMimeType = resolveCodecMimeType(stat, statsById)
+                    val codecMimeType = if (kind == "audio") {
+                        effectiveAudioCodecMimeType(reportedCodecMimeType, negotiatedAudioCodecMimeType)
+                    } else {
+                        reportedCodecMimeType
+                    }
+                    codecMimeType?.let(bucket.inboundCodecMimeTypes::add)
                     bucket.inboundRtpCount += 1
                     memberLong(stat, "packetsReceived")?.let { bucket.inboundPacketsReceived += it; bucket.sawPacketsReceived = true }
                     memberLong(stat, "packetsLost")?.let { bucket.inboundPacketsLost += max(0L, it); bucket.sawPacketsLost = true }
@@ -1298,6 +1348,13 @@ internal class PeerConnectionSlot(
                 }
 
                 "outbound-rtp" -> {
+                    val reportedCodecMimeType = resolveCodecMimeType(stat, statsById)
+                    val codecMimeType = if (kind == "audio") {
+                        effectiveAudioCodecMimeType(reportedCodecMimeType, negotiatedAudioCodecMimeType)
+                    } else {
+                        reportedCodecMimeType
+                    }
+                    codecMimeType?.let(bucket.outboundCodecMimeTypes::add)
                     bucket.outboundPacketsSent += memberLong(stat, "packetsSent") ?: 0L
                     bucket.outboundBytes += memberLong(stat, "bytesSent") ?: 0L
                     bucket.outboundPacketsRetransmitted += memberLong(stat, "retransmittedPacketsSent") ?: 0L
@@ -1484,6 +1541,8 @@ internal class PeerConnectionSlot(
             transportPath = transportPath,
             rttMs = rttMs,
             availableOutgoingKbps = availableOutgoingKbps,
+            audioRxCodec = joinCodecMimeTypes(audio.inboundCodecMimeTypes),
+            audioTxCodec = joinCodecMimeTypes(audio.outboundCodecMimeTypes),
             audioRxPacketLossPct = audioRxPacketLossPct,
             audioTxPacketLossPct = audioTxPacketLossPct,
             audioJitterMs = audioJitterMs,
@@ -1491,6 +1550,8 @@ internal class PeerConnectionSlot(
             audioConcealedPct = audioConcealedPct,
             audioRxKbps = audioRxKbps,
             audioTxKbps = audioTxKbps,
+            videoRxCodec = joinCodecMimeTypes(video.inboundCodecMimeTypes),
+            videoTxCodec = joinCodecMimeTypes(video.outboundCodecMimeTypes),
             videoRxPacketLossPct = videoRxPacketLossPct,
             videoTxPacketLossPct = videoTxPacketLossPct,
             videoRxKbps = videoRxKbps,
@@ -1538,11 +1599,14 @@ internal class PeerConnectionSlot(
         return (numerator.toDouble() / denominator.toDouble()) * 100.0
     }
 
-    private fun resolveCodecName(rtpStat: RTCStats?, statsById: Map<String, RTCStats>): String? {
+    private fun resolveCodecMimeType(rtpStat: RTCStats?, statsById: Map<String, RTCStats>): String? {
         val codecId = memberString(rtpStat, "codecId") ?: return null
         val codecStat = statsById[codecId] ?: return null
-        val mimeType = memberString(codecStat, "mimeType") ?: return null
-        return mimeType.removePrefix("video/")
+        return memberString(codecStat, "mimeType")
+    }
+
+    private fun resolveCodecName(rtpStat: RTCStats?, statsById: Map<String, RTCStats>): String? {
+        return resolveCodecMimeType(rtpStat, statsById)?.removePrefix("video/")
     }
 
 }

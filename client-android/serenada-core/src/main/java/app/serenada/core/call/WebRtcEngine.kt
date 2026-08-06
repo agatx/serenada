@@ -46,6 +46,8 @@ internal class WebRtcEngine(
     // today. When true, screen share rides a SEPARATE content track/transceiver
     // for peers that also advertise the capability (per-peer routing).
     private val enableIndependentContentVideo: Boolean = false,
+    private val enableOpusRed: Boolean = false,
+    private val enableOpusDtx: Boolean = false,
     availableCameraModes: List<LocalCameraMode> = app.serenada.core.DEFAULT_CAMERA_MODES,
     private val logger: SerenadaLogger? = null,
 ) : SessionMediaEngine {
@@ -669,6 +671,8 @@ internal class WebRtcEngine(
             peerConnectionDisposeQueue = peerConnectionDisposeQueue,
             supportsIndependentContentVideo = independentRouted,
             isOfferOwner = isOfferOwner,
+            enableOpusRed = enableOpusRed,
+            enableOpusDtx = enableOpusDtx,
             contentSenderPolicy = ::contentVideoSenderPolicy,
             logger = logger,
         )

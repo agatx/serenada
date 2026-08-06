@@ -4,6 +4,8 @@ public struct RealtimeCallStats: Equatable {
     public var transportPath: String?
     public var rttMs: Double?
     public var availableOutgoingKbps: Double?
+    public var audioRxCodec: String?
+    public var audioTxCodec: String?
     public var audioRxPacketLossPct: Double?
     public var audioTxPacketLossPct: Double?
     public var audioJitterMs: Double?
@@ -11,6 +13,8 @@ public struct RealtimeCallStats: Equatable {
     public var audioConcealedPct: Double?
     public var audioRxKbps: Double?
     public var audioTxKbps: Double?
+    public var videoRxCodec: String?
+    public var videoTxCodec: String?
     public var videoRxPacketLossPct: Double?
     public var videoTxPacketLossPct: Double?
     public var videoRxKbps: Double?
@@ -39,9 +43,11 @@ public struct RealtimeCallStats: Equatable {
 
     public init(
         transportPath: String? = nil, rttMs: Double? = nil, availableOutgoingKbps: Double? = nil,
+        audioRxCodec: String? = nil, audioTxCodec: String? = nil,
         audioRxPacketLossPct: Double? = nil, audioTxPacketLossPct: Double? = nil,
         audioJitterMs: Double? = nil, audioPlayoutDelayMs: Double? = nil,
         audioConcealedPct: Double? = nil, audioRxKbps: Double? = nil, audioTxKbps: Double? = nil,
+        videoRxCodec: String? = nil, videoTxCodec: String? = nil,
         videoRxPacketLossPct: Double? = nil, videoTxPacketLossPct: Double? = nil,
         videoRxKbps: Double? = nil, videoTxKbps: Double? = nil,
         videoFps: Double? = nil, videoResolution: String? = nil,
@@ -55,6 +61,8 @@ public struct RealtimeCallStats: Equatable {
         self.transportPath = transportPath
         self.rttMs = rttMs
         self.availableOutgoingKbps = availableOutgoingKbps
+        self.audioRxCodec = audioRxCodec
+        self.audioTxCodec = audioTxCodec
         self.audioRxPacketLossPct = audioRxPacketLossPct
         self.audioTxPacketLossPct = audioTxPacketLossPct
         self.audioJitterMs = audioJitterMs
@@ -62,6 +70,8 @@ public struct RealtimeCallStats: Equatable {
         self.audioConcealedPct = audioConcealedPct
         self.audioRxKbps = audioRxKbps
         self.audioTxKbps = audioTxKbps
+        self.videoRxCodec = videoRxCodec
+        self.videoTxCodec = videoTxCodec
         self.videoRxPacketLossPct = videoRxPacketLossPct
         self.videoTxPacketLossPct = videoTxPacketLossPct
         self.videoRxKbps = videoRxKbps

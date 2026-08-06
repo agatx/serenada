@@ -3,7 +3,17 @@ import { CallStatsCollector } from '../../src/media/callStats.js';
 
 /** Minimal fake RTCPeerConnection that returns a fixed stats report. */
 class FakeStatsPeerConnection {
-    constructor(private readonly report: RTCStatsReport) {}
+    readonly localDescription: RTCSessionDescription | null;
+    readonly remoteDescription: RTCSessionDescription | null;
+
+    constructor(
+        private readonly report: RTCStatsReport,
+        localDescription: RTCSessionDescriptionInit | null = null,
+        remoteDescription: RTCSessionDescriptionInit | null = null,
+    ) {
+        this.localDescription = localDescription as RTCSessionDescription | null;
+        this.remoteDescription = remoteDescription as RTCSessionDescription | null;
+    }
     async getStats(): Promise<RTCStatsReport> {
         return this.report;
     }
@@ -21,15 +31,81 @@ function makeReport(stats: Array<Record<string, unknown>>): RTCStatsReport {
  * collector instance — start() schedules a timer, but we invoke poll
  * directly through the bracket accessor to keep the test synchronous.
  */
-async function collectOnce(report: RTCStatsReport): Promise<ReturnType<CallStatsCollector['stats']['valueOf']> | null> {
+async function collectOnce(
+    report: RTCStatsReport,
+    localDescription: RTCSessionDescriptionInit | null = null,
+    remoteDescription: RTCSessionDescriptionInit | null = null,
+): Promise<ReturnType<CallStatsCollector['stats']['valueOf']> | null> {
     const collector = new CallStatsCollector();
-    const pc = new FakeStatsPeerConnection(report) as unknown as RTCPeerConnection;
+    const pc = new FakeStatsPeerConnection(report, localDescription, remoteDescription) as unknown as RTCPeerConnection;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (collector as any).poll([pc]);
     return collector.stats;
 }
 
 describe('CallStatsCollector counter surface', () => {
+    it('resolves active inbound and outbound codec MIME types from RTP codec references', async () => {
+        const report = makeReport([
+            { id: 'audio-red', type: 'codec', mimeType: 'audio/red' },
+            { id: 'audio-opus', type: 'codec', mimeType: 'audio/opus' },
+            { id: 'video-vp8', type: 'codec', mimeType: 'video/VP8' },
+            { id: 'audio-in', type: 'inbound-rtp', kind: 'audio', codecId: 'audio-red', bytesReceived: 1000 },
+            { id: 'audio-out', type: 'outbound-rtp', kind: 'audio', codecId: 'audio-opus', bytesSent: 1000 },
+            { id: 'video-in', type: 'inbound-rtp', kind: 'video', codecId: 'video-vp8', bytesReceived: 2000 },
+            { id: 'video-out', type: 'outbound-rtp', kind: 'video', codecId: 'video-vp8', bytesSent: 2000 },
+        ]);
+
+        const stats = await collectOnce(report);
+
+        expect(stats!.audioRxCodec).toBe('audio/red');
+        expect(stats!.audioTxCodec).toBe('audio/opus');
+        expect(stats!.videoRxCodec).toBe('video/VP8');
+        expect(stats!.videoTxCodec).toBe('video/VP8');
+    });
+
+    it('reports negotiated RED when RTP stats expose its inner Opus codec', async () => {
+        const report = makeReport([
+            { id: 'audio-opus', type: 'codec', mimeType: 'audio/opus' },
+            { id: 'audio-in', type: 'inbound-rtp', kind: 'audio', codecId: 'audio-opus', bytesReceived: 1000 },
+            { id: 'audio-out', type: 'outbound-rtp', kind: 'audio', codecId: 'audio-opus', bytesSent: 1000 },
+        ]);
+        const answer = {
+            type: 'answer' as const,
+            sdp: [
+                'v=0',
+                'm=audio 9 UDP/TLS/RTP/SAVPF 63 111',
+                'a=rtpmap:63 red/48000/2',
+                'a=rtpmap:111 opus/48000/2',
+                'm=video 9 UDP/TLS/RTP/SAVPF 96',
+            ].join('\r\n'),
+        };
+
+        const stats = await collectOnce(report, null, answer);
+
+        expect(stats!.audioRxCodec).toBe('audio/red');
+        expect(stats!.audioTxCodec).toBe('audio/red');
+    });
+
+    it('keeps Opus when the negotiated answer does not prefer RED', async () => {
+        const report = makeReport([
+            { id: 'audio-opus', type: 'codec', mimeType: 'audio/opus' },
+            { id: 'audio-in', type: 'inbound-rtp', kind: 'audio', codecId: 'audio-opus', bytesReceived: 1000 },
+        ]);
+        const answer = {
+            type: 'answer' as const,
+            sdp: [
+                'v=0',
+                'm=audio 9 UDP/TLS/RTP/SAVPF 111 63',
+                'a=rtpmap:111 opus/48000/2',
+                'a=rtpmap:63 red/48000/2',
+            ].join('\r\n'),
+        };
+
+        const stats = await collectOnce(report, answer);
+
+        expect(stats!.audioRxCodec).toBe('audio/opus');
+    });
+
     it('surfaces framesDecoded/framesDropped and audio packet counters, summed across slots', async () => {
         const report = makeReport([
             {

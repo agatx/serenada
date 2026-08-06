@@ -74,6 +74,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     }
 
     private struct MediaTotals {
+        var inboundCodecMimeTypes: Set<String> = []
+        var outboundCodecMimeTypes: Set<String> = []
         var inboundPacketsReceived: Int64 = 0
         var inboundPacketsLost: Int64 = 0
         var inboundBytes: Int64 = 0
@@ -140,6 +142,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private let onSignalingStateChange: (String, String) -> Void
     private let onRenegotiationNeeded: (String) -> Void
     private let videoReceiveEnabled: Bool
+    private let enableOpusRed: Bool
+    private let enableOpusDtx: Bool
     private let logger: SerenadaLogger?
     private let rendererAttachmentQueue: DispatchQueue
     /// Whether the local participant is the deterministic offer owner for this
@@ -199,6 +203,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         videoReceiveEnabled: Bool = true,
         supportsIndependentContentVideo: Bool = false,
         isOfferOwner: @escaping () -> Bool = { false },
+        enableOpusRed: Bool = false,
+        enableOpusDtx: Bool = false,
         onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
         onRemoteVideoTrack: @escaping (String, RTCVideoTrack?) -> Void,
         onConnectionStateChange: @escaping (String, String) -> Void,
@@ -215,6 +221,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         self.videoReceiveEnabled = videoReceiveEnabled
         self.supportsIndependentContentVideo = supportsIndependentContentVideo
         self.isOfferOwner = isOfferOwner
+        self.enableOpusRed = enableOpusRed
+        self.enableOpusDtx = enableOpusDtx
         self.onLocalIceCandidate = onLocalIceCandidate
         self.onRemoteVideoTrack = onRemoteVideoTrack
         self.onConnectionStateChange = onConnectionStateChange
@@ -567,6 +575,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         mediaType: RTCRtpMediaType
     ) {
         if let transceiver = peerConnection.transceivers.first(where: { $0.mediaType == mediaType }) {
+            if mediaType == .audio {
+                applyOpusRedCodecPreferences(to: transceiver)
+            }
             if transceiver.sender.track !== track {
                 transceiver.sender.track = track
             }
@@ -576,6 +587,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             }
         } else if let track {
             _ = peerConnection.add(track, streamIds: ["serenada"])
+            if mediaType == .audio, let transceiver = peerConnection.transceivers.first(where: { $0.mediaType == .audio }) {
+                applyOpusRedCodecPreferences(to: transceiver)
+            }
         }
     }
 
@@ -717,10 +731,13 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 onComplete?(false)
                 return
             }
+            let localDescription = self.enableOpusDtx
+                ? RTCSessionDescription(type: description.type, sdp: enableOpusDtxInSdp(description.sdp))
+                : description
 
-            peerConnection.setLocalDescription(description) { setError in
+            peerConnection.setLocalDescription(localDescription) { setError in
                 if setError == nil {
-                    onSdp(description.sdp)
+                    onSdp(localDescription.sdp)
                     onComplete?(true)
                 } else {
                     onComplete?(false)
@@ -742,10 +759,13 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 onComplete?(false)
                 return
             }
+            let localDescription = self.enableOpusDtx
+                ? RTCSessionDescription(type: description.type, sdp: enableOpusDtxInSdp(description.sdp))
+                : description
 
-            peerConnection.setLocalDescription(description) { setError in
+            peerConnection.setLocalDescription(localDescription) { setError in
                 if setError == nil {
-                    onSdp(description.sdp)
+                    onSdp(localDescription.sdp)
                     onComplete?(true)
                 } else {
                     onComplete?(false)
@@ -1085,7 +1105,9 @@ private extension PeerConnectionSlot {
         if peerConnection.transceivers.contains(where: { $0.mediaType == .audio }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
             transceiverInit.direction = .recvOnly
-            _ = peerConnection.addTransceiver(of: .audio, init: transceiverInit)
+            if let transceiver = peerConnection.addTransceiver(of: .audio, init: transceiverInit) {
+                applyOpusRedCodecPreferences(to: transceiver)
+            }
         }
         // Capable peers manage their own video m-lines: the owner pre-creates the
         // ordered camera+content transceivers, and the answerer materializes them
@@ -1097,6 +1119,18 @@ private extension PeerConnectionSlot {
             transceiverInit.direction = .recvOnly
             _ = peerConnection.addTransceiver(of: .video, init: transceiverInit)
         }
+    }
+
+    private func applyOpusRedCodecPreferences(to transceiver: RTCRtpTransceiver) {
+        guard enableOpusRed else { return }
+        guard let factory else { return }
+        let codecs = factory.rtpSenderCapabilities(forKind: kRTCMediaStreamTrackKindAudio).codecs
+        guard let redCodec = codecs.first(where: {
+            $0.name.caseInsensitiveCompare("red") == .orderedSame ||
+            $0.mimeType.caseInsensitiveCompare("audio/red") == .orderedSame
+        }) else { return }
+        let preferredCodecs = [redCodec] + codecs.filter { $0 != redCodec }
+        transceiver.setCodecPreferences(preferredCodecs)
     }
 
     private func flushPendingIceCandidates() {
@@ -1171,6 +1205,12 @@ private extension PeerConnectionSlot {
         let stats = Array(report.statistics.values)
         var audio = MediaTotals()
         var video = MediaTotals()
+        let localDescription = peerConnection?.localDescription
+        let remoteDescription = peerConnection?.remoteDescription
+        let answerDescription = localDescription?.type == .answer
+            ? localDescription
+            : (remoteDescription?.type == .answer ? remoteDescription : nil)
+        let negotiatedAudioCodecMimeType = firstAudioCodecMimeType(in: answerDescription?.sdp)
 
         var selectedCandidatePair: RTCStatistics?
         var fallbackCandidatePair: RTCStatistics?
@@ -1192,6 +1232,16 @@ private extension PeerConnectionSlot {
 
             guard let kind = mediaKind(for: stat) else { continue }
             if kind == "audio" {
+                let reportedCodec = resolveCodecMimeType(for: stat, statsById: report.statistics)
+                let effectiveCodec = effectiveAudioCodecMimeType(
+                    statsCodecMimeType: reportedCodec,
+                    negotiatedAnswerCodecMimeType: negotiatedAudioCodecMimeType
+                )
+                if stat.type == "inbound-rtp", let codec = effectiveCodec {
+                    audio.inboundCodecMimeTypes.insert(codec)
+                } else if stat.type == "outbound-rtp", let codec = effectiveCodec {
+                    audio.outboundCodecMimeTypes.insert(codec)
+                }
                 collectMediaStat(
                     stat,
                     into: &audio,
@@ -1199,6 +1249,11 @@ private extension PeerConnectionSlot {
                     remoteInboundRttCount: &remoteInboundRttCount
                 )
             } else {
+                if stat.type == "inbound-rtp", let codec = resolveCodecMimeType(for: stat, statsById: report.statistics) {
+                    video.inboundCodecMimeTypes.insert(codec)
+                } else if stat.type == "outbound-rtp", let codec = resolveCodecMimeType(for: stat, statsById: report.statistics) {
+                    video.outboundCodecMimeTypes.insert(codec)
+                }
                 collectMediaStat(
                     stat,
                     into: &video,
@@ -1345,6 +1400,8 @@ private extension PeerConnectionSlot {
             transportPath: transportPath,
             rttMs: rttMs,
             availableOutgoingKbps: availableOutgoingKbps,
+            audioRxCodec: joinCodecMimeTypes(Array(audio.inboundCodecMimeTypes)),
+            audioTxCodec: joinCodecMimeTypes(Array(audio.outboundCodecMimeTypes)),
             audioRxPacketLossPct: audioRxPacketLossPct,
             audioTxPacketLossPct: audioTxPacketLossPct,
             audioJitterMs: audioJitterMs,
@@ -1352,6 +1409,8 @@ private extension PeerConnectionSlot {
             audioConcealedPct: audioConcealedPct,
             audioRxKbps: audioRxKbps,
             audioTxKbps: audioTxKbps,
+            videoRxCodec: joinCodecMimeTypes(Array(video.inboundCodecMimeTypes)),
+            videoTxCodec: joinCodecMimeTypes(Array(video.outboundCodecMimeTypes)),
             videoRxPacketLossPct: videoRxPacketLossPct,
             videoTxPacketLossPct: videoTxPacketLossPct,
             videoRxKbps: videoRxKbps,

@@ -1,0 +1,43 @@
+name: Opus RED and DTX interop
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/opus-red-interop.yml'
+      - 'client/package.json'
+      - 'client/packages/core/src/SerenadaSession.ts'
+      - 'client/packages/core/src/media/MediaEngine.ts'
+      - 'client/packages/core/src/media/opusDtxSdp.ts'
+      - 'client/packages/core/src/types.ts'
+      - 'client/packages/core/test/e2e/opus-red-mixed-fleet.html'
+      - 'scripts/test-opus-red-mixed-fleet.mjs'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/opus-red-interop.yml'
+      - 'client/package.json'
+      - 'client/packages/core/src/SerenadaSession.ts'
+      - 'client/packages/core/src/media/MediaEngine.ts'
+      - 'client/packages/core/src/media/opusDtxSdp.ts'
+      - 'client/packages/core/src/types.ts'
+      - 'client/packages/core/test/e2e/opus-red-mixed-fleet.html'
+      - 'scripts/test-opus-red-mixed-fleet.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-interop:
+    name: Browser mixed-fleet negotiation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run real WebRTC mixed-fleet test
+        working-directory: client
+        run: npm run test:opus-red-interop

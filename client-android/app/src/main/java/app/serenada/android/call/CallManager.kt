@@ -152,10 +152,11 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled,
                 transports = transports,
                 proximityMonitoringEnabled = true,
-                // Bundled Android app opt-in: the SDK default remains false for
-                // external integrators, but this app intentionally ships the
-                // independent screen-share media path.
+                // Bundled Android app opt-ins: the SDK defaults remain false for
+                // external integrators.
                 enableIndependentContentVideo = INDEPENDENT_CONTENT_VIDEO_ENABLED,
+                enableOpusRed = true,
+                enableOpusDtx = true,
             ),
             context = appContext,
         )

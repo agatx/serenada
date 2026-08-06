@@ -193,7 +193,7 @@ All three native SDKs follow a **headless core + optional UI** pattern:
 - **`SerenadaCore`** — Entry point. `createRoom()` returns the room URL and ID (async on all platforms). Call `join()` afterward to start the call and get a `SerenadaSession`.
 - **`SerenadaSession`** — The active call session. Exposes two observable snapshots:
   - **`state`** (`CallState`) — App-facing call state: phase, local/remote participants, connection status, errors.
-  - **`diagnostics`** (`CallDiagnostics`) — Low-level transport info: ICE/peer/signaling states, realtime stats, camera/flash state, feature degradations.
+  - **`diagnostics`** (`CallDiagnostics`) — Low-level transport info: ICE/peer/signaling states, realtime stats (including active inbound/outbound audio and video codecs), camera/flash state, feature degradations.
 - **`SerenadaCallFlow`** — Pre-built UI component (SwiftUI / Jetpack Compose / React) that consumes a session and renders the full call flow. Optional — you can build your own UI from `state` and `diagnostics`.
 
 Android enforces main-thread access on all public SDK entrypoints with fail-fast preconditions.

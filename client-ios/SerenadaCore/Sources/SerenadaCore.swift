@@ -142,7 +142,9 @@ public final class SerenadaCore {
                 transports: config.transports,
                 proximityMonitoringEnabled: config.proximityMonitoringEnabled,
                 audioCoordinator: config.audioCoordinator,
-                audioIntent: config.audioIntent
+                audioIntent: config.audioIntent,
+                enableOpusRed: config.enableOpusRed,
+                enableOpusDtx: config.enableOpusDtx
             )
         } else {
             sessionConfig = config

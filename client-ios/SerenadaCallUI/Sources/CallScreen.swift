@@ -166,6 +166,7 @@ func buildDebugPanelSections(uiState: CallUiState) -> [DebugPanelSection] {
         DebugPanelSection(
             title: "Audio Quality",
             metrics: [
+                DebugPanelMetric(label: "Codec ⇵", value: "\(formatCodec(stats.audioRxCodec)) / \(formatCodec(stats.audioTxCodec))", status: .na),
                 DebugPanelMetric(label: "Packet loss ⇵", value: "\(formatPercent(stats.audioRxPacketLossPct)) / \(formatPercent(stats.audioTxPacketLossPct))", status: audioLossStatus),
                 DebugPanelMetric(label: "Jitter", value: formatMs(stats.audioJitterMs), status: lowerIsBetter(stats.audioJitterMs, goodMax: 20, warnMax: 40)),
                 DebugPanelMetric(label: "Playout delay", value: formatMs(stats.audioPlayoutDelayMs), status: lowerIsBetter(stats.audioPlayoutDelayMs, goodMax: 80, warnMax: 180)),
@@ -176,6 +177,7 @@ func buildDebugPanelSections(uiState: CallUiState) -> [DebugPanelSection] {
         DebugPanelSection(
             title: "Video Quality",
             metrics: [
+                DebugPanelMetric(label: "Codec ⇵", value: "\(formatCodec(stats.videoRxCodec)) / \(formatCodec(stats.videoTxCodec))", status: .na),
                 DebugPanelMetric(label: "Packet loss ⇵", value: "\(formatPercent(stats.videoRxPacketLossPct)) / \(formatPercent(stats.videoTxPacketLossPct))", status: videoLossStatus),
                 DebugPanelMetric(label: "Bitrate ⇵", value: "\(formatKbps(stats.videoRxKbps)) / \(formatKbps(stats.videoTxKbps))", status: videoBitrateStatus),
                 DebugPanelMetric(label: "Render FPS", value: formatFps(stats.videoFps), status: higherIsBetter(stats.videoFps, goodMin: 24, warnMin: 15)),
@@ -213,6 +215,16 @@ func formatKbps(_ value: Double?) -> String {
 func formatFps(_ value: Double?) -> String {
     guard let value else { return "n/a" }
     return String(format: "%.1f fps", value)
+}
+
+func formatCodec(_ value: String?) -> String {
+    guard let value else { return "n/a" }
+    return value
+        .components(separatedBy: " | ")
+        .map { codec in
+            codec.replacingOccurrences(of: "^(audio|video)/", with: "", options: [.regularExpression, .caseInsensitive])
+        }
+        .joined(separator: " | ")
 }
 
 func formatFreezeWindow(_ count: Int64?, _ durationSeconds: Double?) -> String {

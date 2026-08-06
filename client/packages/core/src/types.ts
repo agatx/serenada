@@ -289,6 +289,16 @@ export interface SerenadaConfig {
     transports?: TransportKind[];
     /** When `true`, only use TURNS (TLS) relay candidates. */
     turnsOnly?: boolean;
+    /**
+     * Whether to prefer/enable Opus RED (RFC 2198 redundancy for Opus audio codec)
+     * on audio transceivers for audio loss resilience. Defaults to `false`.
+     */
+    enableOpusRed?: boolean;
+    /**
+     * Whether to request Opus discontinuous transmission (DTX) so silence uses
+     * substantially less bandwidth. Defaults to `false`.
+     */
+    enableOpusDtx?: boolean;
     /** Custom logger for SDK diagnostic output. */
     logger?: SerenadaLogger;
 }
@@ -377,6 +387,10 @@ export interface CallStats {
     transportPath: string | null;
     rttMs: number | null;
     availableOutgoingKbps: number | null;
+    /** Active inbound audio codec MIME type(s), e.g. `audio/red` or `audio/opus`. */
+    audioRxCodec?: string | null;
+    /** Active outbound audio codec MIME type(s), e.g. `audio/red` or `audio/opus`. */
+    audioTxCodec?: string | null;
     audioRxPacketLossPct: number | null;
     audioTxPacketLossPct: number | null;
     audioJitterMs: number | null;
@@ -384,6 +398,10 @@ export interface CallStats {
     audioConcealedPct: number | null;
     audioRxKbps: number | null;
     audioTxKbps: number | null;
+    /** Active inbound video codec MIME type(s), e.g. `video/VP8`. */
+    videoRxCodec?: string | null;
+    /** Active outbound video codec MIME type(s), e.g. `video/VP8`. */
+    videoTxCodec?: string | null;
     videoRxPacketLossPct: number | null;
     videoTxPacketLossPct: number | null;
     videoRxKbps: number | null;

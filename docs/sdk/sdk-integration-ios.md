@@ -419,7 +419,9 @@ let config = SerenadaConfig(
     deferInitialAnswer: false,      // set true when a provider may delay the first answer
     transports: [.ws, .sse],          // transport priority (default)
     audioCoordinator: nil,            // custom SerenadaAudioCoordinator, or internal default
-    audioIntent: AudioIntent()        // audio policy passed to the coordinator
+    audioIntent: AudioIntent(),       // audio policy passed to the coordinator
+    enableOpusRed: false,             // opt in to Opus RED audio loss resilience
+    enableOpusDtx: false              // opt in to low-bandwidth Opus silence suppression
 )
 ```
 

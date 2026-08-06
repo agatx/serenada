@@ -518,7 +518,8 @@ private fun getOrCreatePeerConnectionFactory(context: Context): PeerConnectionFa
                 .createInitializationOptions(),
         )
         enableVerboseWebRtcLoggingForDiagnostics()
-        val factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+        val factory = PeerConnectionFactory.builder()
+            .createPeerConnectionFactory()
         diagnosticsPcFactory = factory
         return factory
     }
