@@ -1,4 +1,4 @@
-name: Opus RED interop
+name: Opus RED and DTX interop
 
 on:
   pull_request:
@@ -7,6 +7,7 @@ on:
       - 'client/package.json'
       - 'client/packages/core/src/SerenadaSession.ts'
       - 'client/packages/core/src/media/MediaEngine.ts'
+      - 'client/packages/core/src/media/opusDtxSdp.ts'
       - 'client/packages/core/src/types.ts'
       - 'client/packages/core/test/e2e/opus-red-mixed-fleet.html'
       - 'scripts/test-opus-red-mixed-fleet.mjs'
@@ -17,6 +18,7 @@ on:
       - 'client/package.json'
       - 'client/packages/core/src/SerenadaSession.ts'
       - 'client/packages/core/src/media/MediaEngine.ts'
+      - 'client/packages/core/src/media/opusDtxSdp.ts'
       - 'client/packages/core/src/types.ts'
       - 'client/packages/core/test/e2e/opus-red-mixed-fleet.html'
       - 'scripts/test-opus-red-mixed-fleet.mjs'

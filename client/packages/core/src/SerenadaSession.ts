@@ -404,6 +404,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 videoMediaEnabled,
                 enableIndependentContentVideo: config.enableIndependentContentVideo === true,
                 enableOpusRed: config.enableOpusRed === true,
+                enableOpusDtx: config.enableOpusDtx === true,
                 deferInitialAnswer: config.deferInitialAnswer === true,
             },
             (type, payload, to) => {

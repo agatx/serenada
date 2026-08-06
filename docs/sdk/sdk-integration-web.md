@@ -364,6 +364,7 @@ const serenada = createSerenadaCore({
     cameraModes: ['selfie', 'world', 'composite'], // available camera modes & cycle order; empty = no camera capture
     deferInitialAnswer: false,     // set true when a provider may delay the first answer
     enableOpusRed: false,          // opt in to Opus RED audio loss resilience
+    enableOpusDtx: false,          // opt in to low-bandwidth Opus silence suppression
     transports: ['ws', 'sse'],     // transport priority (default)
     turnsOnly: false,              // optional; only use TURN relays when true
 })

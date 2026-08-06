@@ -53,6 +53,7 @@ internal class PeerConnectionSlot(
     private val contentSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy =
         { WebRtcEngine.VideoSenderPolicy(null, null, null, null) },
     private val enableOpusRed: Boolean = false,
+    private val enableOpusDtx: Boolean = false,
     private val logger: SerenadaLogger? = null,
 ) : PeerConnectionSlotProtocol {
     private companion object {
@@ -709,10 +710,15 @@ internal class PeerConnectionSlot(
                     onComplete?.invoke(false)
                     return
                 }
+                val localDescription = if (enableOpusDtx) {
+                    SessionDescription(desc.type, enableOpusDtxInSdp(desc.description))
+                } else {
+                    desc
+                }
                 pc.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
                         if (!isCurrentPeerConnection(pc)) return
-                        onSdp(desc.description)
+                        onSdp(localDescription.description)
                         onComplete?.invoke(true)
                     }
 
@@ -721,7 +727,7 @@ internal class PeerConnectionSlot(
                         logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set local offer: $error")
                         onComplete?.invoke(false)
                     }
-                }, desc)
+                }, localDescription)
             }
 
             override fun onCreateFailure(error: String?) {
@@ -757,10 +763,15 @@ internal class PeerConnectionSlot(
                     onComplete?.invoke(false)
                     return
                 }
+                val localDescription = if (enableOpusDtx) {
+                    SessionDescription(desc.type, enableOpusDtxInSdp(desc.description))
+                } else {
+                    desc
+                }
                 pc.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
                         if (!isCurrentPeerConnection(pc)) return
-                        onSdp(desc.description)
+                        onSdp(localDescription.description)
                         onComplete?.invoke(true)
                     }
 
@@ -769,7 +780,7 @@ internal class PeerConnectionSlot(
                         logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set local answer: $error")
                         onComplete?.invoke(false)
                     }
-                }, desc)
+                }, localDescription)
             }
 
             override fun onCreateFailure(error: String?) {

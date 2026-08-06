@@ -64,13 +64,18 @@ final class SerenadaSessionTests: XCTestCase {
     func testJoinUrlUsesDeepLinkHostInsteadOfDefaultConfigHost() {
         let roomId = "YovflsGamCygX912gb26Jeaq8Es"
         let url = URL(string: "https://serenada-app.ru/call/\(roomId)")!
-        let core = SerenadaCore(config: SerenadaConfig(serverHost: "serenada.app", enableOpusRed: true))
+        let core = SerenadaCore(config: SerenadaConfig(
+            serverHost: "serenada.app",
+            enableOpusRed: true,
+            enableOpusDtx: true
+        ))
 
         let session = core.join(url: url)
 
         XCTAssertEqual(session.serverHost, "serenada-app.ru")
         XCTAssertEqual(session.roomUrl, url)
         XCTAssertTrue(session.effectiveOpusRedEnabled)
+        XCTAssertTrue(session.effectiveOpusDtxEnabled)
 
         session.cancelJoin()
     }
@@ -79,10 +84,11 @@ final class SerenadaSessionTests: XCTestCase {
         let session = SerenadaSession(
             roomId: "YovflsGamCygX912gb26Jeaq8Es",
             serverHost: "serenada-app.ru",
-            config: SerenadaConfig(serverHost: "serenada.app", enableOpusRed: true)
+            config: SerenadaConfig(serverHost: "serenada.app", enableOpusRed: true, enableOpusDtx: true)
         )
 
         XCTAssertTrue(session.effectiveOpusRedEnabled)
+        XCTAssertTrue(session.effectiveOpusDtxEnabled)
 
         session.cancelJoin()
     }

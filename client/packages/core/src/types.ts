@@ -294,6 +294,11 @@ export interface SerenadaConfig {
      * on audio transceivers for audio loss resilience. Defaults to `false`.
      */
     enableOpusRed?: boolean;
+    /**
+     * Whether to request Opus discontinuous transmission (DTX) so silence uses
+     * substantially less bandwidth. Defaults to `false`.
+     */
+    enableOpusDtx?: boolean;
     /** Custom logger for SDK diagnostic output. */
     logger?: SerenadaLogger;
 }

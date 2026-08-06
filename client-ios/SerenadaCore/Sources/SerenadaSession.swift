@@ -335,6 +335,8 @@ public final class SerenadaSession: ObservableObject {
     internal var mediaLivenessBroadcastCount: Int { mediaLivenessEmitCount }
     /// Test-only accessor for the effective per-session Opus RED setting.
     internal var effectiveOpusRedEnabled: Bool { config.enableOpusRed }
+    /// Test-only accessor for the effective per-session Opus DTX setting.
+    internal var effectiveOpusDtxEnabled: Bool { config.enableOpusDtx }
 
     private let recoveryStorage: RecoveryStorage
     private var sessionStartTs: Int64?
@@ -365,7 +367,8 @@ public final class SerenadaSession: ObservableObject {
                 proximityMonitoringEnabled: config.proximityMonitoringEnabled,
                 audioCoordinator: config.audioCoordinator,
                 audioIntent: config.audioIntent,
-                enableOpusRed: config.enableOpusRed
+                enableOpusRed: config.enableOpusRed,
+                enableOpusDtx: config.enableOpusDtx
             )
             : config
         self.init(
@@ -442,6 +445,7 @@ public final class SerenadaSession: ObservableObject {
             videoMediaEnabled: config.videoMediaEnabled,
             enableIndependentContentVideo: config.enableIndependentContentVideo,
             enableOpusRed: config.enableOpusRed,
+            enableOpusDtx: config.enableOpusDtx,
             screenShareMode: config.screenShareMode,
             availableCameraModes: self.availableCameraModes
         )

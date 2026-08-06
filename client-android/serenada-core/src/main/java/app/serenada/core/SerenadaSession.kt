@@ -1483,6 +1483,7 @@ class SerenadaSession internal constructor(
             videoMediaEnabled = videoMediaEnabled,
             enableIndependentContentVideo = config.enableIndependentContentVideo,
             enableOpusRed = config.enableOpusRed,
+            enableOpusDtx = config.enableOpusDtx,
             availableCameraModes = availableCameraModes,
             logger = logger,
         )

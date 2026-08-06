@@ -292,6 +292,7 @@ const CallRoom: React.FC = () => {
             // for external integrators.
             enableIndependentContentVideo: BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED,
             enableOpusRed: true,
+            enableOpusDtx: true,
         });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
         const nextSession = core.join(callUrl, { displayName: displayNameRef.current.trim() || undefined });

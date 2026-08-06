@@ -417,10 +417,11 @@ let config = SerenadaConfig(
     videoMediaEnabled: true,        // set false for strict audio-only/PSTN calls
     cameraModes: [.selfie, .world, .composite], // available camera modes & cycle order; empty = no camera capture
     deferInitialAnswer: false,      // set true when a provider may delay the first answer
-    enableOpusRed: false,           // opt in to Opus RED audio loss resilience
     transports: [.ws, .sse],          // transport priority (default)
     audioCoordinator: nil,            // custom SerenadaAudioCoordinator, or internal default
-    audioIntent: AudioIntent()        // audio policy passed to the coordinator
+    audioIntent: AudioIntent(),       // audio policy passed to the coordinator
+    enableOpusRed: false,             // opt in to Opus RED audio loss resilience
+    enableOpusDtx: false              // opt in to low-bandwidth Opus silence suppression
 )
 ```
 

@@ -200,6 +200,8 @@ The native SDKs enable the bundled libwebrtc RED capability when creating their 
 
 Roll out the flag incrementally and monitor outbound audio bitrate, packet loss, concealed samples, and call-quality metrics. RED sends redundant audio data and therefore trades additional bandwidth for better recovery from packet loss.
 
+Set `SerenadaConfig.enableOpusDtx` to `true` to request Opus discontinuous transmission. DTX suppresses most encoded packets during silence, including while the SDK microphone control is muted, while keeping the RTP sender attached for a fast unmute. The default is `false` so SDK upgrades preserve existing audio behavior. DTX is negotiated through the standard Opus `usedtx=1` format parameter independently in each direction; an older peer may ignore or omit it without preventing the call from falling back to continuous Opus transmission.
+
 ## Camera Modes
 
 `SerenadaConfig.cameraModes` is a core-level setting that restricts which camera modes (`selfie`, `world`, `composite`) are available and in what order. It controls camera capture only; set `videoMediaEnabled` to `false` for strict audio-only calls where the SDK must not negotiate or receive video media. It affects the call UI in three ways:

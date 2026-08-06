@@ -22,6 +22,7 @@ All SDKs expose the same media/negotiation flags on `SerenadaConfig`:
 - `videoMediaEnabled`: set to `false` for strict audio-only calls. The SDK disables camera capture, screen sharing, video transceivers, and remote video.
 - `deferInitialAnswer`: set to `true` for provider-owned calls where the host peer may wait longer than the normal offer timeout for the first answer, such as PSTN pickup. The SDK suppresses first-answer offer-timeout/ICE-restart churn until the first answer is applied; later renegotiations use normal timing.
 - `enableOpusRed`: set to `true` to prefer Opus RED audio redundancy when the runtime and peer support it. Defaults to `false`; peers without RED support continue using plain Opus. See [Opus RED audio resilience](sdk-customization.md#opus-red-audio-resilience).
+- `enableOpusDtx`: set to `true` to request Opus discontinuous transmission and reduce silent or muted audio bandwidth. Defaults to `false`; peers that omit DTX continue using continuous Opus transmission.
 
 ### `createRoom()`
 

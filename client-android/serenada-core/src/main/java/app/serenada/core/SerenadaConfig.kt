@@ -70,6 +70,8 @@ data class SerenadaConfig(
     val audioIntent: AudioIntent = AudioIntent(),
     /** Whether to prefer/enable Opus RED (RFC 2198 audio redundancy) on audio transceivers for audio loss resilience (default false). */
     val enableOpusRed: Boolean = false,
+    /** Whether to request Opus discontinuous transmission so silence uses substantially less bandwidth (default false). */
+    val enableOpusDtx: Boolean = false,
 )
 
 /** Available signaling transport types. */

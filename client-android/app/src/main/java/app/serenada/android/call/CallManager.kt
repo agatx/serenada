@@ -156,6 +156,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 // external integrators.
                 enableIndependentContentVideo = INDEPENDENT_CONTENT_VIDEO_ENABLED,
                 enableOpusRed = true,
+                enableOpusDtx = true,
             ),
             context = appContext,
         )

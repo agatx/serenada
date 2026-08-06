@@ -143,6 +143,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private let onRenegotiationNeeded: (String) -> Void
     private let videoReceiveEnabled: Bool
     private let enableOpusRed: Bool
+    private let enableOpusDtx: Bool
     private let logger: SerenadaLogger?
     private let rendererAttachmentQueue: DispatchQueue
     /// Whether the local participant is the deterministic offer owner for this
@@ -203,6 +204,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         supportsIndependentContentVideo: Bool = false,
         isOfferOwner: @escaping () -> Bool = { false },
         enableOpusRed: Bool = false,
+        enableOpusDtx: Bool = false,
         onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
         onRemoteVideoTrack: @escaping (String, RTCVideoTrack?) -> Void,
         onConnectionStateChange: @escaping (String, String) -> Void,
@@ -220,6 +222,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         self.supportsIndependentContentVideo = supportsIndependentContentVideo
         self.isOfferOwner = isOfferOwner
         self.enableOpusRed = enableOpusRed
+        self.enableOpusDtx = enableOpusDtx
         self.onLocalIceCandidate = onLocalIceCandidate
         self.onRemoteVideoTrack = onRemoteVideoTrack
         self.onConnectionStateChange = onConnectionStateChange
@@ -728,10 +731,13 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 onComplete?(false)
                 return
             }
+            let localDescription = self.enableOpusDtx
+                ? RTCSessionDescription(type: description.type, sdp: enableOpusDtxInSdp(description.sdp))
+                : description
 
-            peerConnection.setLocalDescription(description) { setError in
+            peerConnection.setLocalDescription(localDescription) { setError in
                 if setError == nil {
-                    onSdp(description.sdp)
+                    onSdp(localDescription.sdp)
                     onComplete?(true)
                 } else {
                     onComplete?(false)
@@ -753,10 +759,13 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 onComplete?(false)
                 return
             }
+            let localDescription = self.enableOpusDtx
+                ? RTCSessionDescription(type: description.type, sdp: enableOpusDtxInSdp(description.sdp))
+                : description
 
-            peerConnection.setLocalDescription(description) { setError in
+            peerConnection.setLocalDescription(localDescription) { setError in
                 if setError == nil {
-                    onSdp(description.sdp)
+                    onSdp(localDescription.sdp)
                     onComplete?(true)
                 } else {
                     onComplete?(false)

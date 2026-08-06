@@ -171,6 +171,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
     // for capable peers (per-peer routing decided at slot creation).
     private let enableIndependentContentVideo: Bool
     private let enableOpusRed: Bool
+    private let enableOpusDtx: Bool
 
     private var audioPipelinePrimer: LocalAudioPipelinePrimer?
 
@@ -186,6 +187,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
         videoMediaEnabled: Bool = true,
         enableIndependentContentVideo: Bool = false,
         enableOpusRed: Bool = false,
+        enableOpusDtx: Bool = false,
         screenShareMode: ScreenShareMode = .disabled,
         availableCameraModes: [LocalCameraMode] = defaultCameraModes
     ) {
@@ -193,6 +195,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
         self.videoMediaEnabled = videoMediaEnabled
         self.enableIndependentContentVideo = enableIndependentContentVideo
         self.enableOpusRed = enableOpusRed
+        self.enableOpusDtx = enableOpusDtx
 
         self.cameraController = CameraCaptureController(
             localVideoSource: nil,
@@ -485,6 +488,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
             supportsIndependentContentVideo: independentRouted,
             isOfferOwner: isOfferOwner,
             enableOpusRed: enableOpusRed,
+            enableOpusDtx: enableOpusDtx,
             onLocalIceCandidate: onLocalIceCandidate,
             onRemoteVideoTrack: { remoteCid, track in
                 onRemoteVideoTrack(remoteCid, track)
