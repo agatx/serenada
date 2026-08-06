@@ -4,6 +4,16 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.4] — 2026-08-05
+
+### Added
+- Web, Android, iOS: Opus RED, DTX, and codec diagnostics are now exposed
+  across SDK stats and debug surfaces.
+
+### Fixed
+- Server/deploy: coturn recovery after host reboot now keeps TURN service
+  restoration healthier.
+
 ## [0.9.3] — 2026-07-23
 
 ### Fixed
