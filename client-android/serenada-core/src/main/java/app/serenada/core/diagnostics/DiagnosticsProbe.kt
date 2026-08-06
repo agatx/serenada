@@ -8,7 +8,6 @@ import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.SystemClock
 import android.util.Log
-import app.serenada.core.call.SERENADA_WEBRTC_FIELD_TRIALS
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.TurnCredentials
 import java.util.Collections
@@ -520,7 +519,6 @@ private fun getOrCreatePeerConnectionFactory(context: Context): PeerConnectionFa
         )
         enableVerboseWebRtcLoggingForDiagnostics()
         val factory = PeerConnectionFactory.builder()
-            .setFieldTrials(SERENADA_WEBRTC_FIELD_TRIALS)
             .createPeerConnectionFactory()
         diagnosticsPcFactory = factory
         return factory
