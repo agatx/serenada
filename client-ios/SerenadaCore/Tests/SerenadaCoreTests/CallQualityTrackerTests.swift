@@ -158,8 +158,8 @@ final class CallQualityTrackerTests: XCTestCase {
         XCTAssertEqual(t.summarize(), before)
     }
 
-    // #1 — phantom reconnect on remote-leave.
-    func testNoPhantomReconnectedWhenPeerLeavesMidDropout() {
+    // #1 / ANDROID-3835 bug 2 — phantom reconnect AND phantom disconnect on remote-leave.
+    func testNoPhantomReconnectedOrDisconnectedWhenPeerLeavesMidDropout() {
         let t = makeTracker()
         t.onPhaseTransition(.inCall, nowMs: 1000)
         t.onConnectionStatusTransition(.recovering, trigger: .networkLost, nowMs: 2000)
@@ -167,9 +167,29 @@ final class CallQualityTrackerTests: XCTestCase {
         t.onPhaseTransition(.waiting, nowMs: 3000)
         t.onConnectionStatusTransition(.connected, trigger: .unknown, nowMs: 3000)
         let s = t.summarize()!
-        XCTAssertEqual(s.countDisconnects, 1)
+        // The departing peer's own connection tearing down is a teardown
+        // artifact, not a real link failure -- it must not count as a
+        // disconnect (this was the off-by-one: every call ends via someone
+        // leaving, so this inflated countDisconnects on every clean call).
+        XCTAssertEqual(s.countDisconnects, 0)
         XCTAssertEqual(s.countReconnects, 0)
         XCTAssertEqual(s.totalDropoutDurationMs, 1000)
+        XCTAssertTrue(events.isEmpty)
+    }
+
+    // Contrast with the teardown-artifact case above: here the dropout is
+    // still open when the call ends directly at finalize() -- no
+    // onPhaseTransition close in between -- so its fate is certain: a real,
+    // unrecovered link failure.
+    func testUnresolvedDropoutStillOpenAtFinalizeCountsAsADisconnect() {
+        let t = makeTracker()
+        t.onPhaseTransition(.inCall, nowMs: 1000)
+        t.onConnectionStatusTransition(.recovering, trigger: .networkLost, nowMs: 2000)
+        t.finalize(nowMs: 10_000)
+        let s = t.summarize()!
+        XCTAssertEqual(s.countDisconnects, 1)
+        XCTAssertEqual(s.countReconnects, 0)
+        XCTAssertEqual(s.totalDropoutDurationMs, 8_000)
         XCTAssertTrue(events.isEmpty)
     }
 

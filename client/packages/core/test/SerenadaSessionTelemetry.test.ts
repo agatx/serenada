@@ -102,7 +102,8 @@ describe('SerenadaSession telemetry surface', () => {
         const reconnects = harness.connectionEvents.filter((e) => e.kind === 'reconnected');
         expect(reconnects).toHaveLength(0);
         const summary = harness.session.callQualitySummary;
-        expect(summary?.countDisconnects).toBe(1);
+        // Peer-departure teardown artifact — not a real link failure.
+        expect(summary?.countDisconnects).toBe(0);
         expect(summary?.countReconnects).toBe(0);
     });
 

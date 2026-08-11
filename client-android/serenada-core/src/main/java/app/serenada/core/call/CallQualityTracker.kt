@@ -131,16 +131,18 @@ internal class CallQualityTracker(
             if (dropoutOpenSinceMs == null) {
                 dropoutOpenSinceMs = nowMs
                 dropoutTrigger = trigger
-                countDisconnects += 1
                 recompute()
             }
             return
         }
 
-        // next == Connected -> recovery.
+        // next == Connected -> recovery. countDisconnects is credited here,
+        // alongside countReconnects, rather than at dropout-open, so a live
+        // read mid-blip doesn't show a premature count.
         val openSince = dropoutOpenSinceMs ?: return
         val downtimeMs = max(0L, nowMs - openSince)
         totalDropoutDurationMs += downtimeMs
+        countDisconnects += 1
         countReconnects += 1
         val reason = dropoutTrigger
         dropoutOpenSinceMs = null
@@ -166,7 +168,11 @@ internal class CallQualityTracker(
     fun finalize(nowMs: Long) {
         if (finalized) return
         if (dropoutOpenSinceMs != null) {
+            // Unresolved at finalize (call ended while still disconnected) --
+            // the dropout's fate is now certain: a real, unrecovered link
+            // failure, so unlike a peer-departure close, it is still counted.
             closeDropoutSilently(nowMs)
+            countDisconnects += 1
         }
         recompute()
         finalized = true

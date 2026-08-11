@@ -155,16 +155,18 @@ export class CallQualityTracker {
             if (this.dropoutOpenSinceMs === null) {
                 this.dropoutOpenSinceMs = now;
                 this.dropoutTrigger = trigger;
-                this.countDisconnects += 1;
                 this.recompute();
             }
             return;
         }
 
-        // next === 'connected' → recovery.
+        // next === 'connected' → recovery. countDisconnects is credited here,
+        // alongside countReconnects, rather than at dropout-open, so a live
+        // read mid-blip doesn't show a premature count.
         if (this.dropoutOpenSinceMs !== null) {
             const downtimeMs = Math.max(0, now - this.dropoutOpenSinceMs);
             this.totalDropoutDurationMs += downtimeMs;
+            this.countDisconnects += 1;
             this.countReconnects += 1;
             const reason = this.dropoutTrigger;
             this.dropoutOpenSinceMs = null;
@@ -193,7 +195,11 @@ export class CallQualityTracker {
     finalize(now: number): void {
         if (this.finalized) return;
         if (this.dropoutOpenSinceMs !== null) {
+            // Unresolved at finalize (call ended while still disconnected) —
+            // the dropout's fate is now certain: a real, unrecovered link
+            // failure, so unlike a peer-departure close, it is still counted.
             this.closeDropoutSilently(now);
+            this.countDisconnects += 1;
         }
         this.recompute();
         this.finalized = true;

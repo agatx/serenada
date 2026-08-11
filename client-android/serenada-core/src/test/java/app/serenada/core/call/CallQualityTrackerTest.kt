@@ -169,9 +169,9 @@ class CallQualityTrackerTest {
         assertEquals(before, t.summarize())
     }
 
-    // #1 — phantom reconnect on remote-leave.
+    // #1 / ANDROID-3835 bug 2 — phantom reconnect AND phantom disconnect on remote-leave.
     @Test
-    fun `no phantom reconnected when peer leaves mid-dropout`() {
+    fun `no phantom reconnected or disconnected when peer leaves mid-dropout`() {
         val t = tracker()
         t.onPhaseTransition(CallPhase.InCall, 1000)
         t.onConnectionStatusTransition(ConnectionStatus.Recovering, DropoutTrigger.NETWORK_LOST, 2000)
@@ -179,9 +179,31 @@ class CallQualityTrackerTest {
         t.onPhaseTransition(CallPhase.Waiting, 3000)
         t.onConnectionStatusTransition(ConnectionStatus.Connected, DropoutTrigger.UNKNOWN, 3000)
         val s = t.summarize()!!
-        assertEquals(1, s.countDisconnects)
+        // The departing peer's own connection tearing down is a teardown
+        // artifact, not a real link failure -- it must not count as a
+        // disconnect (this was the off-by-one: every call ends via someone
+        // leaving, so this inflated countDisconnects on every clean call).
+        assertEquals(0, s.countDisconnects)
         assertEquals(0, s.countReconnects)
         assertEquals(1000L, s.totalDropoutDurationMs)
+        assertTrue(events.isEmpty())
+    }
+
+    // Contrast with the teardown-artifact case above: here the dropout is
+    // still open when the call ends directly at finalize() -- no
+    // onPhaseTransition close in between -- so its fate is certain: a real,
+    // unrecovered link failure. Numbers mirror a real-device capture
+    // (countDisconnects=1, countReconnects=0, totalDropoutDurationMs=8379).
+    @Test
+    fun `unresolved dropout still open at finalize counts as a disconnect`() {
+        val t = tracker()
+        t.onPhaseTransition(CallPhase.InCall, 1000)
+        t.onConnectionStatusTransition(ConnectionStatus.Recovering, DropoutTrigger.NETWORK_LOST, 2000)
+        t.finalize(10_000)
+        val s = t.summarize()!!
+        assertEquals(1, s.countDisconnects)
+        assertEquals(0, s.countReconnects)
+        assertEquals(8_000, s.totalDropoutDurationMs)
         assertTrue(events.isEmpty())
     }
 

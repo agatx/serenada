@@ -184,8 +184,8 @@ describe('CallQualityTracker', () => {
         expect(tracker.summarize()).toEqual(before);
     });
 
-    // #1 — phantom reconnect on remote-leave.
-    it('does NOT emit a phantom reconnected when the peer leaves mid-dropout', () => {
+    // #1 / ANDROID-3835 bug 2 — phantom reconnect AND phantom disconnect on remote-leave.
+    it('does NOT emit a phantom reconnected or count a disconnect when the peer leaves mid-dropout', () => {
         const { tracker, events } = makeTracker();
         tracker.onPhaseTransition('inCall', 1000);
         // Link degrades (peer drops off the network).
@@ -195,10 +195,29 @@ describe('CallQualityTracker', () => {
         tracker.onPhaseTransition('waiting', 3000);
         tracker.onConnectionStatusTransition('connected', 'unknown', 3000);
         const s = tracker.summarize();
-        expect(s?.countDisconnects).toBe(1);
-        // The link never recovered — no reconnect, no reconnected event.
+        // The departing peer's own connection tearing down is a teardown
+        // artifact, not a real link failure — it must not count as a
+        // disconnect (this was the off-by-one: every call ends via someone
+        // leaving, so this inflated countDisconnects on every clean call).
+        expect(s?.countDisconnects).toBe(0);
         expect(s?.countReconnects).toBe(0);
-        expect(s?.totalDropoutDurationMs).toBe(1000); // 2000→3000 counted once
+        expect(s?.totalDropoutDurationMs).toBe(1000);
+        expect(events).toEqual([]);
+    });
+
+    // Contrast with the teardown-artifact case above: here the dropout is
+    // still open when the call ends directly at finalize() — no
+    // onPhaseTransition close in between — so its fate is certain: a real,
+    // unrecovered link failure.
+    it('counts a disconnect when the dropout is still open at finalize (no peer-departure close)', () => {
+        const { tracker, events } = makeTracker();
+        tracker.onPhaseTransition('inCall', 1000);
+        tracker.onConnectionStatusTransition('recovering', 'networkLost', 2000);
+        tracker.finalize(10_000);
+        const s = tracker.summarize();
+        expect(s?.countDisconnects).toBe(1);
+        expect(s?.countReconnects).toBe(0);
+        expect(s?.totalDropoutDurationMs).toBe(8_000);
         expect(events).toEqual([]);
     });
 

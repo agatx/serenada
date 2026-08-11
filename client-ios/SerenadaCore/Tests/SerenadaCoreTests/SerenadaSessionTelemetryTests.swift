@@ -70,7 +70,8 @@ final class SerenadaSessionTelemetryTests: XCTestCase {
         }
         XCTAssertTrue(reconnects.isEmpty)
         let summary = harness.session.qualitySummary
-        XCTAssertEqual(summary?.countDisconnects, 1)
+        // Peer-departure teardown artifact -- not a real link failure.
+        XCTAssertEqual(summary?.countDisconnects, 0)
         XCTAssertEqual(summary?.countReconnects, 0)
     }
 
