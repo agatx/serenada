@@ -9,7 +9,7 @@
 ## Installation
 
 ```bash
-npm install @agatx/serenada-core@0.9.4 @agatx/serenada-react-ui@0.9.4 lucide-react
+npm install @agatx/serenada-core@0.9.5 @agatx/serenada-react-ui@0.9.5 lucide-react
 ```
 
 `@agatx/serenada-core` is framework-agnostic vanilla TypeScript. `@agatx/serenada-react-ui` provides ready-made React components.

@@ -4,6 +4,13 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.5] — 2026-08-20
+
+### Fixed
+- Web, Android, iOS: call-quality summaries now avoid counting
+  peer-departure teardown as a link disconnect, while still counting an
+  unrecovered open dropout when the call is finalized.
+
 ## [0.9.4] — 2026-08-05
 
 ### Added
