@@ -160,9 +160,7 @@ export class CallQualityTracker {
             return;
         }
 
-        // next === 'connected' → recovery. countDisconnects is credited here,
-        // alongside countReconnects, rather than at dropout-open, so a live
-        // read mid-blip doesn't show a premature count.
+        // A recovered dropout contributes one disconnect and one reconnect.
         if (this.dropoutOpenSinceMs !== null) {
             const downtimeMs = Math.max(0, now - this.dropoutOpenSinceMs);
             this.totalDropoutDurationMs += downtimeMs;
@@ -195,9 +193,7 @@ export class CallQualityTracker {
     finalize(now: number): void {
         if (this.finalized) return;
         if (this.dropoutOpenSinceMs !== null) {
-            // Unresolved at finalize (call ended while still disconnected) —
-            // the dropout's fate is now certain: a real, unrecovered link
-            // failure, so unlike a peer-departure close, it is still counted.
+            // A dropout still open at finalization is an unrecovered disconnect.
             this.closeDropoutSilently(now);
             this.countDisconnects += 1;
         }

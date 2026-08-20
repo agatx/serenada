@@ -158,7 +158,6 @@ final class CallQualityTrackerTests: XCTestCase {
         XCTAssertEqual(t.summarize(), before)
     }
 
-    // #1 / ANDROID-3835 bug 2 — phantom reconnect AND phantom disconnect on remote-leave.
     func testNoPhantomReconnectedOrDisconnectedWhenPeerLeavesMidDropout() {
         let t = makeTracker()
         t.onPhaseTransition(.inCall, nowMs: 1000)
@@ -167,20 +166,14 @@ final class CallQualityTrackerTests: XCTestCase {
         t.onPhaseTransition(.waiting, nowMs: 3000)
         t.onConnectionStatusTransition(.connected, trigger: .unknown, nowMs: 3000)
         let s = t.summarize()!
-        // The departing peer's own connection tearing down is a teardown
-        // artifact, not a real link failure -- it must not count as a
-        // disconnect (this was the off-by-one: every call ends via someone
-        // leaving, so this inflated countDisconnects on every clean call).
+        // Peer-departure teardown is not a link failure and must not
+        // contribute to the disconnect or reconnect counts.
         XCTAssertEqual(s.countDisconnects, 0)
         XCTAssertEqual(s.countReconnects, 0)
         XCTAssertEqual(s.totalDropoutDurationMs, 1000)
         XCTAssertTrue(events.isEmpty)
     }
 
-    // Contrast with the teardown-artifact case above: here the dropout is
-    // still open when the call ends directly at finalize() -- no
-    // onPhaseTransition close in between -- so its fate is certain: a real,
-    // unrecovered link failure.
     func testUnresolvedDropoutStillOpenAtFinalizeCountsAsADisconnect() {
         let t = makeTracker()
         t.onPhaseTransition(.inCall, nowMs: 1000)
@@ -193,7 +186,6 @@ final class CallQualityTrackerTests: XCTestCase {
         XCTAssertTrue(events.isEmpty)
     }
 
-    // #9 — skip samples while a dropout is open.
     func testSkipsStatsSamplesWhileDropoutOpen() {
         let t = makeTracker()
         t.onPhaseTransition(.inCall, nowMs: 1000)
@@ -209,8 +201,7 @@ final class CallQualityTrackerTests: XCTestCase {
         XCTAssertEqual(s.qualitySampleCount, 2)
     }
 
-    // #14 — only samples with a real quality contribution count. A
-    // baseline-only loss sample and a reset-skipped sample contribute nothing.
+    // Baseline-only loss samples and reset-skipped samples contribute nothing.
     func testCountsOnlySamplesWithARealQualityContribution() {
         let t = makeTracker()
         t.onPhaseTransition(.inCall, nowMs: 1000)

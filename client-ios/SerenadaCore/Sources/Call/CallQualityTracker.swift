@@ -123,9 +123,7 @@ final class CallQualityTracker {
             return
         }
 
-        // next == .connected -> recovery. countDisconnects is credited here,
-        // alongside countReconnects, rather than at dropout-open, so a live
-        // read mid-blip doesn't show a premature count.
+        // A recovered dropout contributes one disconnect and one reconnect.
         guard let openSince = dropoutOpenSinceMs else { return }
         let downtimeMs = max(0, nowMs - openSince)
         totalDropoutDurationMs += downtimeMs
@@ -151,9 +149,7 @@ final class CallQualityTracker {
     func finalize(nowMs: Int64) {
         guard !finalized else { return }
         if dropoutOpenSinceMs != nil {
-            // Unresolved at finalize (call ended while still disconnected) --
-            // the dropout's fate is now certain: a real, unrecovered link
-            // failure, so unlike a peer-departure close, it is still counted.
+            // A dropout still open at finalization is an unrecovered disconnect.
             closeDropoutSilently(nowMs: nowMs)
             countDisconnects += 1
         }

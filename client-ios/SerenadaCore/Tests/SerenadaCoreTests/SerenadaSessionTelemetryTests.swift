@@ -1,11 +1,9 @@
 @testable import SerenadaCore
 import XCTest
 
-/// Session-level telemetry integration test — exercises the
-/// hand-ported wiring (CallQualityTracker feed from phase + connection-status
-/// transitions, ConnectionEvent dispatch, finalize-before-teardown ordering)
-/// end-to-end through the real `SerenadaSession`, not the tracker in isolation.
-/// This is where the #1 phantom-reconnect risk lives.
+/// Exercises the `CallQualityTracker` feed from phase and connection-status
+/// transitions, `ConnectionEvent` dispatch, and finalize-before-teardown
+/// ordering through `SerenadaSession`.
 @MainActor
 final class SerenadaSessionTelemetryTests: XCTestCase {
 
@@ -47,7 +45,6 @@ final class SerenadaSessionTelemetryTests: XCTestCase {
         XCTAssertEqual(summary?.countReconnects, 1)
     }
 
-    // #1 — phantom reconnect on remote-leave.
     func testPeerLeavingMidDropoutDoesNotEmitPhantomReconnected() async {
         let delegate = RecordingDelegate()
         let harness = SessionTestHarness(delegate: delegate)
@@ -70,7 +67,7 @@ final class SerenadaSessionTelemetryTests: XCTestCase {
         }
         XCTAssertTrue(reconnects.isEmpty)
         let summary = harness.session.qualitySummary
-        // Peer-departure teardown artifact -- not a real link failure.
+        // Peer-departure teardown is not a link failure.
         XCTAssertEqual(summary?.countDisconnects, 0)
         XCTAssertEqual(summary?.countReconnects, 0)
     }

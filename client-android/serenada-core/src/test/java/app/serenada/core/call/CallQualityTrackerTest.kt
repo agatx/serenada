@@ -169,7 +169,6 @@ class CallQualityTrackerTest {
         assertEquals(before, t.summarize())
     }
 
-    // #1 / ANDROID-3835 bug 2 — phantom reconnect AND phantom disconnect on remote-leave.
     @Test
     fun `no phantom reconnected or disconnected when peer leaves mid-dropout`() {
         val t = tracker()
@@ -179,21 +178,14 @@ class CallQualityTrackerTest {
         t.onPhaseTransition(CallPhase.Waiting, 3000)
         t.onConnectionStatusTransition(ConnectionStatus.Connected, DropoutTrigger.UNKNOWN, 3000)
         val s = t.summarize()!!
-        // The departing peer's own connection tearing down is a teardown
-        // artifact, not a real link failure -- it must not count as a
-        // disconnect (this was the off-by-one: every call ends via someone
-        // leaving, so this inflated countDisconnects on every clean call).
+        // Peer-departure teardown is not a link failure and must not
+        // contribute to the disconnect or reconnect counts.
         assertEquals(0, s.countDisconnects)
         assertEquals(0, s.countReconnects)
         assertEquals(1000L, s.totalDropoutDurationMs)
         assertTrue(events.isEmpty())
     }
 
-    // Contrast with the teardown-artifact case above: here the dropout is
-    // still open when the call ends directly at finalize() -- no
-    // onPhaseTransition close in between -- so its fate is certain: a real,
-    // unrecovered link failure. Numbers mirror a real-device capture
-    // (countDisconnects=1, countReconnects=0, totalDropoutDurationMs=8379).
     @Test
     fun `unresolved dropout still open at finalize counts as a disconnect`() {
         val t = tracker()
@@ -207,7 +199,6 @@ class CallQualityTrackerTest {
         assertTrue(events.isEmpty())
     }
 
-    // #9 — skip samples while a dropout is open.
     @Test
     fun `skips stats samples while a dropout is open`() {
         val t = tracker()
@@ -224,8 +215,7 @@ class CallQualityTrackerTest {
         assertEquals(2, s.qualitySampleCount)
     }
 
-    // #14 — only samples with a real quality contribution count. A
-    // baseline-only loss sample and a reset-skipped sample contribute nothing.
+    // Baseline-only loss samples and reset-skipped samples contribute nothing.
     @Test
     fun `counts only samples with a real quality contribution`() {
         val t = tracker()
