@@ -184,8 +184,7 @@ describe('CallQualityTracker', () => {
         expect(tracker.summarize()).toEqual(before);
     });
 
-    // #1 — phantom reconnect on remote-leave.
-    it('does NOT emit a phantom reconnected when the peer leaves mid-dropout', () => {
+    it('does NOT emit a phantom reconnected or count a disconnect when the peer leaves mid-dropout', () => {
         const { tracker, events } = makeTracker();
         tracker.onPhaseTransition('inCall', 1000);
         // Link degrades (peer drops off the network).
@@ -195,14 +194,26 @@ describe('CallQualityTracker', () => {
         tracker.onPhaseTransition('waiting', 3000);
         tracker.onConnectionStatusTransition('connected', 'unknown', 3000);
         const s = tracker.summarize();
-        expect(s?.countDisconnects).toBe(1);
-        // The link never recovered — no reconnect, no reconnected event.
+        // Peer-departure teardown is not a link failure and must not
+        // contribute to the disconnect or reconnect counts.
+        expect(s?.countDisconnects).toBe(0);
         expect(s?.countReconnects).toBe(0);
-        expect(s?.totalDropoutDurationMs).toBe(1000); // 2000→3000 counted once
+        expect(s?.totalDropoutDurationMs).toBe(1000);
         expect(events).toEqual([]);
     });
 
-    // #9 — skip samples while a dropout is open.
+    it('counts a disconnect when the dropout is still open at finalize (no peer-departure close)', () => {
+        const { tracker, events } = makeTracker();
+        tracker.onPhaseTransition('inCall', 1000);
+        tracker.onConnectionStatusTransition('recovering', 'networkLost', 2000);
+        tracker.finalize(10_000);
+        const s = tracker.summarize();
+        expect(s?.countDisconnects).toBe(1);
+        expect(s?.countReconnects).toBe(0);
+        expect(s?.totalDropoutDurationMs).toBe(8_000);
+        expect(events).toEqual([]);
+    });
+
     it('skips stats samples while a dropout is open (no degraded-shoulder skew)', () => {
         const { tracker } = makeTracker();
         tracker.onPhaseTransition('inCall', 1000);
@@ -221,9 +232,8 @@ describe('CallQualityTracker', () => {
         expect(s?.qualitySampleCount).toBe(2);
     });
 
-    // #14 — only samples with a real quality contribution count. A
-    // baseline-only loss sample (no delta yet) and a reset-skipped sample
-    // (delta < 0) with no rtt/jitter gauges contribute nothing.
+    // Baseline-only loss samples and reset-skipped samples without RTT or
+    // jitter gauges contribute nothing.
     it('counts only samples with a real quality contribution', () => {
         const { tracker } = makeTracker();
         tracker.onPhaseTransition('inCall', 1000);

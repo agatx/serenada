@@ -90,7 +90,6 @@ describe('SerenadaSession telemetry surface', () => {
         expect(reconnects.length).toBeGreaterThanOrEqual(1);
     });
 
-    // #1 — phantom reconnect on remote-leave (full session wiring).
     it('does not emit a phantom reconnected when the peer leaves mid-dropout', () => {
         enterInCall();
         // Link degrades while in-call (peer drops off the network).
@@ -102,12 +101,13 @@ describe('SerenadaSession telemetry surface', () => {
         const reconnects = harness.connectionEvents.filter((e) => e.kind === 'reconnected');
         expect(reconnects).toHaveLength(0);
         const summary = harness.session.callQualitySummary;
-        expect(summary?.countDisconnects).toBe(1);
+        // Peer-departure teardown is not a link failure.
+        expect(summary?.countDisconnects).toBe(0);
         expect(summary?.countReconnects).toBe(0);
     });
 
-    // #11 — host that destroys from its reconnected handler doesn't get a
-    // post-teardown state delivered.
+    // A host that destroys the session from its reconnected handler must not
+    // receive post-teardown state.
     it('survives leave()/destroy() called from a reconnected handler', () => {
         enterInCall();
         const statesAfter: number[] = [];

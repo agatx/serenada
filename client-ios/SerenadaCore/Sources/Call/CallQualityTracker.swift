@@ -118,16 +118,16 @@ final class CallQualityTracker {
             if dropoutOpenSinceMs == nil {
                 dropoutOpenSinceMs = nowMs
                 dropoutTrigger = trigger
-                countDisconnects += 1
                 recompute()
             }
             return
         }
 
-        // next == .connected -> recovery.
+        // A recovered dropout contributes one disconnect and one reconnect.
         guard let openSince = dropoutOpenSinceMs else { return }
         let downtimeMs = max(0, nowMs - openSince)
         totalDropoutDurationMs += downtimeMs
+        countDisconnects += 1
         countReconnects += 1
         let reason = dropoutTrigger
         dropoutOpenSinceMs = nil
@@ -149,7 +149,9 @@ final class CallQualityTracker {
     func finalize(nowMs: Int64) {
         guard !finalized else { return }
         if dropoutOpenSinceMs != nil {
+            // A dropout still open at finalization is an unrecovered disconnect.
             closeDropoutSilently(nowMs: nowMs)
+            countDisconnects += 1
         }
         recompute()
         finalized = true

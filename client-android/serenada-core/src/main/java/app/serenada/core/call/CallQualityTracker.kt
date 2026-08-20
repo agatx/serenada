@@ -131,16 +131,16 @@ internal class CallQualityTracker(
             if (dropoutOpenSinceMs == null) {
                 dropoutOpenSinceMs = nowMs
                 dropoutTrigger = trigger
-                countDisconnects += 1
                 recompute()
             }
             return
         }
 
-        // next == Connected -> recovery.
+        // A recovered dropout contributes one disconnect and one reconnect.
         val openSince = dropoutOpenSinceMs ?: return
         val downtimeMs = max(0L, nowMs - openSince)
         totalDropoutDurationMs += downtimeMs
+        countDisconnects += 1
         countReconnects += 1
         val reason = dropoutTrigger
         dropoutOpenSinceMs = null
@@ -166,7 +166,9 @@ internal class CallQualityTracker(
     fun finalize(nowMs: Long) {
         if (finalized) return
         if (dropoutOpenSinceMs != null) {
+            // A dropout still open at finalization is an unrecovered disconnect.
             closeDropoutSilently(nowMs)
+            countDisconnects += 1
         }
         recompute()
         finalized = true

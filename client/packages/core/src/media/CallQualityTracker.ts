@@ -155,16 +155,16 @@ export class CallQualityTracker {
             if (this.dropoutOpenSinceMs === null) {
                 this.dropoutOpenSinceMs = now;
                 this.dropoutTrigger = trigger;
-                this.countDisconnects += 1;
                 this.recompute();
             }
             return;
         }
 
-        // next === 'connected' → recovery.
+        // A recovered dropout contributes one disconnect and one reconnect.
         if (this.dropoutOpenSinceMs !== null) {
             const downtimeMs = Math.max(0, now - this.dropoutOpenSinceMs);
             this.totalDropoutDurationMs += downtimeMs;
+            this.countDisconnects += 1;
             this.countReconnects += 1;
             const reason = this.dropoutTrigger;
             this.dropoutOpenSinceMs = null;
@@ -193,7 +193,9 @@ export class CallQualityTracker {
     finalize(now: number): void {
         if (this.finalized) return;
         if (this.dropoutOpenSinceMs !== null) {
+            // A dropout still open at finalization is an unrecovered disconnect.
             this.closeDropoutSilently(now);
+            this.countDisconnects += 1;
         }
         this.recompute();
         this.finalized = true;
