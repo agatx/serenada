@@ -177,7 +177,10 @@ final class SignalingMessageRouter {
             let revision = parseContentRevision(from: message.payload?["revision"])
             onContentState(ContentStatePayload(fromCid: fromCid, sid: message.sid, active: active, contentType: contentType, revision: revision))
         case "participant_media_state":
-            let payload = MediaStatePayload(from: message.payload.map { .object($0) })
+            let payload = MediaStatePayload(
+                from: message.payload.map { .object($0) },
+                fallbackFromCid: message.from
+            )
             onParticipantMediaState(payload)
         case "offer", "answer", "ice", "media_restart_request":
             var payload = message.payload ?? [:]
@@ -235,11 +238,19 @@ final class SignalingMessageRouter {
     }
 
     func broadcastMediaState(audioEnabled: Bool, videoEnabled: Bool) {
+        sendMediaState(audioEnabled: audioEnabled, videoEnabled: videoEnabled, to: nil)
+    }
+
+    func sendMediaState(audioEnabled: Bool, videoEnabled: Bool, to cid: String) {
+        sendMediaState(audioEnabled: audioEnabled, videoEnabled: videoEnabled, to: Optional(cid))
+    }
+
+    private func sendMediaState(audioEnabled: Bool, videoEnabled: Bool, to cid: String?) {
         let payload: [String: JSONValue] = [
             "audioEnabled": .bool(audioEnabled),
             "videoEnabled": .bool(videoEnabled),
         ]
-        sendMessage("participant_media_state", .object(payload), nil)
+        sendMessage("participant_media_state", .object(payload), cid)
     }
 
     // MARK: - Parsing Helpers

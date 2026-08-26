@@ -244,6 +244,85 @@ func TestOmittedRejoinPreservesStoredCapabilitiesAndMediaPolicy(t *testing.T) {
 	}
 }
 
+// --- targeted media-state compatibility -------------------------------------
+
+func TestTargetedMediaStateRelaysOnlyToTargetWithoutPersisting(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	aJoined := captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	bJoined := captureJoined(t, b)
+
+	c := fakeClient(hub)
+	hub.registerClient(c)
+	hub.handleMessage(c, joinPayload(rid, 4, 4))
+	captureJoined(t, c)
+	drainMessages(a)
+	drainMessages(b)
+	drainMessages(c)
+
+	// The sender's real camera state is broadcast and persisted.
+	actualPayload, _ := json.Marshal(map[string]interface{}{
+		"audioEnabled": true,
+		"videoEnabled": false,
+	})
+	hub.handleMessage(a, mustMarshal(Message{
+		V: 1, Type: "participant_media_state", RID: rid, Payload: actualPayload,
+	}))
+	drainMessages(b)
+	drainMessages(c)
+
+	// During independent screen share, only the legacy peer gets an ephemeral
+	// videoEnabled=true override so it presents the swapped single video track.
+	compatPayload, _ := json.Marshal(map[string]interface{}{
+		"audioEnabled": true,
+		"videoEnabled": true,
+	})
+	hub.handleMessage(a, mustMarshal(Message{
+		V: 1, Type: "participant_media_state", RID: rid, To: bJoined.CID, Payload: compatPayload,
+	}))
+
+	var targetedState struct {
+		From         string `json:"from"`
+		VideoEnabled bool   `json:"videoEnabled"`
+	}
+	var sawTargeted bool
+	for _, message := range drainMessages(b) {
+		if message.Type != "participant_media_state" {
+			continue
+		}
+		if err := json.Unmarshal(message.Payload, &targetedState); err == nil {
+			sawTargeted = targetedState.From == aJoined.CID && targetedState.VideoEnabled
+		}
+	}
+	if !sawTargeted {
+		t.Fatal("expected targeted videoEnabled=true media state on legacy peer")
+	}
+	for _, message := range drainMessages(c) {
+		if message.Type == "participant_media_state" {
+			t.Fatal("targeted media state leaked to a non-target peer")
+		}
+	}
+
+	// The targeted compatibility value must not replace the authoritative
+	// camera-off state stored for late joiners.
+	d := fakeClient(hub)
+	hub.registerClient(d)
+	hub.handleMessage(d, joinPayload(rid, 4, 4))
+	dJoined := captureJoined(t, d)
+	aEntry := findParticipant(dJoined.Participants, aJoined.CID)
+	if aEntry == nil || aEntry.VideoEnabled == nil || *aEntry.VideoEnabled {
+		t.Fatalf("expected persisted camera state videoEnabled=false, got %+v", aEntry)
+	}
+}
+
 // --- content_state revision relay + persist ----------------------------------
 
 func TestContentStateRevisionRelayedVerbatim(t *testing.T) {

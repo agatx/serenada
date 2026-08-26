@@ -413,6 +413,10 @@ describe('SerenadaServerProvider', () => {
         const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;
 
         provider.sendToPeer('peer-1', 'offer', { sdp: 'offer-sdp' });
+        provider.sendToPeer('legacy-peer', 'participant_media_state', {
+            audioEnabled: true,
+            videoEnabled: true,
+        });
         provider.broadcast('content_state', { active: true });
 
         expect(engine.sendMessageCalls).toEqual([
@@ -420,6 +424,11 @@ describe('SerenadaServerProvider', () => {
                 type: 'offer',
                 payload: { sdp: 'offer-sdp' },
                 to: 'peer-1',
+            },
+            {
+                type: 'participant_media_state',
+                payload: { audioEnabled: true, videoEnabled: true },
+                to: 'legacy-peer',
             },
             {
                 type: 'content_state',

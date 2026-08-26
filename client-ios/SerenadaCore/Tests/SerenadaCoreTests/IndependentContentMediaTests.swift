@@ -13,12 +13,14 @@ import XCTest
 final class IndependentContentMediaTests: XCTestCase {
 
     private func independentConfig(
+        defaultVideoEnabled: Bool = true,
         videoMediaEnabled: Bool = true,
         enable: Bool = true,
         screenShareMode: ScreenShareMode = .inAppOnly
     ) -> SerenadaConfig {
         SerenadaConfig(
             signalingProvider: FakeSignalingProvider(),
+            defaultVideoEnabled: defaultVideoEnabled,
             videoMediaEnabled: videoMediaEnabled,
             enableIndependentContentVideo: enable,
             screenShareMode: screenShareMode
@@ -370,6 +372,52 @@ final class IndependentContentMediaTests: XCTestCase {
 
         XCTAssertEqual(harness.fakeMedia.createdSlotSupportsIndependentContentVideo["remote-capable"], true)
         XCTAssertEqual(harness.fakeMedia.createdSlotSupportsIndependentContentVideo["remote-legacy"], false)
+        harness.tearDown()
+    }
+
+    func testCameraOffShareUsesTargetedCustomProviderStateOnlyForLegacyPeer() async {
+        let harness = SessionTestHarness(config: independentConfig(defaultVideoEnabled: false))
+        harness.fakeMedia.startScreenShareResult = true
+        harness.fakeProvider.iceServerResults = [.success([
+            IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "u", credential: "p")
+        ])]
+        await harness.advancePastPermissions()
+        await harness.waitForLocalMedia()
+        harness.openSignaling()
+        harness.fakeProvider.simulateJoined(
+            peerId: "local-cid-1",
+            participants: [
+                SignalingProviderParticipant(peerId: "local-cid-1", joinedAt: 1),
+                SignalingProviderParticipant(
+                    peerId: "remote-capable", joinedAt: 2,
+                    capabilities: SignalingProviderParticipantCapabilities(independentContentVideo: true),
+                    mediaPolicy: SignalingProviderParticipantMediaPolicy(videoMediaEnabled: true)
+                ),
+                SignalingProviderParticipant(
+                    peerId: "remote-legacy", joinedAt: 3,
+                    mediaPolicy: SignalingProviderParticipantMediaPolicy(videoMediaEnabled: true)
+                )
+            ],
+            hostPeerId: "local-cid-1"
+        )
+        await harness.yieldToMainActor()
+
+        harness.session.startScreenShare()
+        await harness.yieldToMainActor()
+
+        let actualState = harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").last?.payload
+        XCTAssertEqual(actualState?["videoEnabled"]?.boolValue, false, "capable peers keep the truthful camera-off state")
+        let targeted = harness.fakeProvider.sentPeerMessages(ofType: "participant_media_state")
+        XCTAssertEqual(targeted.map(\.peerId), ["remote-legacy"])
+        XCTAssertEqual(targeted.last?.payload?["videoEnabled"]?.boolValue, true, "legacy peer presents the swapped screen track")
+
+        harness.session.stopScreenShare()
+        await harness.yieldToMainActor()
+        XCTAssertEqual(
+            harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").last?.payload?["videoEnabled"]?.boolValue,
+            false,
+            "stop clears the compatibility override with the real camera state"
+        )
         harness.tearDown()
     }
 

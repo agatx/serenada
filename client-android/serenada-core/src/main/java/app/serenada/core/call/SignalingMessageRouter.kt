@@ -71,11 +71,19 @@ internal class SignalingMessageRouter(
     }
 
     fun broadcastMediaState(audioEnabled: Boolean, videoEnabled: Boolean) {
+        sendMediaStateInternal(audioEnabled, videoEnabled, null)
+    }
+
+    fun sendMediaState(audioEnabled: Boolean, videoEnabled: Boolean, toCid: String) {
+        sendMediaStateInternal(audioEnabled, videoEnabled, toCid)
+    }
+
+    private fun sendMediaStateInternal(audioEnabled: Boolean, videoEnabled: Boolean, toCid: String?) {
         val payload = JSONObject().apply {
             put("audioEnabled", audioEnabled)
             put("videoEnabled", videoEnabled)
         }
-        sendMessage("participant_media_state", payload, null)
+        sendMessage("participant_media_state", payload, toCid)
     }
 
     // --- Direct-dispatch methods for provider events ---
@@ -124,7 +132,7 @@ internal class SignalingMessageRouter(
                 onContentStateReceived(fromCid, active, contentType, revision)
             }
             "participant_media_state" -> {
-                val parsed = message.payload.toMediaStatePayload() ?: return
+                val parsed = message.payload.toMediaStatePayload(fallbackFromCid = message.from) ?: return
                 onMediaStateReceived(parsed.fromCid, parsed.audioEnabled, parsed.videoEnabled)
             }
             "offer", "answer", "ice", "media_restart_request" -> {

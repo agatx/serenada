@@ -746,14 +746,24 @@ class SerenadaServerProviderTest {
             type = "offer",
             payload = JSONObject().apply { put("sdp", "offer-sdp") },
         )
+        provider.sendToPeer(
+            peerId = "legacy-peer",
+            type = "participant_media_state",
+            payload = JSONObject().apply {
+                put("audioEnabled", true)
+                put("videoEnabled", true)
+            },
+        )
         provider.broadcast(
             type = "content_state",
             payload = JSONObject().apply { put("active", true) },
         )
 
-        assertEquals(listOf("offer", "content_state"), signaling.sentMessages.map { it.type })
+        assertEquals(listOf("offer", "participant_media_state", "content_state"), signaling.sentMessages.map { it.type })
         assertEquals("peer-1", signaling.sentMessages.first().to)
         assertEquals("offer-sdp", signaling.sentMessages.first().payload?.optString("sdp"))
+        assertEquals("legacy-peer", signaling.sentMessages[1].to)
+        assertTrue(signaling.sentMessages[1].payload?.optBoolean("videoEnabled") == true)
         assertNull(signaling.sentMessages.last().to)
         assertTrue(signaling.sentMessages.last().payload?.optBoolean("active") == true)
     }

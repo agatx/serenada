@@ -1773,11 +1773,19 @@ func (h *Hub) handleMediaState(c *Client, msg Message) {
 	if p == nil || p.Client != c {
 		return
 	}
-	if payload.AudioEnabled != nil {
-		p.AudioEnabled = payload.AudioEnabled
-	}
-	if payload.VideoEnabled != nil {
-		p.VideoEnabled = payload.VideoEnabled
+	// Broadcast media state is authoritative and persisted for late joiners.
+	// A targeted state is an ephemeral per-peer compatibility override (for
+	// example, making an independent screen-share track visible to a legacy
+	// receiver that gates its single video surface on videoEnabled). Persisting
+	// that override would falsely advertise the sender's camera state to capable
+	// peers and future room snapshots.
+	if msg.To == "" {
+		if payload.AudioEnabled != nil {
+			p.AudioEnabled = payload.AudioEnabled
+		}
+		if payload.VideoEnabled != nil {
+			p.VideoEnabled = payload.VideoEnabled
+		}
 	}
 
 	// Relay as peer message (like offer/answer/ice) instead of broadcasting
@@ -1800,9 +1808,10 @@ func (h *Hub) handleMediaState(c *Client, msg Message) {
 		Payload: newPayload,
 	}
 	for client, cid := range room.byClient {
-		if cid != c.cid {
-			client.sendMessage(relayMsg)
+		if cid == c.cid || (msg.To != "" && msg.To != cid) {
+			continue
 		}
+		client.sendMessage(relayMsg)
 	}
 }
 

@@ -823,6 +823,12 @@ Sent by a client to announce its current audio/video enabled state. The server s
 
 Clients should broadcast this message after joining, when a new peer joins, and whenever the local audio or video enabled state changes.
 
+Clients may also include a top-level `to` CID to send an ephemeral per-peer
+compatibility state. This is used when a capable sender routes an independent
+content track onto a legacy peer's single video sender: that peer temporarily
+needs `videoEnabled: true` to present the screen track even when the sender's
+camera remains off.
+
 ```json
 {
   "v": 1,
@@ -842,6 +848,10 @@ Clients should broadcast this message after joining, when a new peer joins, and 
 **Server behavior**
 - Stores the audio/video state in the room per-CID so late joiners receive the latest values via the participant list in `joined`/`room_state`.
 - Relays the message to other room participants as a peer message (with a `from` field) instead of broadcasting `room_state`. This avoids participant reordering and full UI rebuilds on every toggle.
+- When top-level `to` is present, relays only to that active CID and does not
+  persist the payload. Targeted compatibility state therefore cannot overwrite
+  the sender's authoritative camera state in later `joined`/`room_state`
+  snapshots.
 
 **Client behavior**
 - On receiving a relayed `participant_media_state`, update the cached audio/video state for the sender. Only fields present in the payload should be updated; missing fields leave the previous value intact.

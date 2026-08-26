@@ -371,6 +371,9 @@ class SerenadaSession internal constructor(
             currentRoomState = roomState
             hostCid = roomState.hostCid
             updateParticipants(roomState)
+            if (config.enableIndependentContentVideo && _diagnostics.value.isScreenSharing) {
+                broadcastLocalMediaState()
+            }
         },
         onError = { callError, serverCode ->
             joinFlowCoordinator.clearJoinTimeout()
@@ -991,6 +994,7 @@ class SerenadaSession internal constructor(
         }
         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = true))
         broadcastLocalContentState(true, ContentTypeWire.SCREEN_SHARE)
+        broadcastLocalMediaState()
     }
 
     /** Stop screen sharing and return to camera. */
@@ -1015,6 +1019,9 @@ class SerenadaSession internal constructor(
             } else {
                 broadcastLocalContentState(false)
             }
+            // Clear any targeted legacy compatibility state with the camera's
+            // real post-share value.
+            broadcastLocalMediaState()
         }
     }
 
@@ -1463,6 +1470,7 @@ class SerenadaSession internal constructor(
                             } else {
                                 broadcastLocalContentState(false)
                             }
+                            broadcastLocalMediaState()
                         } else {
                             broadcastLocalContentState(false)
                         }
@@ -1815,10 +1823,34 @@ class SerenadaSession internal constructor(
     }
 
     private fun broadcastLocalMediaState() {
+        val audioEnabled = _state.value.localAudioEnabled
+        val videoEnabled = _state.value.localVideoEnabled
         signalingMessageRouter.broadcastMediaState(
-            audioEnabled = _state.value.localAudioEnabled,
-            videoEnabled = _state.value.localVideoEnabled,
+            audioEnabled = audioEnabled,
+            videoEnabled = videoEnabled,
         )
+
+        // Independent senders keep camera state truthful for capable peers,
+        // while a legacy peer receives the screen track on its single camera
+        // sender. Legacy renderers gate that surface on videoEnabled, so a
+        // camera-off share needs an ephemeral peer-targeted compatibility state.
+        if (!config.enableIndependentContentVideo ||
+            !_diagnostics.value.isScreenSharing ||
+            videoEnabled
+        ) return
+        val localCid = clientId ?: return
+        currentRoomState?.participants?.forEach { participant ->
+            if (participant.cid != localCid &&
+                remoteVideoMediaEnabled(participant.cid) &&
+                !remoteSupportsIndependentContentVideo(participant.cid)
+            ) {
+                signalingMessageRouter.sendMediaState(
+                    audioEnabled = audioEnabled,
+                    videoEnabled = true,
+                    toCid = participant.cid,
+                )
+            }
+        }
     }
 
     /**
