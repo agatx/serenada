@@ -205,12 +205,7 @@ function upsertParticipant(
     }
     const participants = dedupeParticipants([
         ...(roomState?.participants ?? []),
-        {
-            cid: event.peerId,
-            joinedAt: event.joinedAt,
-            displayName: event.displayName,
-            peerId: event.appPeerId,
-        },
+        toRoomParticipant(event),
     ], localPeerId);
     return {
         hostCid: resolveHostCid(participants, roomState?.hostCid ?? null, localPeerId),
@@ -337,6 +332,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly remoteContentStates = new Map<string, TrackedRemoteContent>();
     private readonly availableCameraModes: ConfigurableCameraMode[];
     private userPreferredVideoEnabled: boolean;
+    private lastObservedScreenSharing = false;
 
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
@@ -417,11 +413,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
         );
         this.statsCollector = deps.statsCollector ?? new CallStatsCollector(config.logger);
         this.qualityTracker = new CallQualityTracker((event) => this.dispatchConnectionEvent(event));
+        this.lastObservedScreenSharing = this.media.isScreenSharing;
 
         this.bindProviderEvents();
         this.media.setOnChange(() => {
             if (this.isInactive) {
                 return;
+            }
+            if (this.observeScreenShareState()) {
+                this.broadcastLocalMediaState();
             }
             this.rebuildState();
         });
@@ -588,6 +588,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.config.videoMediaEnabled === false) return;
         const wasScreenSharing = this.media.isScreenSharing;
         await this.media.startScreenShare();
+        this.observeScreenShareState();
         if (!this.isInactive && !wasScreenSharing && this.media.isScreenSharing) {
             this.broadcastLocalMediaState();
             this.rebuildState();
@@ -598,8 +599,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
     async stopScreenShare(): Promise<void> {
         const wasScreenSharing = this.media.isScreenSharing;
         await this.media.stopScreenShare();
+        const shouldBroadcastStop = this.observeScreenShareState();
         if (!this.isInactive && wasScreenSharing && !this.media.isScreenSharing) {
-            this.broadcastLocalMediaState();
+            if (shouldBroadcastStop) {
+                this.broadcastLocalMediaState();
+            }
             this.rebuildState();
         }
     }
@@ -1147,6 +1151,19 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.broadcastLocalMediaState();
             this.rebuildState();
         }
+    }
+
+    /**
+     * Track screen-share transitions observed through either the public session
+     * API or MediaEngine's change callback. Returning true exactly once for a
+     * stop lets browser-native capture termination clear peer compatibility
+     * state without duplicating the app-driven stop broadcast.
+     */
+    private observeScreenShareState(): boolean {
+        const isScreenSharing = this.media.isScreenSharing;
+        const didStop = this.lastObservedScreenSharing && !isScreenSharing;
+        this.lastObservedScreenSharing = isScreenSharing;
+        return didStop;
     }
 
     private broadcastLocalMediaState(): void {

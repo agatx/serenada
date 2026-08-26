@@ -56,13 +56,12 @@ export interface RoomStateEvent {
     maxParticipants?: number;
 }
 
-export interface PeerEvent {
-    peerId: string;
-    joinedAt?: number;
-    displayName?: string;
-    /** Host-supplied stable identity — see {@link JoinOptions.appPeerId}. */
-    appPeerId?: string;
-}
+/**
+ * Incremental participant event. Providers should include the same capability,
+ * media-policy, and presentation metadata they expose in room snapshots so a
+ * consumer can act on the event before the following `roomStateUpdated`.
+ */
+export type PeerEvent = SignalingProviderParticipant;
 
 export interface PeerMessage {
     from: string;
@@ -135,6 +134,12 @@ export interface SignalingProvider {
     joinRoom(roomId: string, options?: JoinOptions): void;
     leaveRoom(): void;
     endRoom(): void;
+    /**
+     * Deliver a message only to `peerId`. In particular, a targeted
+     * `participant_media_state` is ephemeral compatibility state: providers
+     * and their relays must not broadcast it, persist it, or replay it in room
+     * snapshots.
+     */
     sendToPeer(peerId: string, type: string, payload: unknown): void;
     broadcast(type: string, payload: unknown): void;
     getIceServers(): Promise<RTCIceServer[]>;

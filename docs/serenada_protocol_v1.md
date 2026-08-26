@@ -848,10 +848,13 @@ camera remains off.
 **Server behavior**
 - Stores the audio/video state in the room per-CID so late joiners receive the latest values via the participant list in `joined`/`room_state`.
 - Relays the message to other room participants as a peer message (with a `from` field) instead of broadcasting `room_state`. This avoids participant reordering and full UI rebuilds on every toggle.
-- When top-level `to` is present, relays only to that active CID and does not
-  persist the payload. Targeted compatibility state therefore cannot overwrite
-  the sender's authoritative camera state in later `joined`/`room_state`
-  snapshots.
+- When top-level `to` is present, the relay **MUST** deliver the message only to
+  that active CID and **MUST NOT** persist, broadcast, or replay the payload in
+  `joined`/`room_state` snapshots. Clients depend on this behavior: treating a
+  targeted compatibility state as authoritative media state is a protocol
+  violation that can expose a false camera-on state to capable peers and late
+  joiners. This requirement applies equally to the built-in server and custom
+  signaling-provider backends.
 
 **Client behavior**
 - On receiving a relayed `participant_media_state`, update the cached audio/video state for the sender. Only fields present in the payload should be updated; missing fields leave the previous value intact.
