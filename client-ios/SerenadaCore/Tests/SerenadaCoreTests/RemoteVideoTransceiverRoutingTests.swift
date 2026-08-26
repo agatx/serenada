@@ -87,6 +87,7 @@ final class RemoteVideoTransceiverRoutingTests: XCTestCase {
     /// callback, with the camera/content roles bound from one wrapper access.
     private func makeBoundSlot(
         _ peer: NegotiatedPeer,
+        onRenegotiationNeeded: @escaping (String) -> Void = { _ in },
         onRemoteCamera: @escaping (RTCVideoTrack?) -> Void
     ) -> PeerConnectionSlot {
         let slot = PeerConnectionSlot(
@@ -101,7 +102,7 @@ final class RemoteVideoTransceiverRoutingTests: XCTestCase {
             onConnectionStateChange: { _, _ in },
             onIceConnectionStateChange: { _, _ in },
             onSignalingStateChange: { _, _ in },
-            onRenegotiationNeeded: { _ in }
+            onRenegotiationNeeded: onRenegotiationNeeded
         )
         // Bind roles to the wrappers from ONE access — exactly what the production
         // binding caches. Later receive wrappers will be DIFFERENT objects.
@@ -114,6 +115,38 @@ final class RemoteVideoTransceiverRoutingTests: XCTestCase {
     }
 
     // MARK: - The regression
+
+    /// `RTCRtpSender.track` returns a fresh Objective-C wrapper on every read.
+    /// Assigning the content track with the camera off must recognize the
+    /// semantically equal wrapper and must not request fallback renegotiation.
+    func testContentSenderTrackAssignmentDoesNotRenegotiateForFreshWrapper() throws {
+        let peer = try makeNegotiatedPeer()
+        var renegotiationRequests: [String] = []
+        let slot = makeBoundSlot(
+            peer,
+            onRenegotiationNeeded: { renegotiationRequests.append($0) },
+            onRemoteCamera: { _ in }
+        )
+        let localContentTrack = peer.makeVideoTrack("local-content")
+
+        slot.attachLocalTracks(
+            cameraTrack: nil,
+            contentTrack: localContentTrack,
+            supportsIndependentContentVideo: true
+        )
+
+        let senderTrack = try XCTUnwrap(peer.contentWrapper.sender.track)
+        XCTAssertFalse(senderTrack === localContentTrack, "sender.track should return a fresh wrapper")
+        XCTAssertTrue(
+            senderTrack.isEqual(localContentTrack),
+            "fresh wrapper must represent the assigned content track"
+        )
+        XCTAssertTrue(
+            renegotiationRequests.isEmpty,
+            "successful assignment must not request fallback renegotiation"
+        )
+        slot.closePeerConnection()
+    }
 
     /// Inbound CAMERA track delivered on a fresh wrapper (distinct object, same
     /// mid "0" as the bound camera transceiver) must route to CAMERA. Before the
