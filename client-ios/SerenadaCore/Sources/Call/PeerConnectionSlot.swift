@@ -467,19 +467,21 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     /// role is bound and the sender does not already carry the right track, so
     /// pending content attaches regardless of how it became pending (owner,
     /// answerer, late-join, replaceTrack-reject retry). Idempotent via the
-    /// `sender.track !== track` guard.
+    /// semantic sender-track comparison.
     private func attachBoundVideoTracks() {
         if let camera = cameraTransceiver {
             ensureRoleSendCapable(camera)
-            if camera.sender.track !== localVideoTrack {
+            if !senderTrack(camera.sender.track, matches: localVideoTrack) {
                 camera.sender.track = localVideoTrack
             }
         }
         // Reconcile the content sender to match the current local content track:
         // attach when a track is set (pending or live), detach (track = nil)
-        // when it has been cleared on stop. The `sender.track !== track`
-        // idempotence guard makes a re-entry a no-op.
-        if let content = contentTransceiver, content.sender.track !== localContentTrack {
+        // when it has been cleared on stop. Semantic comparison makes a re-entry
+        // a no-op even though libwebrtc returns a fresh Objective-C track wrapper
+        // on every sender.track read.
+        if let content = contentTransceiver,
+           !senderTrack(content.sender.track, matches: localContentTrack) {
             if let track = localContentTrack {
                 ensureRoleSendCapable(content)
                 replaceContentTrackWithFallback(content, track: track)
@@ -501,7 +503,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     /// renegotiation fallback.
     private func replaceContentTrackWithFallback(_ content: RTCRtpTransceiver, track: RTCVideoTrack) {
         content.sender.track = track
-        if content.sender.track === track {
+        if senderTrack(content.sender.track, matches: track) {
             applyContentSenderParameters(content)
             return
         }
@@ -511,6 +513,23 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             "[\(remoteCid)] Failed to set content sender track; renegotiating"
         )
         onRenegotiationNeeded(remoteCid)
+    }
+
+    /// `RTCRtpSender.track` returns a fresh Objective-C wrapper on each read.
+    /// Compare the underlying WebRTC tracks semantically as required by the
+    /// WebRTC API, while preserving nil as the detached-track state.
+    private func senderTrack(
+        _ senderTrack: RTCMediaStreamTrack?,
+        matches expectedTrack: RTCMediaStreamTrack?
+    ) -> Bool {
+        switch (senderTrack, expectedTrack) {
+        case (nil, nil):
+            return true
+        case let (senderTrack?, expectedTrack?):
+            return senderTrack.isEqual(expectedTrack)
+        default:
+            return false
+        }
     }
 
     private func ensureRoleSendCapable(_ transceiver: RTCRtpTransceiver) {
@@ -578,7 +597,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             if mediaType == .audio {
                 applyOpusRedCodecPreferences(to: transceiver)
             }
-            if transceiver.sender.track !== track {
+            if !senderTrack(transceiver.sender.track, matches: track) {
                 transceiver.sender.track = track
             }
             let targetDirection: RTCRtpTransceiverDirection = (track != nil) ? .sendRecv : .recvOnly
