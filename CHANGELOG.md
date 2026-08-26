@@ -4,6 +4,17 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.6] — 2026-08-26
+
+### Fixed
+- Web, Android, iOS, server: independent screen sharing now stays visible to
+  legacy peers by sending targeted, ephemeral media-state compatibility
+  updates without persisting a false camera-on state for capable peers or late
+  joiners.
+- iOS: WebRTC sender track checks now compare fresh Objective-C track wrappers
+  semantically, avoiding unnecessary content-track renegotiation after a
+  successful assignment.
+
 ## [0.9.5] — 2026-08-20
 
 ### Fixed
