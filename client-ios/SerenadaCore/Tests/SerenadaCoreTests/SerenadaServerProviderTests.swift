@@ -534,11 +534,18 @@ final class SerenadaServerProviderTests: XCTestCase {
 
     func testSendToPeerAndBroadcastForwardRawMessages() {
         provider.sendToPeer("peer-1", type: "offer", payload: ["sdp": .string("offer-sdp")])
+        provider.sendToPeer(
+            "legacy-peer",
+            type: "participant_media_state",
+            payload: ["audioEnabled": .bool(true), "videoEnabled": .bool(true)]
+        )
         provider.broadcast(type: "content_state", payload: ["active": .bool(true)])
 
-        XCTAssertEqual(signaling.sentMessages.map(\.type), ["offer", "content_state"])
+        XCTAssertEqual(signaling.sentMessages.map(\.type), ["offer", "participant_media_state", "content_state"])
         XCTAssertEqual(signaling.sentMessages.first?.to, "peer-1")
         XCTAssertEqual(signaling.sentMessages.first?.payload?.objectValue?["sdp"]?.stringValue, "offer-sdp")
+        XCTAssertEqual(signaling.sentMessages[1].to, "legacy-peer")
+        XCTAssertEqual(signaling.sentMessages[1].payload?.objectValue?["videoEnabled"]?.boolValue, true)
         XCTAssertNil(signaling.sentMessages.last?.to)
         XCTAssertEqual(signaling.sentMessages.last?.payload?.objectValue?["active"]?.boolValue, true)
     }

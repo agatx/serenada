@@ -141,7 +141,12 @@ describe('SerenadaServerProvider', () => {
                 hostCid: 'peer-b',
                 participants: [
                     { cid: 'local-cid', joinedAt: 1 },
-                    { cid: 'peer-b', joinedAt: 3 },
+                    {
+                        cid: 'peer-b',
+                        joinedAt: 3,
+                        capabilities: { independentContentVideo: true },
+                        mediaPolicy: { videoMediaEnabled: true },
+                    },
                 ],
             },
         });
@@ -165,12 +170,22 @@ describe('SerenadaServerProvider', () => {
             hostPeerId: 'local-cid',
             maxParticipants: undefined,
         });
-        expect(peerJoined).toHaveBeenCalledWith({ peerId: 'peer-b', joinedAt: 3 });
+        expect(peerJoined).toHaveBeenCalledWith(expect.objectContaining({
+            peerId: 'peer-b',
+            joinedAt: 3,
+            capabilities: { independentContentVideo: true },
+            mediaPolicy: { videoMediaEnabled: true },
+        }));
         expect(peerLeft).toHaveBeenCalledWith({ peerId: 'peer-a', joinedAt: 2 });
         expect(roomStateUpdated).toHaveBeenCalledWith({
             participants: [
                 { peerId: 'local-cid', joinedAt: 1 },
-                { peerId: 'peer-b', joinedAt: 3 },
+                expect.objectContaining({
+                    peerId: 'peer-b',
+                    joinedAt: 3,
+                    capabilities: { independentContentVideo: true },
+                    mediaPolicy: { videoMediaEnabled: true },
+                }),
             ],
             hostPeerId: 'peer-b',
             maxParticipants: undefined,
@@ -413,6 +428,10 @@ describe('SerenadaServerProvider', () => {
         const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;
 
         provider.sendToPeer('peer-1', 'offer', { sdp: 'offer-sdp' });
+        provider.sendToPeer('legacy-peer', 'participant_media_state', {
+            audioEnabled: true,
+            videoEnabled: true,
+        });
         provider.broadcast('content_state', { active: true });
 
         expect(engine.sendMessageCalls).toEqual([
@@ -420,6 +439,11 @@ describe('SerenadaServerProvider', () => {
                 type: 'offer',
                 payload: { sdp: 'offer-sdp' },
                 to: 'peer-1',
+            },
+            {
+                type: 'participant_media_state',
+                payload: { audioEnabled: true, videoEnabled: true },
+                to: 'legacy-peer',
             },
             {
                 type: 'content_state',

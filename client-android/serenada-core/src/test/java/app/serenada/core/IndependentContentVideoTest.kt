@@ -117,6 +117,25 @@ class IndependentContentVideoTest {
     }
 
     @Test
+    fun `custom-provider media state uses PeerMessage sender when payload omits from`() {
+        factory.advanceToInCallWithTurn(localCid = "local", remoteCid = "remote")
+
+        factory.fakeProvider.simulateMessage(
+            from = "remote",
+            type = "participant_media_state",
+            payload = JSONObject().apply {
+                put("audioEnabled", true)
+                put("videoEnabled", false)
+            },
+        )
+        ShadowLooper.idleMainLooper()
+
+        val remote = factory.session.state.value.remoteParticipants.single()
+        assertFalse(remote.videoEnabled)
+        assertFalse(remote.cameraEnabled)
+    }
+
+    @Test
     fun `remote content_state inactive clears content`() {
         factory.advanceToInCallWithTurn(localCid = "local", remoteCid = "remote")
         factory.fakeProvider.simulateMessage(

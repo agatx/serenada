@@ -1506,6 +1506,137 @@ describe('SerenadaSession', () => {
             expect(harness.state.localParticipant?.videoEnabled).toBe(true);
         });
 
+        it('targets camera-off screen-share compatibility only to a legacy peer through a custom provider', async () => {
+            harness = new TestSessionHarness({
+                config: {
+                    defaultVideoEnabled: false,
+                    enableIndependentContentVideo: true,
+                },
+            });
+            harness.media.startLocalMediaResult = createMediaStream({ audio: true });
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [
+                    { cid: 'me' },
+                    {
+                        cid: 'peer-capable',
+                        capabilities: { independentContentVideo: true },
+                        mediaPolicy: { videoMediaEnabled: true },
+                    },
+                    {
+                        cid: 'peer-legacy',
+                        mediaPolicy: { videoMediaEnabled: true },
+                    },
+                ],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            harness.signaling.broadcastCalls.length = 0;
+            harness.signaling.sendToPeerCalls.length = 0;
+            harness.media.startScreenShare = vi.fn(async () => {
+                harness.media.isScreenSharing = true;
+                // Independent content leaves the camera stream audio-only.
+                harness.media.localStream = createMediaStream({ audio: true });
+            });
+
+            await harness.session.startScreenShare();
+
+            expect(harness.signaling.broadcastCalls).toContainEqual({
+                type: 'participant_media_state',
+                payload: { audioEnabled: true, videoEnabled: false },
+            });
+            expect(harness.signaling.sendToPeerCalls).toEqual([{
+                peerId: 'peer-legacy',
+                type: 'participant_media_state',
+                payload: { audioEnabled: true, videoEnabled: true },
+            }]);
+            expect(harness.state.localParticipant?.videoEnabled).toBe(false);
+
+            harness.media.stopScreenShare = vi.fn(async () => {
+                harness.media.emit({ isScreenSharing: false });
+            });
+            const broadcastsBeforeStop = harness.signaling.broadcastCalls.length;
+            await harness.session.stopScreenShare();
+
+            expect(harness.signaling.broadcastCalls.slice(broadcastsBeforeStop)).toEqual([{
+                type: 'participant_media_state',
+                payload: { audioEnabled: true, videoEnabled: false },
+            }]);
+        });
+
+        it('clears the legacy compatibility state when browser-native screen sharing stops', async () => {
+            harness = new TestSessionHarness({
+                config: {
+                    defaultVideoEnabled: false,
+                    enableIndependentContentVideo: true,
+                },
+            });
+            harness.media.startLocalMediaResult = createMediaStream({ audio: true });
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-legacy' }],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            harness.media.startScreenShare = vi.fn(async () => {
+                harness.media.emit({ isScreenSharing: true });
+            });
+
+            await harness.session.startScreenShare();
+            expect(harness.signaling.sendToPeerCalls.at(-1)).toEqual({
+                peerId: 'peer-legacy',
+                type: 'participant_media_state',
+                payload: { audioEnabled: true, videoEnabled: true },
+            });
+
+            harness.signaling.broadcastCalls.length = 0;
+            harness.signaling.sendToPeerCalls.length = 0;
+            // Models MediaEngine's displayTrack.onended callback after the user
+            // presses the browser's native "Stop sharing" control.
+            harness.media.emit({ isScreenSharing: false });
+
+            expect(harness.signaling.broadcastCalls).toEqual([{
+                type: 'participant_media_state',
+                payload: { audioEnabled: true, videoEnabled: false },
+            }]);
+            expect(harness.signaling.sendToPeerCalls).toEqual([]);
+        });
+
+        it('uses peerJoined capability metadata before targeting a screen-share override', async () => {
+            harness = new TestSessionHarness({
+                config: {
+                    defaultVideoEnabled: false,
+                    enableIndependentContentVideo: true,
+                },
+            });
+            harness.media.startLocalMediaResult = createMediaStream({ audio: true });
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+            harness.media.startScreenShare = vi.fn(async () => {
+                harness.media.isScreenSharing = true;
+            });
+            await harness.session.startScreenShare();
+            harness.signaling.broadcastCalls.length = 0;
+            harness.signaling.sendToPeerCalls.length = 0;
+
+            harness.signaling.emitPeerJoined({
+                peerId: 'peer-capable',
+                capabilities: { independentContentVideo: true },
+                mediaPolicy: { videoMediaEnabled: true },
+            });
+
+            expect(harness.signaling.broadcastCalls).toEqual([{
+                type: 'participant_media_state',
+                payload: { audioEnabled: true, videoEnabled: false },
+            }]);
+            expect(harness.signaling.sendToPeerCalls).toEqual([]);
+            expect(harness.media.updateRoomStateCalls.at(-1)?.state?.participants).toContainEqual(
+                expect.objectContaining({
+                    cid: 'peer-capable',
+                    capabilities: { independentContentVideo: true },
+                    mediaPolicy: { videoMediaEnabled: true },
+                }),
+            );
+        });
+
         it('allows screen share when camera modes are empty', async () => {
             harness = new TestSessionHarness({
                 config: { cameraModes: [] },

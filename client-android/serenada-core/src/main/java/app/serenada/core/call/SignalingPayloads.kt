@@ -146,9 +146,9 @@ internal fun JSONObject?.toContentStatePayload(): ContentStatePayload? {
     )
 }
 
-internal fun JSONObject?.toMediaStatePayload(): MediaStatePayload? {
+internal fun JSONObject?.toMediaStatePayload(fallbackFromCid: String? = null): MediaStatePayload? {
     this ?: return null
-    val fromCid = optString("from").ifBlank { return null }
+    val fromCid = optString("from").ifBlank { fallbackFromCid?.takeIf(String::isNotBlank) ?: return null }
     return MediaStatePayload(
         fromCid = fromCid,
         audioEnabled = if (has("audioEnabled")) optBoolean("audioEnabled") else null,

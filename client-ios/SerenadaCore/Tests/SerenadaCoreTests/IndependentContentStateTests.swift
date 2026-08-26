@@ -349,11 +349,12 @@ final class IndependentContentStateTests: XCTestCase {
         harness.fakeProvider.simulateMessage(
             from: "remote-cid-1",
             type: "participant_media_state",
-            payload: ["from": .string("remote-cid-1"), "audioEnabled": .bool(true), "videoEnabled": .bool(true)]
+            payload: ["audioEnabled": .bool(true), "videoEnabled": .bool(false)]
         )
         await harness.yieldToMainActor()
 
         let remote = harness.session.state.remoteParticipants.first(where: { $0.cid == "remote-cid-1" })
+        XCTAssertEqual(remote?.videoEnabled, false, "custom-provider PeerMessage.from identifies the sender")
         XCTAssertEqual(remote?.cameraEnabled, remote?.videoEnabled,
                        "Phase 1: remote cameraEnabled mirrors videoEnabled")
         harness.tearDown()

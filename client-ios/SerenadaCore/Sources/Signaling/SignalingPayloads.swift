@@ -278,11 +278,11 @@ struct MediaStatePayload {
     let audioEnabled: Bool?
     let videoEnabled: Bool?
 
-    init(from payload: JSONValue?) {
+    init(from payload: JSONValue?, fallbackFromCid: String? = nil) {
         guard let obj = payload?.objectValue else {
-            fromCid = nil; audioEnabled = nil; videoEnabled = nil; return
+            fromCid = fallbackFromCid; audioEnabled = nil; videoEnabled = nil; return
         }
-        fromCid = obj["from"]?.stringValue
+        fromCid = obj["from"]?.stringValue ?? fallbackFromCid
         audioEnabled = obj["audioEnabled"]?.boolValue
         videoEnabled = obj["videoEnabled"]?.boolValue
     }

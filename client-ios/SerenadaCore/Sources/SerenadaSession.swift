@@ -819,6 +819,7 @@ public final class SerenadaSession: ObservableObject {
                 guard started else { return }
                 self.commitSnapshot { _, d in d.isScreenSharing = true }
                 self.broadcastLocalContentState(active: true, contentType: ContentTypeWire.screenShare)
+                self.broadcastLocalMediaState()
             }
         }
         if !startedRequest {
@@ -1314,6 +1315,9 @@ public final class SerenadaSession: ObservableObject {
         }
         hostCid = roomState.hostCid
         updateParticipants(roomState)
+        if config.enableIndependentContentVideo, diagnostics.isScreenSharing {
+            broadcastLocalMediaState()
+        }
     }
 
     private func handleSignalingPayload(_ message: SignalingMessage) {
@@ -1336,10 +1340,29 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func broadcastLocalMediaState() {
-        signalingMessageRouter?.broadcastMediaState(
-            audioEnabled: state.localParticipant.audioEnabled,
-            videoEnabled: state.localParticipant.videoEnabled
-        )
+        let audioEnabled = state.localParticipant.audioEnabled
+        let videoEnabled = state.localParticipant.videoEnabled
+        signalingMessageRouter?.broadcastMediaState(audioEnabled: audioEnabled, videoEnabled: videoEnabled)
+
+        // Independent senders keep camera state truthful for capable peers,
+        // while a legacy peer receives the screen track on its single camera
+        // sender. Legacy renderers gate that surface on videoEnabled, so a
+        // camera-off share needs an ephemeral peer-targeted compatibility state.
+        // The built-in server deliberately does not persist targeted media state;
+        // custom providers carry the same target through sendToPeer.
+        guard config.enableIndependentContentVideo,
+              diagnostics.isScreenSharing,
+              !videoEnabled,
+              let clientId else { return }
+        for participant in currentRoomState?.participants ?? [] where participant.cid != clientId {
+            guard remoteVideoMediaEnabled(participant.cid),
+                  !remoteSupportsIndependentContentVideo(participant.cid) else { continue }
+            signalingMessageRouter?.sendMediaState(
+                audioEnabled: audioEnabled,
+                videoEnabled: true,
+                to: participant.cid
+            )
+        }
     }
 
     private func seedLocalContentRevision(from roomState: RoomState) {
@@ -2621,6 +2644,9 @@ public final class SerenadaSession: ObservableObject {
                     } else {
                         self.broadcastLocalContentState(active: false)
                     }
+                    // Clear any targeted legacy compatibility state with the
+                    // camera's real post-share value.
+                    self.broadcastLocalMediaState()
                     return
                 }
                 self.commitSnapshot { _, d in d.isScreenSharing = false; d.cameraZoomFactor = 1 }

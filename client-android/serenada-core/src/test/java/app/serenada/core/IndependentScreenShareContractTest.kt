@@ -42,6 +42,7 @@ class IndependentScreenShareContractTest {
 
     private fun newFactory(
         enableIndependentContentVideo: Boolean = true,
+        defaultVideoEnabled: Boolean = true,
         videoMediaEnabled: Boolean = true,
         cameraModes: List<LocalCameraMode>? = null,
     ): TestSessionFactory {
@@ -52,6 +53,7 @@ class IndependentScreenShareContractTest {
             )
         return TestSessionFactory(
             enableIndependentContentVideo = enableIndependentContentVideo,
+            defaultVideoEnabled = defaultVideoEnabled,
             videoMediaEnabled = videoMediaEnabled,
             cameraModes = cameraModes,
         )
@@ -280,6 +282,57 @@ class IndependentScreenShareContractTest {
 
         assertEquals(true, factory.fakeMedia.createdSlotSupportsIndependent["remote-capable"])
         assertEquals(false, factory.fakeMedia.createdSlotSupportsIndependent["remote-legacy"])
+    }
+
+    @Test
+    fun `camera-off share targets custom provider media state only to legacy peer`() {
+        factory = newFactory(
+            enableIndependentContentVideo = true,
+            defaultVideoEnabled = false,
+        )
+        factory.fakeProvider.enqueueIceServers(Result.success(emptyList()))
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+        factory.simulateJoinedResponse(
+            cid = "local-cid-1",
+            participants = listOf("local-cid-1" to 1L),
+            hostCid = "local-cid-1",
+        )
+        factory.simulateRoomStateWithCapabilities(
+            participants = listOf(
+                SignalingProviderParticipant(peerId = "local-cid-1", joinedAt = 1L),
+                SignalingProviderParticipant(
+                    peerId = "remote-capable",
+                    joinedAt = 2L,
+                    capabilities = SignalingProviderParticipantCapabilities(independentContentVideo = true),
+                    mediaPolicy = SignalingProviderParticipantMediaPolicy(videoMediaEnabled = true),
+                ),
+                SignalingProviderParticipant(
+                    peerId = "remote-legacy",
+                    joinedAt = 3L,
+                    mediaPolicy = SignalingProviderParticipantMediaPolicy(videoMediaEnabled = true),
+                ),
+            ),
+            hostCid = "local-cid-1",
+        )
+
+        factory.session.startScreenShare(Intent())
+        ShadowLooper.idleMainLooper()
+
+        val mediaStates = factory.fakeProvider.sentMessages("participant_media_state")
+        val actualState = mediaStates.last { it.isBroadcast }
+        assertEquals(false, actualState.payload?.optBoolean("videoEnabled"))
+        val targeted = mediaStates.filterNot { it.isBroadcast }
+        assertEquals(listOf("remote-legacy"), targeted.map { it.peerId })
+        assertEquals(true, targeted.single().payload?.optBoolean("videoEnabled"))
+
+        factory.session.stopScreenShare()
+        ShadowLooper.idleMainLooper()
+        assertEquals(
+            false,
+            factory.fakeProvider.sentMessages("participant_media_state")
+                .last { it.isBroadcast }.payload?.optBoolean("videoEnabled"),
+        )
     }
 
     // ── Mode matrix (flag on) ───────────────────────────────────────
