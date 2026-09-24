@@ -37,6 +37,11 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
     private var frameCount: UInt64 = 0
 
     private var pollTimer: DispatchSourceTimer?
+    /// Serial queue for frame polls so teardown can drain an in-flight poll
+    /// before unmapping — cancelling the timer alone does not wait for a running
+    /// handler, which would then copy from freed memory.
+    private let pollQueue = DispatchQueue(label: "app.serenada.ios.broadcast.poll", qos: .userInteractive)
+    private static let pollQueueKey = DispatchSpecificKey<Bool>()
     private var isListening = false
 
     // Session lifecycle (R-IPC1): a per-share generation plus an active-call /
@@ -58,6 +63,7 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
         self.config = config
         super.init(delegate: delegate)
         heartbeatQueue.setSpecific(key: Self.heartbeatQueueKey, value: true)
+        pollQueue.setSpecific(key: Self.pollQueueKey, value: true)
     }
 
     deinit {
@@ -210,7 +216,7 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
         frameCount = 0
         os_log("startPolling: beginning frame polling at %dms interval", log: Self.log, type: .info, BroadcastShared.pollIntervalMs)
 
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInteractive))
+        let timer = DispatchSource.makeTimerSource(queue: pollQueue)
         timer.schedule(
             deadline: .now(),
             repeating: .milliseconds(BroadcastShared.pollIntervalMs)
@@ -225,6 +231,12 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
     private func stopPolling() {
         pollTimer?.cancel()
         pollTimer = nil
+        // Drain any in-flight poll so closeSharedMemory() cannot unmap under it.
+        // Skip on the poll queue itself (deinit can land there when the handler
+        // held the last reference); no poll is running at that point.
+        if DispatchQueue.getSpecific(key: Self.pollQueueKey) != true {
+            pollQueue.sync {}
+        }
     }
 
     private func pollFrame() {

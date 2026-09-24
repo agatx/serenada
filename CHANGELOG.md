@@ -4,6 +4,13 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- iOS: stopping a screen-share broadcast no longer races the frame poller, which
+  could crash the host app copying a frame from shared memory that had just been
+  unmapped.
+
 ## [0.9.6] — 2026-08-26
 
 ### Fixed
