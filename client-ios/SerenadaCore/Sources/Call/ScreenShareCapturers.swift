@@ -37,9 +37,7 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
     private var frameCount: UInt64 = 0
 
     private var pollTimer: DispatchSourceTimer?
-    /// Serial queue for frame polls so teardown can drain an in-flight poll
-    /// before unmapping — cancelling the timer alone does not wait for a running
-    /// handler, which would then copy from freed memory.
+    /// Serial so teardown can drain an in-flight poll before unmapping.
     private let pollQueue = DispatchQueue(label: "app.serenada.ios.broadcast.poll", qos: .userInteractive)
     private static let pollQueueKey = DispatchSpecificKey<Bool>()
     private var isListening = false
@@ -231,9 +229,8 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
     private func stopPolling() {
         pollTimer?.cancel()
         pollTimer = nil
-        // Drain any in-flight poll so closeSharedMemory() cannot unmap under it.
-        // Skip on the poll queue itself (deinit can land there when the handler
-        // held the last reference); no poll is running at that point.
+        // cancel() doesn't wait for a running poll; drain it before any unmap.
+        // Skipped on pollQueue, where only a post-poll deinit can reach this.
         if DispatchQueue.getSpecific(key: Self.pollQueueKey) != true {
             pollQueue.sync {}
         }
