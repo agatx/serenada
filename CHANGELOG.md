@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-09-24
+
 ### Fixed
 - iOS: stopping a screen-share broadcast no longer races the frame poller, which
   could crash the host app copying a frame from shared memory that had just been
