@@ -25,6 +25,10 @@ jobs:
             port: 443
           - host: serenada.app
             port: 5349 # TURNS (coturn) — reloads separately from nginx
+          - host: ru.serenada.app
+            port: 443
+          - host: ru.serenada.app
+            port: 5349
           - host: serenada-app.ru
             port: 443
           - host: serenada-app.ru

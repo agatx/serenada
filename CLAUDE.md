@@ -269,7 +269,7 @@ Source files: `client/packages/core/src/constants.ts`, `client-android/serenada-
 ## Platform-Specific Rules
 
 - **Camera switching** on both Android and iOS is **mode-based** (`selfie → world → composite`), not binary front/back
-- **iOS deep links** must maintain parity for both `serenada.app` and `serenada-app.ru`; changes require updating `client/public/.well-known/apple-app-site-association`
+- **iOS deep links** must maintain parity for `serenada.app`, `ru.serenada.app`, and `serenada-app.ru`; changes require updating `client/public/.well-known/apple-app-site-association`
 - **iOS simulator** can run signaling but camera preview is unreliable — use a physical device
 - **Android WebRTC AAR** changes require regenerating the SHA-256 checksum file
 

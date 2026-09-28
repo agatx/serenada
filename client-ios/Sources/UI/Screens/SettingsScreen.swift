@@ -47,7 +47,7 @@ struct SettingsScreen: View {
                         case "russia":
                             host = AppConstants.ruHost
                         case "custom":
-                            if host == AppConstants.defaultHost || host == AppConstants.ruHost {
+                            if host == AppConstants.defaultHost || AppConstants.isRussiaHost(host) {
                                 host = ""
                             }
                         default:
@@ -244,7 +244,7 @@ struct SettingsScreen: View {
 
     private var hostPreset: String {
         if host == AppConstants.defaultHost { return "global" }
-        if host == AppConstants.ruHost { return "russia" }
+        if AppConstants.isRussiaHost(host) { return "russia" }
         return "custom"
     }
 }

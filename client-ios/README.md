@@ -55,6 +55,7 @@ float at SwiftPM resolution time by design.
 ## Universal links
 - Associated domains are configured for:
   - `applinks:serenada.app`
+  - `applinks:ru.serenada.app`
   - `applinks:serenada-app.ru`
 - Server must host `/.well-known/apple-app-site-association` with `appID = U5TBRZ56DZ.app.serenada.ios`.
 - Deep-link smoke test command (physical device):

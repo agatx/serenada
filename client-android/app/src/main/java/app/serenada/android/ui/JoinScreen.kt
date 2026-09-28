@@ -1005,7 +1005,7 @@ private fun formatLastJoined(timestamp: Long?, lastJoinedLabel: String, neverJoi
 
 private fun buildSavedRoomShareLink(room: SavedRoom): String {
     val resolvedHost = room.host?.trim().orEmpty().ifBlank { SettingsStore.DEFAULT_HOST }
-    val appLinkHost = if (resolvedHost == SettingsStore.HOST_RU) {
+    val appLinkHost = if (SettingsStore.isRussiaHost(resolvedHost)) {
         SettingsStore.HOST_RU
     } else {
         SettingsStore.DEFAULT_HOST

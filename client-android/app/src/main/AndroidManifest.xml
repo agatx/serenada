@@ -47,6 +47,10 @@
                     android:pathPrefix="/call/" />
                 <data
                     android:scheme="https"
+                    android:host="ru.serenada.app"
+                    android:pathPrefix="/call/" />
+                <data
+                    android:scheme="https"
                     android:host="serenada-app.ru"
                     android:pathPrefix="/call/" />
             </intent-filter>

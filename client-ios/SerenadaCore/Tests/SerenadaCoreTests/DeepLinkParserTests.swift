@@ -31,8 +31,14 @@ final class DeepLinkParserTests: XCTestCase {
     }
 
     func testHostPolicyTreatsTrustedHostAsPersisted() {
+        let policy = DeepLinkParser.resolveHostPolicy(host: "ru.serenada.app")
+        XCTAssertEqual(policy.persistedHost, "ru.serenada.app")
+        XCTAssertNil(policy.oneOffHost)
+    }
+
+    func testHostPolicyCanonicalizesLegacyRussiaHost() {
         let policy = DeepLinkParser.resolveHostPolicy(host: "serenada-app.ru")
-        XCTAssertEqual(policy.persistedHost, "serenada-app.ru")
+        XCTAssertEqual(policy.persistedHost, "ru.serenada.app")
         XCTAssertNil(policy.oneOffHost)
     }
 

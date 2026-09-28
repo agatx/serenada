@@ -26,12 +26,17 @@ final class SettingsStore {
     var host: String {
         get {
             let value = defaults.string(forKey: Key.host)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return value?.isEmpty == false ? value! : AppConstants.defaultHost
+            let stored = value?.isEmpty == false ? value! : AppConstants.defaultHost
+            let canonical = AppConstants.canonicalHost(stored)
+            if canonical != stored {
+                defaults.set(canonical, forKey: Key.host)
+            }
+            return canonical
         }
         set {
             let normalized = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if normalized.isEmpty { return }
-            defaults.set(normalized, forKey: Key.host)
+            defaults.set(AppConstants.canonicalHost(normalized), forKey: Key.host)
         }
     }
 

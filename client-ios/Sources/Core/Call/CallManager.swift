@@ -793,7 +793,7 @@ final class CallManager: ObservableObject {
 
     private func buildSavedRoomInviteLink(host: String, roomId: String, roomName: String) -> String {
         let normalizedHost = DeepLinkParser.normalizeHostValue(host) ?? host
-        let appLinkHost = normalizedHost == AppConstants.ruHost ? AppConstants.ruHost : AppConstants.defaultHost
+        let appLinkHost = AppConstants.isRussiaHost(normalizedHost) ? AppConstants.ruHost : AppConstants.defaultHost
 
         var components = URLComponents()
         components.scheme = "https"

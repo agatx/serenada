@@ -106,7 +106,7 @@ fun SettingsScreen(
     var languageMenuExpanded by remember { mutableStateOf(false) }
 
     val isDefaultHost = host == SettingsStore.DEFAULT_HOST
-    val isRuHost = host == SettingsStore.HOST_RU
+    val isRuHost = SettingsStore.isRussiaHost(host)
     val isCustomHost = !isDefaultHost && !isRuHost
 
     val uriHandler = LocalUriHandler.current

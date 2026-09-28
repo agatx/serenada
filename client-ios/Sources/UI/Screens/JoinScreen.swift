@@ -570,7 +570,7 @@ private struct SavedRoomSheetContext: Identifiable {
 
 private func buildSavedRoomShareLink(for room: SavedRoom) -> String {
     let resolvedHost = DeepLinkParser.normalizeHostValue(room.host) ?? AppConstants.defaultHost
-    let appLinkHost = resolvedHost == AppConstants.ruHost ? AppConstants.ruHost : AppConstants.defaultHost
+    let appLinkHost = AppConstants.isRussiaHost(resolvedHost) ? AppConstants.ruHost : AppConstants.defaultHost
 
     var components = URLComponents()
     components.scheme = "https"
