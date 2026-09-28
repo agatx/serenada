@@ -549,6 +549,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private fun buildSavedRoomInviteLink(host: String, roomId: String, roomName: String): String {
         val normalizedHost = normalizeHostValue(host) ?: host
+        val signalingHost = SettingsStore.canonicalHost(normalizedHost)
         val appLinkHost =
             if (SettingsStore.isRussiaHost(normalizedHost)) {
                 SettingsStore.HOST_RU
@@ -560,7 +561,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             .authority(appLinkHost)
             .appendPath("call")
             .appendPath(roomId)
-            .appendQueryParameter("host", normalizedHost)
+            .appendQueryParameter("host", signalingHost)
             .appendQueryParameter("name", roomName)
             .build()
             .toString()
@@ -806,7 +807,8 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private fun isCurrentServerHost(host: String?): Boolean {
         val value = host ?: return true
-        return value.equals(serverHost.value, ignoreCase = true)
+        return SettingsStore.canonicalHost(value)
+            .equals(SettingsStore.canonicalHost(serverHost.value), ignoreCase = true)
     }
 
     private fun hostOverrideOrNull(host: String?): String? {

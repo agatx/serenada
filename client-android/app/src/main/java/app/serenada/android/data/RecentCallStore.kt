@@ -23,7 +23,10 @@ class RecentCallStore(context: Context) {
         history.removeAll { it.roomId == call.roomId }
         history.add(
             index = 0,
-            element = call.copy(durationSeconds = call.durationSeconds.coerceAtLeast(0))
+            element = call.copy(
+                durationSeconds = call.durationSeconds.coerceAtLeast(0),
+                host = call.host?.let(SettingsStore::canonicalHost),
+            )
         )
 
         persist(history.take(MAX_RECENT_CALLS))
@@ -34,6 +37,7 @@ class RecentCallStore(context: Context) {
         val parsed = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
 
         val calls = mutableListOf<RecentCall>()
+        var rewroteHost = false
         for (i in 0 until parsed.length()) {
             val item = parsed.optJSONObject(i) ?: continue
             val roomId = item.optString("roomId").orEmpty()
@@ -42,7 +46,13 @@ class RecentCallStore(context: Context) {
             val startTime = item.optLong("startTime", 0L)
             val duration = item.optInt("duration", 0)
             if (startTime <= 0L) continue
-            val host: String? = item.optString("host", null)?.ifBlank { null }
+            val storedHost = if (item.has("host") && !item.isNull("host")) {
+                item.optString("host").ifBlank { null }
+            } else {
+                null
+            }
+            val host = storedHost?.let(SettingsStore::canonicalHost)
+            if (storedHost != host) rewroteHost = true
 
             calls.add(
                 RecentCall(
@@ -55,7 +65,7 @@ class RecentCallStore(context: Context) {
         }
 
         val deduped = calls.distinctBy { it.roomId }.take(MAX_RECENT_CALLS)
-        if (deduped.size != calls.size) {
+        if (rewroteHost || deduped.size != calls.size) {
             persist(deduped)
         }
 

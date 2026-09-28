@@ -784,7 +784,8 @@ final class CallManager: ObservableObject {
 
     private func isCurrentServerHost(_ host: String?) -> Bool {
         guard let host else { return true }
-        return host.compare(serverHost, options: .caseInsensitive) == .orderedSame
+        return AppConstants.canonicalHost(host)
+            .compare(AppConstants.canonicalHost(serverHost), options: .caseInsensitive) == .orderedSame
     }
 
     private func hostOverrideOrNull(_ host: String?) -> String? {
@@ -793,6 +794,7 @@ final class CallManager: ObservableObject {
 
     private func buildSavedRoomInviteLink(host: String, roomId: String, roomName: String) -> String {
         let normalizedHost = DeepLinkParser.normalizeHostValue(host) ?? host
+        let signalingHost = AppConstants.canonicalHost(normalizedHost)
         let appLinkHost = AppConstants.isRussiaHost(normalizedHost) ? AppConstants.ruHost : AppConstants.defaultHost
 
         var components = URLComponents()
@@ -800,7 +802,7 @@ final class CallManager: ObservableObject {
         components.host = appLinkHost
         components.path = "/call/\(roomId)"
         components.queryItems = [
-            URLQueryItem(name: "host", value: normalizedHost),
+            URLQueryItem(name: "host", value: signalingHost),
             URLQueryItem(name: "name", value: roomName)
         ]
         return components.url?.absoluteString ?? "https://\(appLinkHost)/call/\(roomId)"

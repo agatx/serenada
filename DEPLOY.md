@@ -67,7 +67,7 @@ Serenada uses templates to generate final configuration files during deployment.
 Production Nginx applies a host-based SEO policy:
 - `serenada.app` is treated as the canonical domain (`index, follow`).
 - Any other domain is treated as a mirror (`noindex, follow`).
-- `ru.serenada.app` is the public name of the Russia server (`185.221.213.246`). That host's certificate lineage stays `serenada-app.ru`, which also covers `ru.serenada.app` and `www.serenada-app.ru`. Set `ALIAS_DOMAINS=ru.serenada.app` so nginx serves both names, and set `STUN_HOST=ru.serenada.app`. Keep `serenada-app.ru` on the same vhost so already-installed apps can still signal. `ALLOWED_ORIGINS` lists both `https://ru.serenada.app` and `https://serenada-app.ru` with no trailing slash.
+- `ru.serenada.app` is the public name of the Russia server (`185.221.213.246`). That host's certificate lineage stays `serenada-app.ru`, which also covers `ru.serenada.app` and `www.serenada-app.ru`. Set `ALIAS_DOMAINS=ru.serenada.app` (comma-separated when there is more than one extra name) so nginx serves both names, and set `STUN_HOST=ru.serenada.app`. Keep `serenada-app.ru` on the same vhost so already-installed apps can still signal. `ALLOWED_ORIGINS` lists both `https://ru.serenada.app` and `https://serenada-app.ru` with no trailing slash.
 - Canonical hints are sent as:
   - HTML canonical tag in `client/index.html` (`https://serenada.app/`)
   - HTTP `Link: <https://serenada.app<request-path>>; rel="canonical"` response header

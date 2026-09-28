@@ -10,9 +10,30 @@ DEPLOY_TOOLS_DIR="client/dist/tools"
 LOCAL_FCM_SERVICE_ACCOUNT_FILE="secrets/service-account.json"
 REMOTE_FCM_SERVICE_ACCOUNT_FILE=""
 
-# Load configuration from .env.production
+# Load configuration from .env.production.
+# Keep each value intact, including spaces, so ALIAS_DOMAINS can list more than one name.
 if [ -f .env.production ]; then
-    export $(grep -v '^#' .env.production | xargs)
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        [ -n "$key" ] || continue
+        value="${line#*=}"
+        if [ "${#value}" -ge 2 ]; then
+            first="${value:0:1}"
+            last="${value: -1}"
+            if [ "$first" = "$last" ] && { [ "$first" = '"' ] || [ "$first" = "'" ]; }; then
+                value="${value:1:${#value}-2}"
+            fi
+        fi
+        export "$key=$value"
+    done < .env.production
 else
     echo "❌ .env.production not found. Please create it from .env.example."
     exit 1
@@ -60,11 +81,17 @@ echo "⚙️ Generating configuration files..."
 export DOMAIN IPV4 IPV6 REMOTE_DIR
 # Extra names on the same vhost. Empty for the canonical host. The Russia
 # server sets ALIAS_DOMAINS=ru.serenada.app while DOMAIN stays the cert lineage.
+# Names are comma-separated or space-separated.
+ALIAS_SERVER_NAMES=""
 if [ -n "${ALIAS_DOMAINS:-}" ]; then
-    export ALIAS_SERVER_NAMES=" ${ALIAS_DOMAINS}"
-else
-    export ALIAS_SERVER_NAMES=""
+    alias_names="${ALIAS_DOMAINS//,/ }"
+    read -ra alias_parts <<< "$alias_names"
+    for part in "${alias_parts[@]}"; do
+        [ -n "$part" ] || continue
+        ALIAS_SERVER_NAMES="$ALIAS_SERVER_NAMES $part"
+    done
 fi
+export ALIAS_SERVER_NAMES
 
 # Prepare IPv6 variables for templates
 if [ -n "$IPV6" ]; then
