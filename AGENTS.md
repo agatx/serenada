@@ -23,7 +23,7 @@ SDK packages must not depend on UI frameworks (no SwiftUI in SerenadaCore, no Re
 - Prioritize clarity over cleverness
 - In `client-android/`, camera source switching is mode-based (`selfie -> world -> composite`) rather than binary front/back flip
 - In `client-ios/`, keep camera switching semantics mode-based (`selfie -> world -> composite`) with automatic composite skip when unsupported
-- In `client-ios/`, preserve deep-link and universal-link parity (`/call/{roomId}`) for both `serenada.app` and `serenada-app.ru`; if changing iOS app links, update `client/public/.well-known/apple-app-site-association` and related docs
+- In `client-ios/`, preserve deep-link and universal-link parity (`/call/{roomId}`) for `serenada.app`, `ru.serenada.app`, and `serenada-app.ru`; if changing iOS app links, update `client/public/.well-known/apple-app-site-association` and related docs
 
 ## Key Paths
 

@@ -44,6 +44,7 @@ class SavedRoomStore(context: Context) {
         val parsed = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
 
         val rooms = mutableListOf<SavedRoom>()
+        var rewroteHost = false
         for (index in 0 until parsed.length()) {
             val item = parsed.optJSONObject(index) ?: continue
             val roomId = item.optString("roomId").orEmpty()
@@ -51,7 +52,13 @@ class SavedRoomStore(context: Context) {
 
             val name = normalizeName(item.optString("name").orEmpty()) ?: continue
             val createdAt = item.optLong("createdAt", 0L).coerceAtLeast(1L)
-            val host = normalizeHost(item.opt("host")?.toString())
+            val storedHost = if (item.has("host") && !item.isNull("host")) {
+                item.optString("host").ifBlank { null }
+            } else {
+                null
+            }
+            val host = normalizeHost(storedHost)
+            if (storedHost != host) rewroteHost = true
             val lastJoinedAt = item.optLong("lastJoinedAt", 0L).takeIf { it > 0L }
             rooms.add(
                 SavedRoom(
@@ -65,7 +72,7 @@ class SavedRoomStore(context: Context) {
         }
 
         val deduped = rooms.distinctBy { it.roomId }.take(MAX_SAVED_ROOMS)
-        if (deduped.size != rooms.size) {
+        if (rewroteHost || deduped.size != rooms.size) {
             persist(deduped)
         }
         return deduped
@@ -145,9 +152,9 @@ class SavedRoomStore(context: Context) {
             val path = parsed.path
             if (!path.isNullOrBlank() && path != "/") return null
             val port = parsed.port
-            if (port == -1) return host
+            if (port == -1) return SettingsStore.canonicalHost(host)
             if (port <= 0 || port > 65535) return null
-            return "$host:$port"
+            return SettingsStore.canonicalHost("$host:$port")
         }
 
         private fun isValidRoomId(roomId: String): Boolean = ROOM_ID_REGEX.matches(roomId)

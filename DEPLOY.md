@@ -67,6 +67,7 @@ Serenada uses templates to generate final configuration files during deployment.
 Production Nginx applies a host-based SEO policy:
 - `serenada.app` is treated as the canonical domain (`index, follow`).
 - Any other domain is treated as a mirror (`noindex, follow`).
+- `ru.serenada.app` is the public name of the Russia server (`185.221.213.246`). That host's certificate lineage stays `serenada-app.ru`, which also covers `ru.serenada.app` and `www.serenada-app.ru`. Set `ALIAS_DOMAINS=ru.serenada.app` (comma-separated when there is more than one extra name) so nginx serves both names, and set `STUN_HOST=ru.serenada.app`. Keep `serenada-app.ru` on the same vhost so already-installed apps can still signal. `ALLOWED_ORIGINS` lists both `https://ru.serenada.app` and `https://serenada-app.ru` with no trailing slash.
 - Canonical hints are sent as:
   - HTML canonical tag in `client/index.html` (`https://serenada.app/`)
   - HTTP `Link: <https://serenada.app<request-path>>; rel="canonical"` response header
@@ -119,9 +120,9 @@ Serenada expects Let's Encrypt certificates to be located at `/etc/letsencrypt/l
 
     The migration re-runs whenever the renewal config's `authenticator` is not `webroot` **or** its `webroot_path` doesn't match the live certbot-webroot docker volume mountpoint. A config that merely *says* webroot but points at a stale or malformed path fails renewal just as silently — that's what expired `serenada.app` in July 2026 while the authenticator-only check considered it migrated.
 
-    Every deploy finishes the renewal block with `certbot renew --cert-name <domain> --dry-run` — a real HTTP-01 challenge against Let's Encrypt's staging server through the live nginx. If it fails, the deploy fails. This is the on-host guarantee that renewals work end-to-end; do not remove it.
+    Every deploy finishes the renewal block with `certbot renew --cert-name <domain> --dry-run --no-random-sleep-on-renew` — a real HTTP-01 challenge against Let's Encrypt's staging server through the live nginx. The flag skips certbot's random pre-renewal sleep (up to 8 minutes); the weekly cron entry keeps that sleep so scheduled renewals stay spread out. If the dry-run fails, the deploy fails. This is the on-host guarantee that renewals work end-to-end; do not remove it.
 
-    As an external safety net, the `cert-health` GitHub Actions workflow (`.github/workflows/cert-health.yml`) checks all production endpoints (443 and TURNS 5349 on `serenada.app` and `serenada-app.ru`) daily and fails when a cert has under 21 days left — i.e. when renewal has already been failing for over a week. GitHub emails the workflow author on scheduled-run failures.
+    As an external safety net, the `cert-health` GitHub Actions workflow (`.github/workflows/cert-health.yml`) checks all production endpoints (443 and TURNS 5349 on `serenada.app`, `ru.serenada.app`, and `serenada-app.ru`) daily and fails when a cert has under 21 days left — i.e. when renewal has already been failing for over a week. GitHub emails the workflow author on scheduled-run failures.
 
 ### 4. Deploying the Stack
 

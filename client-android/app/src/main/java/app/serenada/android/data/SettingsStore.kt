@@ -8,11 +8,18 @@ class SettingsStore(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("serenada_settings", Context.MODE_PRIVATE)
 
     var host: String
-        get() = prefs.getString(KEY_HOST, DEFAULT_HOST) ?: DEFAULT_HOST
+        get() {
+            val stored = prefs.getString(KEY_HOST, DEFAULT_HOST) ?: DEFAULT_HOST
+            val canonical = canonicalHost(stored)
+            if (canonical != stored) {
+                prefs.edit().putString(KEY_HOST, canonical).apply()
+            }
+            return canonical
+        }
         set(value) {
             val cleanValue = value.trim()
             if (cleanValue.isNotBlank()) {
-                prefs.edit().putString(KEY_HOST, cleanValue).apply()
+                prefs.edit().putString(KEY_HOST, canonicalHost(cleanValue)).apply()
             }
         }
 
@@ -104,9 +111,17 @@ class SettingsStore(context: Context) {
 
     companion object {
         const val DEFAULT_HOST = "serenada.app"
-        const val HOST_RU = "serenada-app.ru"
+        const val HOST_RU = "ru.serenada.app"
+        /** Previous Russia hostname. Still trusted so existing links and saved hosts keep working. */
+        const val LEGACY_HOST_RU = "serenada-app.ru"
 
         val PREDEFINED_HOSTS = listOf(DEFAULT_HOST, HOST_RU)
+
+        fun canonicalHost(host: String): String =
+            if (host.equals(LEGACY_HOST_RU, ignoreCase = true)) HOST_RU else host
+
+        fun isRussiaHost(host: String): Boolean =
+            host.equals(HOST_RU, ignoreCase = true) || host.equals(LEGACY_HOST_RU, ignoreCase = true)
 
         const val LANGUAGE_AUTO = "auto"
         const val LANGUAGE_EN = "en"

@@ -156,9 +156,9 @@ final class SavedRoomStore {
 
         if let port = components.port {
             guard (1...65535).contains(port) else { return nil }
-            return "\(host):\(port)"
+            return AppConstants.canonicalHost("\(host):\(port)")
         }
-        return host
+        return AppConstants.canonicalHost(host)
     }
 
     private static func defaultStore() -> UserDefaults {

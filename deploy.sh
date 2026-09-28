@@ -10,9 +10,30 @@ DEPLOY_TOOLS_DIR="client/dist/tools"
 LOCAL_FCM_SERVICE_ACCOUNT_FILE="secrets/service-account.json"
 REMOTE_FCM_SERVICE_ACCOUNT_FILE=""
 
-# Load configuration from .env.production
+# Load configuration from .env.production.
+# Keep each value intact, including spaces, so ALIAS_DOMAINS can list more than one name.
 if [ -f .env.production ]; then
-    export $(grep -v '^#' .env.production | xargs)
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        [ -n "$key" ] || continue
+        value="${line#*=}"
+        if [ "${#value}" -ge 2 ]; then
+            first="${value:0:1}"
+            last="${value: -1}"
+            if [ "$first" = "$last" ] && { [ "$first" = '"' ] || [ "$first" = "'" ]; }; then
+                value="${value:1:${#value}-2}"
+            fi
+        fi
+        export "$key=$value"
+    done < .env.production
 else
     echo "❌ .env.production not found. Please create it from .env.example."
     exit 1
@@ -58,6 +79,19 @@ fi
 # 2. Generate configuration files from templates
 echo "⚙️ Generating configuration files..."
 export DOMAIN IPV4 IPV6 REMOTE_DIR
+# Extra names on the same vhost. Empty for the canonical host. The Russia
+# server sets ALIAS_DOMAINS=ru.serenada.app while DOMAIN stays the cert lineage.
+# Names are comma-separated or space-separated.
+ALIAS_SERVER_NAMES=""
+if [ -n "${ALIAS_DOMAINS:-}" ]; then
+    alias_names="${ALIAS_DOMAINS//,/ }"
+    read -ra alias_parts <<< "$alias_names"
+    for part in "${alias_parts[@]}"; do
+        [ -n "$part" ] || continue
+        ALIAS_SERVER_NAMES="$ALIAS_SERVER_NAMES $part"
+    done
+fi
+export ALIAS_SERVER_NAMES
 
 # Prepare IPv6 variables for templates
 if [ -n "$IPV6" ]; then
@@ -72,7 +106,7 @@ else
     export IPV6_Run_LISTENING=""
 fi
 
-envsubst '$DOMAIN $IPV4 $IPV6 $REMOTE_DIR $IPV6_Run_HTTP $IPV6_Run_HTTPS' < nginx/nginx.prod.conf.template > nginx/nginx.prod.conf
+envsubst '$DOMAIN $IPV4 $IPV6 $REMOTE_DIR $IPV6_Run_HTTP $IPV6_Run_HTTPS $ALIAS_SERVER_NAMES' < nginx/nginx.prod.conf.template > nginx/nginx.prod.conf
 envsubst '$DOMAIN $IPV4 $IPV6 $REMOTE_DIR $IPV6_Run_RELAY $IPV6_Run_LISTENING' < coturn/turnserver.prod.conf.template > coturn/turnserver.prod.conf
 
 # Optional: Legacy redirects
@@ -188,9 +222,9 @@ fi
 #!/bin/bash
 set -e
 docker exec serenada-nginx nginx -s reload || true
-# Send SIGUSR2 from inside the container. `docker kill` marks the container
+# Send SIGUSR2 from inside the container. "docker kill" marks the container
 # manually stopped even for non-terminating signals, which prevents an
-# `unless-stopped` container from returning after a host reboot.
+# "unless-stopped" container from returning after a host reboot.
 docker exec serenada-coturn sh -c 'kill -USR2 1' || true
 HOOK_EOF
 \$SUDO chmod +x /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh
@@ -261,12 +295,14 @@ fi
 # HTTP-01 challenge through the live nginx). A misconfigured lineage otherwise
 # fails silently twice a day in certbot.timer until the cert expires — this
 # turns that into a visible deploy failure.
+# --no-random-sleep-on-renew skips certbot's 0-480s non-interactive delay.
+# The weekly cron entry above keeps that delay so scheduled renewals stay spread out.
 echo "🧪 Verifying cert renewal end-to-end (certbot renew --dry-run)..."
-if \$SUDO certbot renew --cert-name "${DOMAIN}" --dry-run --quiet; then
+if \$SUDO certbot renew --cert-name "${DOMAIN}" --dry-run --no-random-sleep-on-renew --quiet; then
     echo "✅ Renewal dry-run succeeded for ${DOMAIN}"
 else
     echo "❌ Renewal dry-run FAILED for ${DOMAIN} — auto-renewal is broken."
-    echo "   Debug on the VPS with: certbot renew --cert-name ${DOMAIN} --dry-run"
+    echo "   Debug on the VPS with: certbot renew --cert-name ${DOMAIN} --dry-run --no-random-sleep-on-renew"
     exit 1
 fi
 RENEWAL_EOF

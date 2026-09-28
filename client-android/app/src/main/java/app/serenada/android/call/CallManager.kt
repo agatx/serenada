@@ -549,8 +549,9 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private fun buildSavedRoomInviteLink(host: String, roomId: String, roomName: String): String {
         val normalizedHost = normalizeHostValue(host) ?: host
+        val signalingHost = SettingsStore.canonicalHost(normalizedHost)
         val appLinkHost =
-            if (normalizedHost == SettingsStore.HOST_RU) {
+            if (SettingsStore.isRussiaHost(normalizedHost)) {
                 SettingsStore.HOST_RU
             } else {
                 SettingsStore.DEFAULT_HOST
@@ -560,7 +561,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             .authority(appLinkHost)
             .appendPath("call")
             .appendPath(roomId)
-            .appendQueryParameter("host", normalizedHost)
+            .appendQueryParameter("host", signalingHost)
             .appendQueryParameter("name", roomName)
             .build()
             .toString()
@@ -598,7 +599,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     private fun resolveDeepLinkHostPolicy(host: String?): DeepLinkHostPolicy {
         val normalized = normalizeHostValue(host) ?: return DeepLinkHostPolicy()
         return if (isTrustedDeepLinkHost(normalized)) {
-            DeepLinkHostPolicy(persistedHost = normalized)
+            DeepLinkHostPolicy(persistedHost = SettingsStore.canonicalHost(normalized))
         } else {
             DeepLinkHostPolicy(oneOffHost = normalized)
         }
@@ -606,7 +607,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private fun isTrustedDeepLinkHost(host: String): Boolean {
         val canonical = host.lowercase(Locale.ROOT)
-        return canonical == SettingsStore.DEFAULT_HOST || canonical == SettingsStore.HOST_RU
+        return canonical == SettingsStore.DEFAULT_HOST || SettingsStore.isRussiaHost(canonical)
     }
 
     private fun normalizeSavedRoomName(name: String?): String? {
@@ -806,7 +807,8 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private fun isCurrentServerHost(host: String?): Boolean {
         val value = host ?: return true
-        return value.equals(serverHost.value, ignoreCase = true)
+        return SettingsStore.canonicalHost(value)
+            .equals(SettingsStore.canonicalHost(serverHost.value), ignoreCase = true)
     }
 
     private fun hostOverrideOrNull(host: String?): String? {

@@ -94,7 +94,7 @@ The native iOS app lives in `client-ios/`.
 5. WebRTC is resolved automatically via SPM from the [zello-ios-web-rtc](https://github.com/zelloptt/zello-ios-web-rtc) package (pinned in the root `Package.swift`) — no vendored XCFramework step is needed.
 6. For local-only device signing overrides (without committing team IDs), use `client-ios/LocalSigning.xcconfig`. See `client-ios/README.md`.
 
-iOS universal links are enabled for `serenada.app` and `serenada-app.ru` via associated domains plus `/.well-known/apple-app-site-association`.
+iOS universal links are enabled for `serenada.app`, `ru.serenada.app`, and `serenada-app.ru` via associated domains plus `/.well-known/apple-app-site-association`.
 Note: iOS Simulator can run signaling and call flow, but local camera preview reliability varies by host setup; use a physical iPhone to validate local camera capture.
 
 ### Production Deployment

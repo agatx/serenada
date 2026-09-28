@@ -66,7 +66,7 @@ public enum DeepLinkParser {
             return DeepLinkHostPolicy(persistedHost: nil, oneOffHost: nil)
         }
         if isTrustedHost(normalized) {
-            return DeepLinkHostPolicy(persistedHost: normalized, oneOffHost: nil)
+            return DeepLinkHostPolicy(persistedHost: SerenadaDefaults.canonicalHost(normalized), oneOffHost: nil)
         }
         return DeepLinkHostPolicy(persistedHost: nil, oneOffHost: normalized)
     }
@@ -105,7 +105,7 @@ public enum DeepLinkParser {
 
     public static func isTrustedHost(_ host: String) -> Bool {
         let normalized = host.lowercased()
-        return normalized == SerenadaDefaults.defaultHost || normalized == SerenadaDefaults.ruHost
+        return normalized == SerenadaDefaults.defaultHost || SerenadaDefaults.isRussiaHost(normalized)
     }
 
     public static func normalizeSavedRoomName(_ name: String?) -> String? {

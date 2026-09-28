@@ -59,6 +59,14 @@ final class SavedRoomStoreTests: XCTestCase {
         let room = store.getSavedRooms().first { $0.roomId == roomId }
         XCTAssertEqual(room?.host, "example.com:444")
     }
+
+    func testLegacyRussiaHostIsStoredAsCanonicalHost() {
+        let roomId = String(repeating: "E", count: 27)
+        store.saveRoom(SavedRoom(roomId: roomId, name: "Moscow", createdAt: 1, host: "serenada-app.ru", lastJoinedAt: nil))
+
+        let room = store.getSavedRooms().first { $0.roomId == roomId }
+        XCTAssertEqual(room?.host, "ru.serenada.app")
+    }
 }
 
 final class SettingsStoreTests: XCTestCase {

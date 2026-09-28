@@ -182,10 +182,12 @@ keytool -list -v -keystore keystore/serenada-release.keystore -storepass YOUR_PA
 ## Deep links (App Links)
 The app handles:
 - `https://serenada.app/call/*`
+- `https://ru.serenada.app/call/*`
+- `https://serenada-app.ru/call/*` (legacy Russia hostname)
 - `https://serenada.app/call/*?name=<room-name>` (adds a named saved room instead of joining immediately)
 
 Deep-link `host` query behavior:
-- Trusted hosts (`serenada.app`, `serenada-app.ru`) are allowed to update the global server host setting.
+- Trusted hosts (`serenada.app`, `ru.serenada.app`) are allowed to update the global server host setting. `serenada-app.ru` is accepted and saved as `ru.serenada.app`.
 - Other hosts are treated as one-off: calls use them only for that action, and saved-room links store them as per-room host overrides without mutating global settings.
 
 For App Links verification, the web server must serve:
