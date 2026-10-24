@@ -184,6 +184,13 @@ ssh "$VPS_HOST" "cd $REMOTE_DIR && \
       echo FCM_SERVICE_ACCOUNT_FILE=$REMOTE_FCM_SERVICE_ACCOUNT_FILE >> .env; \
       echo '✅ Configured FCM_SERVICE_ACCOUNT_FILE in .env'; \
     fi && \
+    if ! docker compose -f docker-compose.yml -f docker-compose.prod.yml pull --ignore-buildable; then \
+      echo '⚠️  Image pull failed; continuing with cached images'; \
+    fi && \
+    if ! docker compose -f docker-compose.yml -f docker-compose.prod.yml build --pull; then \
+      echo '⚠️  Build with fresh base images failed; retrying with cached base images'; \
+      docker compose -f docker-compose.yml -f docker-compose.prod.yml build; \
+    fi && \
     docker compose -f docker-compose.yml -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
 

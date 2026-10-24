@@ -127,6 +127,7 @@ Serenada expects Let's Encrypt certificates to be located at `/etc/letsencrypt/l
 ### 4. Deploying the Stack
 
 A convenience script is provided for deployment. It uses `envsubst` to process templates, builds the frontend, syncs files via `rsync`, and restarts services via SSH.
+Before stopping the running stack, the script pulls the current `nginx:alpine` and `coturn/coturn:latest` images and rebuilds the app server against freshly pulled base images, so security fixes in those images reach production on every deploy. If Docker Hub is unreachable, it warns and falls back to the cached images. If the app server fails to build, the deploy stops before `down` and the old containers keep serving.
 A high-concurrency kernel tuning profile is also applied on the VPS and persisted at `/etc/sysctl.d/99-serenada-scale.conf`:
 - `net.ipv4.ip_local_port_range = 1024 65535`
 - `net.netfilter.nf_conntrack_max = 262144`
